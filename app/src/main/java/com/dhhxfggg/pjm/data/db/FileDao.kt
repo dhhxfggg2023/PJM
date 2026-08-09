@@ -125,7 +125,7 @@ interface FileDao {
     suspend fun getRandomFilesByCategoryExcluding(category: String, excludePaths: List<String>, limit: Int): List<FileEntity>
 
     /**
-     * Fetches all relative paths for a category.
+     * Retrieves all relative paths for a category.
      */
     @Query("SELECT relativePath FROM files WHERE category = :category")
     suspend fun getAllPathsByCategory(category: String): List<String>

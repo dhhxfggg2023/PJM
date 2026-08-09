@@ -3,6 +3,16 @@ package com.dhhxfggg.pjm.ui.component
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
+import com.composables.icons.lucide.Lucide
+import com.composables.icons.lucide.Image
+import com.composables.icons.lucide.Film
+import com.composables.icons.lucide.Music
+import com.composables.icons.lucide.FileText
+import com.composables.icons.lucide.FileArchive
+import com.composables.icons.lucide.Smartphone
+import com.composables.icons.lucide.File
+import com.composables.icons.lucide.CircleCheck
+import com.composables.icons.lucide.X
 import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionScope
@@ -12,9 +22,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
-import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -42,14 +49,13 @@ import kotlinx.coroutines.withContext
  */
 private fun getIconForExtension(extension: String): ImageVector {
     return when (extension.lowercase()) {
-        "jpg", "jpeg", "png", "gif", "webp" -> Icons.Default.Image
-        "mp4", "avi", "mov", "mkv", "wmv", "flv", "webm" -> Icons.Default.Movie
-        "mp3", "wav", "flac", "aac", "m4a" -> Icons.Default.AudioFile
-        "pdf" -> Icons.Default.PictureAsPdf
-        "doc", "docx", "txt" -> Icons.Default.Description
-        "zip", "rar", "7z", "pjm" -> Icons.Default.FolderZip
-        "apk" -> Icons.Default.Android
-        else -> Icons.AutoMirrored.Filled.InsertDriveFile
+        "jpg", "jpeg", "png", "gif", "webp" -> Lucide.Image
+        "mp4", "avi", "mov", "mkv", "wmv", "flv", "webm" -> Lucide.Film
+        "mp3", "wav", "flac", "aac", "m4a" -> Lucide.Music
+        "pdf", "doc", "docx", "txt" -> Lucide.FileText
+        "zip", "rar", "7z", "pjm" -> Lucide.FileArchive
+        "apk" -> Lucide.Smartphone
+        else -> Lucide.File
     }
 }
 
@@ -89,10 +95,11 @@ fun FileCard(
     }
 
     val thumbnailSize = remember(gridSpanCount) {
-        when {
-            gridSpanCount >= 6 -> 180
-            gridSpanCount >= 4 -> 300
-            else -> 512
+        when (gridSpanCount) {
+            1, 2 -> 640
+            3, 4 -> 320
+            5, 6 -> 160
+            else -> 160
         }
     }
 
@@ -169,7 +176,7 @@ fun FileCard(
                         .fillMaxSize()
                         .background(Color.Black.copy(alpha = 0.2f)))
                     Icon(
-                        imageVector = Icons.Default.CheckCircle, 
+                        imageVector = Lucide.CircleCheck, 
                         contentDescription = null, 
                         tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier
@@ -246,7 +253,7 @@ fun FileCard(
                             .fillMaxSize()
                             .background(Color.Black.copy(alpha = 0.2f)))
                         Icon(
-                            imageVector = Icons.Default.CheckCircle, 
+                            imageVector = Lucide.CircleCheck, 
                             contentDescription = null, 
                             tint = MaterialTheme.colorScheme.primary, 
                             modifier = Modifier.size(32.dp)
@@ -273,7 +280,7 @@ fun FileCard(
                 } else if (onDelete != null) {
                     IconButton(onClick = onDelete) { 
                         Icon(
-                            imageVector = Icons.Default.Close, 
+                            imageVector = Lucide.X, 
                             contentDescription = null, 
                             modifier = Modifier.size(20.dp)
                         ) 

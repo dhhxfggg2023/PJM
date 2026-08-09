@@ -15,6 +15,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import javax.inject.Inject
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * UI State for the Settings Screen.
@@ -99,7 +100,7 @@ class SettingsViewModel @Inject constructor(
                 VaultManager.updateProgress(progress, "正在索引文件...")
             }
             VaultManager.updateProgress(1.0f, "同步完成")
-            delay(800)
+            delay(800.milliseconds)
             VaultManager.clearProgress()
         }
     }
@@ -123,7 +124,7 @@ class SettingsViewModel @Inject constructor(
             VaultManager.deleteFiles(app, paths, fileDao)
             VaultManager.updateProgress(1.0f, "清理完成")
             _duplicateFiles.value = null
-            delay(1000)
+            delay(1000.milliseconds)
             VaultManager.clearProgress()
         }
     }

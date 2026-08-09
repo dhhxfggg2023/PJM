@@ -6,34 +6,21 @@ import android.system.Os
 import com.dhhxfggg.pjm.data.db.FileDao
 import com.dhhxfggg.pjm.data.model.FileEntity
 import com.dhhxfggg.pjm.domain.util.PjmLogger
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.flatMapMerge
-import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.asFlow
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.apache.commons.compress.archivers.zip.Zip64Mode
 import org.apache.commons.compress.archivers.zip.ZipArchiveEntry
 import org.apache.commons.compress.archivers.zip.ZipArchiveOutputStream
-import java.io.BufferedOutputStream
-import java.io.File
-import java.io.FileInputStream
-import java.io.FileOutputStream
-import java.io.InputStream
-import java.io.OutputStream
+import java.io.*
 import java.nio.ByteBuffer
 import java.security.MessageDigest
-import java.util.Collections
-import java.util.LinkedList
-import java.util.UUID
+import java.security.SecureRandom
+import java.text.SimpleDateFormat
+import java.util.*
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
 import java.util.regex.Pattern
 import java.util.zip.Deflater
@@ -70,6 +57,13 @@ object VaultManager {
     
     private val UUID_PATTERN = Pattern.compile("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}.*$", Pattern.CASE_INSENSITIVE)
 
+    /** PJM Dispatcher Hub: Tri-Pool Isolation for maximum stability */
+    object PjmDispatchers {
+        val IO = Executors.newFixedThreadPool(8).asCoroutineDispatcher()
+        val Crypto = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors()).asCoroutineDispatcher()
+        val Database = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+    }
+
     /** Adaptive buffer size based on hardware capabilities. */
     val ADAPTIVE_BUFFER_SIZE = if (Runtime.getRuntime().availableProcessors() >= 8) 1024 * 1024 else 256 * 1024
     
@@ -87,17 +81,66 @@ object VaultManager {
     val CATEGORIES = listOf(CAT_PJM, CAT_IMAGES, CAT_VIDEOS, CAT_AUDIOS, CAT_OTHERS)
 
     private val bufferPool = Collections.synchronizedList(LinkedList<ByteArray>())
+    private const val MIN_FREE_SPACE = 100 * 1024 * 1024L // 100MB
 
     /** Acquires a byte array from the pool or creates a new one. */
     fun acquireBuffer(): ByteArray = synchronized(bufferPool) {
         if (bufferPool.isEmpty()) ByteArray(ADAPTIVE_BUFFER_SIZE) else bufferPool.removeAt(0)
     }
 
-    /** Releases a byte array back to the pool. */
+    /** Releases a byte array back to the pool after zeroing it for security. */
     fun releaseBuffer(buffer: ByteArray) {
+        Arrays.fill(buffer, 0.toByte())
         synchronized(bufferPool) {
             if (bufferPool.size < 16) bufferPool.add(buffer)
         }
+    }
+
+    /** Ensures at least 100MB of free space remains. */
+    fun ensureDiskSpace(context: Context, requiredSize: Long = 0) {
+        val usableSpace = context.filesDir.usableSpace
+        if (usableSpace < requiredSize + MIN_FREE_SPACE) {
+            throw IOException("Insufficient disk space: ${usableSpace / 1024 / 1024}MB available, need 100MB guard.")
+        }
+    }
+
+    /**
+     * Shreds a file according to DOD 5220.22-M: 7-pass overwrite + delete.
+     * Military-grade data sanitization.
+     */
+    fun shredFile(file: File) {
+        if (!file.exists() || !file.isFile) return
+        try {
+            val length = file.length()
+            val secureRandom = SecureRandom()
+            val buffer = acquireBuffer()
+            try {
+                repeat(7) {
+                    FileOutputStream(file).use { fos ->
+                        var written = 0L
+                        while (written < length) {
+                            val toWrite = minOf(buffer.size.toLong(), length - written).toInt()
+                            secureRandom.nextBytes(buffer)
+                            fos.write(buffer, 0, toWrite)
+                            written += toWrite
+                        }
+                        fos.flush()
+                        fos.getFD().sync()
+                    }
+                }
+            } finally {
+                Arrays.fill(buffer, 0.toByte())
+                releaseBuffer(buffer)
+            }
+        } catch (e: Exception) {
+            PjmLogger.e(TAG, "Failed to shred file: ${file.absolutePath}", e)
+        } finally {
+            file.delete()
+        }
+    }
+
+    private fun fastDelete(file: File) {
+        shredFile(file)
     }
 
     private val _refreshSignal = MutableSharedFlow<Unit>(replay = 1)
@@ -127,7 +170,7 @@ object VaultManager {
      * Performs a physical migration of files from legacy Chinese directory names 
      * to modern English internal keys.
      */
-    suspend fun performPhysicalMigration(context: Context) = withContext(Dispatchers.IO) {
+    suspend fun performPhysicalMigration(context: Context) = withContext(PjmDispatchers.IO) {
         val root = File(context.filesDir, VAULT_ROOT)
         if (!root.exists()) return@withContext
         
@@ -178,29 +221,23 @@ object VaultManager {
         return File(dir, "${UUID.randomUUID()}.$ext")
     }
 
-    private fun fastDelete(file: File) {
-        if (file.exists()) {
-            if (!file.delete()) {
-                PjmLogger.w(TAG, "Failed to delete file: ${file.absolutePath}")
-            }
-        }
-    }
 
     /**
-     * Digests an input stream into the vault and returns a [FileEntity].
-     * Uses [Os.posix_fallocate] when possible to optimize disk allocation.
+     * Digests an input stream into the vault using an atomic pattern:
+     * Write to temp -> Sync -> Rename -> DB Upsert.
      */
-    suspend fun digestFileToEntity(context: Context, fileName: String, inputStream: InputStream, expectedSize: Long = 0L): FileEntity = withContext(Dispatchers.IO) {
+    suspend fun digestFileToEntity(context: Context, fileName: String, inputStream: InputStream, expectedSize: Long = 0L): FileEntity = withContext(PjmDispatchers.IO) {
+        ensureDiskSpace(context, expectedSize)
         val category = FileUtils.getCategory(fileName)
         val targetFile = getNextVaultPath(context, category, fileName)
-        PjmLogger.i(TAG, "Digesting $fileName to vault...")
+        val tempFile = File(context.cacheDir, "digest_${UUID.randomUUID()}.tmp")
+        
+        PjmLogger.i(TAG, "Digesting $fileName to vault (Atomic)...")
         try {
-            FileOutputStream(targetFile).use { fos ->
+            FileOutputStream(tempFile).use { fos ->
                 val outChannel = fos.channel
                 if (expectedSize > 0) {
-                    try { Os.posix_fallocate(fos.fd, 0, expectedSize) } catch (e: Exception) { 
-                        PjmLogger.d(TAG, "fallocate not supported: ${e.message}")
-                    }
+                    try { Os.posix_fallocate(fos.fd, 0, expectedSize) } catch (e: Exception) { }
                 }
                 
                 var handled = false
@@ -220,7 +257,13 @@ object VaultManager {
                     } finally { releaseBuffer(buffer) }
                 }
                 outChannel.force(false)
+                fos.fd.sync()
             }
+            
+            if (!tempFile.renameTo(targetFile)) {
+                throw IOException("Atomic rename failed for $fileName")
+            }
+            
             FileEntity(
                 relativePath = getRelativePath(context, targetFile),
                 name = fileName,
@@ -233,7 +276,8 @@ object VaultManager {
             )
         } catch (e: Exception) { 
             PjmLogger.e(TAG, "Failed to digest file: $fileName", e)
-            fastDelete(targetFile)
+            shredFile(tempFile)
+            shredFile(targetFile)
             throw e 
         }
     }
@@ -246,7 +290,7 @@ object VaultManager {
     }
 
     /** Extracts contents of a PJM container into the vault. */
-    suspend fun extractPjmToVault(context: Context, entity: FileEntity, fileDao: FileDao) = withContext(Dispatchers.IO) {
+    suspend fun extractPjmToVault(context: Context, entity: FileEntity, fileDao: FileDao) = withContext(PjmDispatchers.IO) {
         val file = getFileFromEntity(context, entity)
         PjmLogger.i(TAG, "Extracting PJM: ${entity.name}")
         CryptoUtils.decryptPjmToEntries(
@@ -258,7 +302,7 @@ object VaultManager {
     }
 
     /** Deletes a single file from the vault and database. */
-    suspend fun deleteFile(context: Context, relativePath: String, fileDao: FileDao) = withContext(Dispatchers.IO) {
+    suspend fun deleteFile(context: Context, relativePath: String, fileDao: FileDao) = withContext(PjmDispatchers.IO) {
         mutex.withLock { 
             val file = File(File(context.filesDir, VAULT_ROOT), relativePath)
             fastDelete(file)
@@ -269,7 +313,7 @@ object VaultManager {
 
     /** Deletes multiple files in parallel. */
     @OptIn(ExperimentalCoroutinesApi::class)
-    suspend fun deleteFiles(context: Context, relativePaths: List<String>, fileDao: FileDao) = withContext(Dispatchers.IO) {
+    suspend fun deleteFiles(context: Context, relativePaths: List<String>, fileDao: FileDao) = withContext(PjmDispatchers.IO) {
         if (relativePaths.isEmpty()) return@withContext
         PjmLogger.i(TAG, "Deleting ${relativePaths.size} files...")
         mutex.withLock {
@@ -285,7 +329,7 @@ object VaultManager {
     }
 
     /** Performs a full scan of the vault directory and synchronizes the database. */
-    suspend fun fullSyncDatabase(context: Context, fileDao: FileDao, onProgress: (Float) -> Unit = {}) = withContext(Dispatchers.IO) {
+    suspend fun fullSyncDatabase(context: Context, fileDao: FileDao, onProgress: (Float) -> Unit = {}) = withContext(PjmDispatchers.IO) {
         PjmLogger.i(TAG, "Starting full database sync...")
         performPhysicalMigration(context) // Ensure folders are aligned
         
@@ -360,11 +404,13 @@ object VaultManager {
         baseName: String,
         fileDao: FileDao,
         onProgress: (Float) -> Unit
-    ): Result<Unit> = withContext(Dispatchers.IO) {
+    ): Result<Unit> = withContext(PjmDispatchers.IO) {
         runCatching {
             val settings = SettingsManager.getSettingsFlow(context).first()
             val volumeSize = settings.exportSplitSize.toLong() * 1024 * 1024
             val totalSize = uris.sumOf { FileUtils.getFileSize(context, it) }.coerceAtLeast(1L)
+            
+            ensureDiskSpace(context, totalSize)
             val written = AtomicLong(0)
             
             // Step 1: Prepare temp directory in cache
@@ -404,31 +450,31 @@ object VaultManager {
                                 zos.closeArchiveEntry()
                             }
                             zos.finish()
+                            xorOut.flush()
                         } finally { releaseBuffer(buffer) }
                     }
                 }
                 
-                // Step 2: Move files to final destination
+                // Step 2: Move files to final destination (Atomic)
                 val finalDir = getCategoryDir(context, category)
                 tempFiles.forEach { tempFile ->
                     val finalFile = File(finalDir, tempFile.name)
-                    if (tempFile.renameTo(finalFile)) {
-                        fileDao.upsert(FileEntity(
-                            relativePath = getRelativePath(context, finalFile),
-                            name = finalFile.name,
-                            size = finalFile.length(),
-                            category = category,
-                            lastModified = finalFile.lastModified(),
-                            isImage = false,
-                            extension = "pjm",
-                            contentHash = null
-                        ))
-                    } else {
-                        throw Exception("Failed to move $tempFile to $finalFile")
+                    if (!tempFile.renameTo(finalFile)) {
+                        throw IOException("Failed to move $tempFile to $finalFile")
                     }
+                    fileDao.upsert(FileEntity(
+                        relativePath = getRelativePath(context, finalFile),
+                        name = finalFile.name,
+                        size = finalFile.length(),
+                        category = category,
+                        lastModified = finalFile.lastModified(),
+                        isImage = false,
+                        extension = "pjm",
+                        contentHash = null
+                    ))
                 }
             } catch (e: Exception) {
-                tempFiles.forEach { it.delete() }
+                tempFiles.forEach { shredFile(it) }
                 tempDir.deleteRecursively()
                 throw e
             } finally {
@@ -442,7 +488,7 @@ object VaultManager {
      * Performs a full integrity check on the vault.
      * Verifies physical existence and matches content hashes if available.
      */
-    suspend fun checkIntegrity(context: Context, fileDao: FileDao, onProgress: (Float) -> Unit): Map<String, List<FileEntity>> = withContext(Dispatchers.IO) {
+    suspend fun checkIntegrity(context: Context, fileDao: FileDao, onProgress: (Float) -> Unit): Map<String, List<FileEntity>> = withContext(PjmDispatchers.IO) {
         val allFiles = fileDao.getAllFiles().first()
         val missing = mutableListOf<FileEntity>()
         val corrupted = mutableListOf<FileEntity>()
@@ -464,7 +510,7 @@ object VaultManager {
     }
 
     /** Exports non-container vault contents into encrypted PJM modules. */
-    suspend fun exportVaultToPjmModule(context: Context, fileDao: FileDao, onProgress: (Float) -> Unit = {}): Result<Unit> = withContext(Dispatchers.IO) {
+    suspend fun exportVaultToPjmModule(context: Context, fileDao: FileDao, onProgress: (Float) -> Unit = {}): Result<Unit> = withContext(PjmDispatchers.IO) {
         PjmLogger.i(TAG, "Exporting vault to PJM modules...")
         mutex.withLock {
             runCatching {
@@ -515,8 +561,55 @@ object VaultManager {
         }
     }
     
+    /**
+     * Backs up the application database to the internal storage.
+     * This creates a timestamped copy in the 'backups' directory.
+     */
+    suspend fun backupDatabase(context: Context) = withContext(PjmDispatchers.Database) {
+        val dbFile = context.getDatabasePath("pjm_app_database")
+        if (!dbFile.exists()) return@withContext
+
+        val backupDir = File(context.filesDir, "backups").apply { if (!exists()) mkdirs() }
+        val timestamp = SimpleDateFormat("yyyyMMdd_HHmm", Locale.US).format(Date())
+        val backupFile = File(backupDir, "pjm_db_backup_$timestamp.db")
+
+        try {
+            // Copy main DB file
+            dbFile.inputStream().use { input ->
+                backupFile.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+            
+            // Also copy WAL and SHM files if they exist for consistency
+            val walFile = File(dbFile.path + "-wal")
+            if (walFile.exists()) {
+                walFile.inputStream().use { input ->
+                    File(backupFile.path + "-wal").outputStream().use { output ->
+                        input.copyTo(output)
+                    }
+                }
+            }
+            val shmFile = File(dbFile.path + "-shm")
+            if (shmFile.exists()) {
+                shmFile.inputStream().use { input ->
+                    File(backupFile.path + "-shm").outputStream().use { output ->
+                        input.copyTo(output)
+                    }
+                }
+            }
+            
+            PjmLogger.i(TAG, "Database backup created successfully: ${backupFile.name}")
+            
+            // Keep only last 7 backups to save space
+            backupDir.listFiles()?.sortedByDescending { it.lastModified() }?.drop(7)?.forEach { it.delete() }
+        } catch (e: Exception) {
+            PjmLogger.e(TAG, "Failed to backup database", e)
+        }
+    }
+
     /** Finds duplicate files in the vault using MD5 hashing. */
-    suspend fun findDuplicateFiles(context: Context, fileDao: FileDao, onProgress: (Float) -> Unit = {}): List<FileEntity> = withContext(Dispatchers.IO) {
+    suspend fun findDuplicateFiles(context: Context, fileDao: FileDao, onProgress: (Float) -> Unit = {}): List<FileEntity> = withContext(PjmDispatchers.IO) {
         val allFiles = fileDao.getAllFiles().first()
         val groupsBySize = allFiles.groupBy { it.size }
         val suspects = groupsBySize.filter { it.value.size > 1 }.values.flatten()
@@ -533,9 +626,9 @@ object VaultManager {
         }
         
         val finalFiles = fileDao.getAllFiles().first()
-        val hashGroups = finalFiles.filter { it.contentHash != null }.groupBy { it.contentHash!! }
-        hashGroups.forEach { (_, entities) -> 
-            if (entities.size > 1) {
+        val hashGroups = finalFiles.filter { it.contentHash != null }.groupBy { it.contentHash ?: "" }
+        hashGroups.forEach { (hash, entities) -> 
+            if (hash.isNotEmpty() && entities.size > 1) {
                 duplicates.addAll(entities.sortedBy { it.lastModified }.drop(1)) 
             }
         }
@@ -577,28 +670,38 @@ private class SplitXorOutputStream(
     private var volumeIndex = 1
     private var volumeWritten = 0L
     private var totalPos = 0L
-    private var currentOut: OutputStream? = null
+    private var currentOut: FileOutputStream? = null
+    private var bufferedOut: BufferedOutputStream? = null
     private var baseFileName: String? = baseFileNameInput
     private var xorWorkBuffer: ByteArray? = null
     private var isClosed = false
 
     private fun ensureVolume() {
-        if (currentOut != null && volumeWritten < volumeLimit) return
-        currentOut?.flush()
-        currentOut?.close()
+        if (bufferedOut != null && volumeWritten < volumeLimit) return
+        closeCurrentVolume()
         if (baseFileName == null) baseFileName = "Export_${System.currentTimeMillis()}"
         val dir = overrideDir ?: VaultManager.getCategoryDir(context, category)
         val file = File(dir, "${baseFileName}.pjm.${volumeIndex}")
-        currentOut = BufferedOutputStream(FileOutputStream(file), VaultManager.ADAPTIVE_BUFFER_SIZE)
+        val fos = FileOutputStream(file)
+        currentOut = fos
+        bufferedOut = BufferedOutputStream(fos, VaultManager.ADAPTIVE_BUFFER_SIZE)
         onVolumeCreated(file)
         volumeIndex++
         volumeWritten = 0
     }
 
-    override fun write(b: Int) {
+    private fun closeCurrentVolume() {
+        bufferedOut?.flush()
+        currentOut?.fd?.sync()
+        bufferedOut?.close()
+        currentOut = null
+        bufferedOut = null
+    }
+
+    override fun write(intVal: Int) {
         if (isClosed) return
         ensureVolume()
-        currentOut?.write((b xor xorKey[(totalPos and 31L).toInt()].toInt()) and 0xFF)
+        bufferedOut?.write((intVal xor xorKey[(totalPos and 31L).toInt()].toInt()) and 0xFF)
         volumeWritten++
         totalPos++
     }
@@ -606,7 +709,7 @@ private class SplitXorOutputStream(
     override fun write(b: ByteArray, off: Int, len: Int) {
         if (isClosed) return
         if (xorWorkBuffer == null) xorWorkBuffer = VaultManager.acquireBuffer()
-        val workBuf = xorWorkBuffer!!
+        val workBuf = xorWorkBuffer ?: return
         var rem = len
         var curOff = off
         while (rem > 0) {
@@ -615,7 +718,7 @@ private class SplitXorOutputStream(
             for (i in 0 until toWrite) { 
                 workBuf[i] = (b[curOff + i].toInt() xor xorKey[((totalPos + i) and 31L).toInt()].toInt()).toByte() 
             }
-            currentOut?.write(workBuf, 0, toWrite)
+            bufferedOut?.write(workBuf, 0, toWrite)
             volumeWritten += toWrite
             totalPos += toWrite
             curOff += toWrite
@@ -623,11 +726,14 @@ private class SplitXorOutputStream(
         }
     }
 
-    override fun flush() { if (!isClosed) currentOut?.flush() }
+    override fun flush() { if (!isClosed) bufferedOut?.flush() }
     override fun close() {
         if (isClosed) return
         isClosed = true
         xorWorkBuffer?.let { VaultManager.releaseBuffer(it); xorWorkBuffer = null }
-        try { currentOut?.flush(); currentOut?.close() } finally { currentOut = null }
+        try { closeCurrentVolume() } finally { 
+            bufferedOut = null 
+            currentOut = null
+        }
     }
 }

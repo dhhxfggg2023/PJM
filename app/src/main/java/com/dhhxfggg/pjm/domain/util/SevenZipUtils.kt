@@ -11,6 +11,7 @@ import org.apache.commons.compress.PasswordRequiredException
 import java.io.File
 import java.io.InputStream
 import java.nio.channels.FileChannel
+import java.util.Arrays
 import kotlin.coroutines.coroutineContext
 
 object SevenZipUtils {
@@ -22,7 +23,7 @@ object SevenZipUtils {
     suspend fun extractArchive(
         context: Context,
         uri: Uri,
-        password: String? = null,
+        password: CharArray? = null,
         onStatus: (String) -> Unit = {},
         onProgress: (Long) -> Unit = {},
         onEntry: suspend (String, InputStream) -> Unit
@@ -53,12 +54,14 @@ object SevenZipUtils {
             coroutineContext.ensureActive()
             PjmLogger.e(TAG, "解压失败: $fileName", e)
             false
+        } finally {
+            password?.let { Arrays.fill(it, '0') }
         }
     }
 
     private suspend fun processWithTempFile(context: Context, uri: Uri, fileName: String, block: suspend (File) -> Unit) {
         val fileSize = FileUtils.getFileSize(context, uri)
-        if (context.cacheDir.usableSpace < fileSize + (50 * 1024 * 1024)) throw InsufficientStorageException()
+        VaultManager.ensureDiskSpace(context, fileSize)
 
         val tempFile = File(context.cacheDir, "ext_idx_${System.nanoTime()}")
         try {
@@ -67,11 +70,11 @@ object SevenZipUtils {
             }
             block(tempFile)
         } finally {
-            if (tempFile.exists()) tempFile.delete()
+            VaultManager.shredFile(tempFile)
         }
     }
 
-    private suspend fun extract7z(channel: FileChannel, password: String?, fileName: String, onStatus: (String) -> Unit, onProgress: (Long) -> Unit, onEntry: suspend (String, InputStream) -> Unit) {
+    private suspend fun extract7z(channel: FileChannel, password: CharArray?, fileName: String, onStatus: (String) -> Unit, onProgress: (Long) -> Unit, onEntry: suspend (String, InputStream) -> Unit) {
         try {
             val builder = SevenZFile.builder().setSeekableByteChannel(channel)
             if (password != null) builder.setPassword(password)
@@ -82,9 +85,8 @@ object SevenZipUtils {
                     if (!entry.isDirectory) {
                         onStatus("正在解压: ${entry.name}")
                         val entryStream = s7f.getInputStream(entry)
-                        // 宇宙级优化：使用带计数器的包装流，避免高频回调导致的性能下降
                         val progressStream = BatchProgressInputStream(entryStream, onProgress)
-                        progressStream.use { onEntry(entry!!.name ?: "unk", it) }
+                        progressStream.use { onEntry(entry.name ?: "unk", it) }
                     }
                     entry = s7f.nextEntry
                 }
@@ -95,7 +97,7 @@ object SevenZipUtils {
         }
     }
 
-    private suspend fun extractZip(channel: FileChannel, password: String?, fileName: String, onStatus: (String) -> Unit, onProgress: (Long) -> Unit, onEntry: suspend (String, InputStream) -> Unit) {
+    private suspend fun extractZip(channel: FileChannel, password: CharArray?, fileName: String, onStatus: (String) -> Unit, onProgress: (Long) -> Unit, onEntry: suspend (String, InputStream) -> Unit) {
         try {
             ZipFile.builder().setSeekableByteChannel(channel).get().use { zipFile ->
                 val entries = zipFile.entries
@@ -115,9 +117,9 @@ object SevenZipUtils {
         }
     }
 
-    private suspend fun extractRar(file: File, password: String?, fileName: String, onStatus: (String) -> Unit, onEntry: suspend (String, InputStream) -> Unit) {
+    private suspend fun extractRar(file: File, password: CharArray?, fileName: String, onStatus: (String) -> Unit, onEntry: suspend (String, InputStream) -> Unit) {
         try {
-            Archive(file, password).use { archive ->
+            Archive(file, password?.let { String(it) }).use { archive ->
                 if (archive.isEncrypted) throw EncryptedArchiveException(fileName)
                 var header: FileHeader? = archive.nextFileHeader()
                 while (header != null) {

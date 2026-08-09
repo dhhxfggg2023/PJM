@@ -5,6 +5,12 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.graphics.Bitmap
+import com.composables.icons.lucide.Lucide
+import com.composables.icons.lucide.Share2
+import com.composables.icons.lucide.Trash2
+import com.composables.icons.lucide.Play
+import com.composables.icons.lucide.Minimize
+import com.composables.icons.lucide.Maximize
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
@@ -16,8 +22,6 @@ import androidx.compose.foundation.pager.VerticalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -59,6 +63,7 @@ import com.dhhxfggg.pjm.ui.viewmodel.DiscoveryViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Screen that allows users to discover random media items from their vault.
@@ -148,8 +153,8 @@ fun DiscoveryScreen(
                                     .offset(y = (-150).dp),
                                 verticalArrangement = Arrangement.spacedBy(20.dp)
                             ) {
-                                DiscoveryActionIcon(Icons.Default.Share, "分享") { shareDiscoveryItem(context, item) }
-                                DiscoveryActionIcon(Icons.Default.Delete, "删除", Color.Red.copy(alpha = 0.8f)) { showDeleteConfirm = item }
+                                DiscoveryActionIcon(Lucide.Share2, "分享") { shareDiscoveryItem(context, item) }
+                                DiscoveryActionIcon(Lucide.Trash2, "删除", Color.Red.copy(alpha = 0.8f)) { showDeleteConfirm = item }
                             }
                         }
                     }
@@ -161,7 +166,8 @@ fun DiscoveryScreen(
             Surface(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
-                    .padding(top = 16.dp),
+                    .padding(top = 16.dp)
+                    .statusBarsPadding(), 
                 color = Color.Black.copy(alpha = 0.4f),
                 shape = MaterialTheme.shapes.extraLarge
             ) {
@@ -379,7 +385,7 @@ fun DiscoveryVideoRenderer(
         while (isActive) {
             currentTime = exoPlayer.currentPosition
             if (duration > 0) progress = currentTime.toFloat() / duration
-            delay(500)
+            delay(500.milliseconds)
         }
     }
 
@@ -450,7 +456,7 @@ fun DiscoveryVideoRenderer(
                 modifier = Modifier.align(Alignment.Center)
             ) {
                 Icon(
-                    Icons.Default.PlayCircleFilled,
+                    Lucide.Play,
                     null,
                     modifier = Modifier.size(80.dp),
                     tint = Color.White.copy(alpha = 0.8f)
@@ -499,7 +505,7 @@ fun DiscoveryVideoRenderer(
                             .size(36.dp)
                     ) {
                         Icon(
-                            imageVector = if (isFullScreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen, 
+                            imageVector = if (isFullScreen) Lucide.Minimize else Lucide.Maximize, 
                             contentDescription = null,
                             tint = Color.White,
                             modifier = Modifier.size(20.dp)

@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Represent the UI state for the Main Screen.
@@ -81,7 +82,7 @@ class MainViewModel @Inject constructor(
                     VaultManager.updateProgress(progress, "正在找回以前的文件...")
                 }
                 VaultManager.updateProgress(1.0f, "同步完成")
-                delay(800)
+                delay(800.milliseconds)
                 VaultManager.clearProgress()
             }
             refreshCovers()

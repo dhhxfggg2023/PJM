@@ -1,9 +1,9 @@
 package com.dhhxfggg.pjm.ui.component
 
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Settings
+import com.composables.icons.lucide.Lucide
+import com.composables.icons.lucide.House
+import com.composables.icons.lucide.Sparkles
+import com.composables.icons.lucide.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -47,19 +47,19 @@ fun BottomNavBar(navController: NavHostController) {
         NavigationBarItem(
             selected = currentRoute == Screen.Main.route,
             onClick = { onNavigate(Screen.Main.route) },
-            icon = { Icon(Icons.Default.Home, contentDescription = "主页") },
+            icon = { Icon(Lucide.House, contentDescription = "主页") },
             label = { Text("主页") }
         )
         NavigationBarItem(
             selected = currentRoute == Screen.Discovery.route,
             onClick = { onNavigate(Screen.Discovery.route) },
-            icon = { Icon(Icons.Default.AutoAwesome, contentDescription = "发现") },
+            icon = { Icon(Lucide.Sparkles, contentDescription = "发现") },
             label = { Text("发现") }
         )
         NavigationBarItem(
             selected = currentRoute == Screen.Settings.route,
             onClick = { onNavigate(Screen.Settings.route) },
-            icon = { Icon(Icons.Default.Settings, contentDescription = "设置") },
+            icon = { Icon(Lucide.Settings, contentDescription = "设置") },
             label = { Text("设置") }
         )
     }

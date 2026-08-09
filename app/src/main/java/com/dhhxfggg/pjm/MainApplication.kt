@@ -1,6 +1,7 @@
 package com.dhhxfggg.pjm
 
 import android.app.Application
+import android.content.Context
 import coil3.ImageLoader
 import coil3.SingletonImageLoader
 import coil3.PlatformContext
@@ -11,10 +12,12 @@ import coil3.request.crossfade
 import coil3.request.allowHardware
 import okio.Path.Companion.toPath
 import com.dhhxfggg.pjm.domain.util.PjmLogger
+import com.dhhxfggg.pjm.domain.util.VaultManager
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 /**
  * 应用程序主入口，负责初始化全局组件和第三方 SDK。
@@ -62,5 +65,16 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
         // 初始化日志系统
         PjmLogger.init(this)
         PjmLogger.i("MainApplication", "PJM 应用引擎已启动，兼容层支持: $isSevenZipEnabled")
+
+        // 每日自动备份数据库
+        applicationScope.launch(VaultManager.PjmDispatchers.Database) {
+            val prefs = getSharedPreferences("pjm_backup_prefs", Context.MODE_PRIVATE)
+            val lastBackup = prefs.getLong("last_backup_time", 0L)
+            val currentTime = System.currentTimeMillis()
+            if (currentTime - lastBackup > 24 * 60 * 60 * 1000L) {
+                VaultManager.backupDatabase(this@MainApplication)
+                prefs.edit().putLong("last_backup_time", currentTime).apply()
+            }
+        }
     }
 }

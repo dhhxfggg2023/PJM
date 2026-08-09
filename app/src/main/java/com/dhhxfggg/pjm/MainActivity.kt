@@ -8,6 +8,8 @@ import android.os.Parcelable
 import android.view.WindowManager
 import android.webkit.MimeTypeMap
 import android.widget.Toast
+import com.composables.icons.lucide.Lucide
+import com.composables.icons.lucide.LockKeyholeOpen
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -20,8 +22,6 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -30,6 +30,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.core.content.IntentCompat
 import com.dhhxfggg.pjm.domain.util.*
 import com.dhhxfggg.pjm.ui.navigation.AppNavHost
 import com.dhhxfggg.pjm.ui.navigation.Screen
@@ -204,7 +205,7 @@ class MainActivity : ComponentActivity() {
         var password by remember { mutableStateOf("") }
         AlertDialog(
             onDismissRequest = onDismiss,
-            icon = { Icon(Icons.Default.LockOpen, null) },
+            icon = { Icon(Lucide.LockKeyholeOpen, null) },
             title = { Text("加密归档") },
             text = {
                 Column {
@@ -232,7 +233,7 @@ class MainActivity : ComponentActivity() {
     private fun openWithSystemTool(uri: Uri, fileName: String) {
         try {
             val targetUri = if (uri.scheme == "file" || uri.path?.contains(filesDir.absolutePath) == true) {
-                PjmContentProvider.getUriForFile(this, File(uri.path!!))
+                PjmContentProvider.getUriForFile(this, File(uri.path ?: ""))
             } else uri
             val ext = fileName.substringAfterLast('.', "").lowercase()
             val mimeType = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "application/octet-stream"
@@ -259,12 +260,10 @@ class MainActivity : ComponentActivity() {
 
         val uris = when (intent.action) {
             Intent.ACTION_SEND -> {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)?.let { listOf(it) }
-                else @Suppress("DEPRECATION") (intent.getParcelableExtra<Parcelable>(Intent.EXTRA_STREAM) as? Uri)?.let { listOf(it) }
+                IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java)?.let { listOf(it) }
             }
             Intent.ACTION_SEND_MULTIPLE -> {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java)
-                else @Suppress("DEPRECATION") intent.getParcelableArrayListExtra<Parcelable>(Intent.EXTRA_STREAM)?.filterIsInstance<Uri>()
+                IntentCompat.getParcelableArrayListExtra(intent, Intent.EXTRA_STREAM, Uri::class.java)
             }
             Intent.ACTION_VIEW -> intent.data?.let { listOf(it) }
             else -> null

@@ -3,12 +3,12 @@
     <string name="app_name">PJM</string>
     
     <!-- Actions -->
-    <string name="action_encrypt">加密</string>
-    <string name="action_decrypt">解密</string>
     <string name="action_clear_cache">清空缓存</string>
     <string name="action_select_all">全选</string>
     <string name="action_share">分享</string>
     <string name="action_open">打开</string>
+    <string name="action_delete">删除</string>
+    <string name="action_cancel">取消</string>
     <string name="action_export_to_gallery">导出到相册</string>
     
     <!-- Shortcuts -->
@@ -35,7 +35,8 @@
     <string name="error_open_file_failed">无法打开文件: %1$s</string>
     <string name="error_delete_failed">删除失败: %1$s</string>
     <string name="error_export_failed">导出失败: %1$s</string>
-    
+    <string name="error_read_failed">读取失败</string>
+
     <!-- File Explorer & Selection -->
     <string name="empty_folder">文件夹为空或无法访问</string>
     <string name="selected_count">已选择 %1$d 项</string>
@@ -60,6 +61,7 @@
     <string name="strength_medium">中等</string>
     <string name="strength_strong">强</string>
     <string name="strength_very_strong">非常强</string>
+    <string name="password_valid">密码有效</string>
     <string name="password_too_short">密码至少需要6个字符</string>
     <string name="password_too_weak">密码太弱，建议使用更复杂的密码</string>
 

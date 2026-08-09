@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Represents an item in the file list, either a date header or a file.
@@ -44,14 +45,10 @@ sealed class FileListItem {
 /**
  * UI State for the File Viewer Screen.
  *
- * @property searchQuery The current search query string.
- * @property isSearchMode Whether the UI is currently in search mode.
  * @property isBatchMode Whether the UI is in multi-select batch mode.
  */
 @Immutable
 data class FileViewerUiState(
-    val searchQuery: String = "",
-    val isSearchMode: Boolean = false,
     val isBatchMode: Boolean = false
 )
 
@@ -82,15 +79,9 @@ class FileViewerViewModel @Inject constructor(
      */
     fun getFlattenedFiles(category: String): StateFlow<List<FileListItem>> {
         val filesFlow = repository.getFilesByCategory(category)
-            .combine(_uiState.map { it.searchQuery }.distinctUntilChanged()) { files, query ->
+            .map { files ->
                 withContext(Dispatchers.Default) {
-                    val filtered = if (query.isBlank()) {
-                        files
-                    } else {
-                        files.filter { it.name.contains(query, ignoreCase = true) }
-                    }
-                    
-                    val grouped = filtered.groupBy { FileUtils.formatFileTime(it.lastModified) }
+                    val grouped = files.groupBy { FileUtils.formatFileTime(it.lastModified) }
                     
                     val result = mutableListOf<FileListItem>()
                     grouped.forEach { (date, items) ->
@@ -169,20 +160,6 @@ class FileViewerViewModel @Inject constructor(
     }
 
     /**
-     * Updates the search query string.
-     */
-    fun updateSearchQuery(query: String) {
-        _uiState.update { it.copy(searchQuery = query) }
-    }
-
-    /**
-     * Toggles search mode on or off.
-     */
-    fun setSearchMode(enabled: Boolean) {
-        _uiState.update { it.copy(isSearchMode = enabled, searchQuery = if (!enabled) "" else it.searchQuery) }
-    }
-
-    /**
      * Toggles batch select mode on or off.
      */
     fun setBatchMode(enabled: Boolean) {
@@ -191,10 +168,10 @@ class FileViewerViewModel @Inject constructor(
 
     private fun startPrewarmTask(files: List<FileEntity>) {
         prewarmJob?.cancel() 
-        prewarmJob = viewModelScope.launch {
+        prewarmJob = viewModelScope.launch(VaultManager.PjmDispatchers.IO) {
             val loader = app.imageLoader
             files.forEachIndexed { index, file ->
-                if (index % 10 == 0) delay(150)
+                if (index % 10 == 0) delay(150.milliseconds)
                 val absolutePath = VaultManager.getFileFromEntity(app, file).absolutePath
                 val request = ImageRequest.Builder(app)
                     .data(absolutePath)
@@ -208,7 +185,7 @@ class FileViewerViewModel @Inject constructor(
     /**
      * Deletes a single file from the vault.
      */
-    suspend fun deleteFile(entity: FileEntity) = withContext(Dispatchers.IO) {
+    suspend fun deleteFile(entity: FileEntity) = withContext(VaultManager.PjmDispatchers.IO) {
         val absolutePath = VaultManager.getFileFromEntity(app, entity).absolutePath
         app.imageLoader.diskCache?.remove(absolutePath)
         repository.deleteFile(entity)
@@ -217,7 +194,7 @@ class FileViewerViewModel @Inject constructor(
     /**
      * Deletes multiple files from the vault in a single operation.
      */
-    suspend fun deleteFiles(entities: List<FileEntity>) = withContext(Dispatchers.IO) {
+    suspend fun deleteFiles(entities: List<FileEntity>) = withContext(VaultManager.PjmDispatchers.IO) {
         if (entities.isEmpty()) return@withContext
         val loader = app.imageLoader
         entities.forEach { entity ->
@@ -233,7 +210,7 @@ class FileViewerViewModel @Inject constructor(
      * helping to recover files that exist physically but are missing from the index.
      */
     fun syncIfEmpty(category: String) {
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch(VaultManager.PjmDispatchers.IO) {
             val dbFiles = repository.getFilesByCategory(category).first()
             PjmLogger.d("FileViewerVM", "Checking category [$category], DB count: ${dbFiles.size}")
             
@@ -247,7 +224,7 @@ class FileViewerViewModel @Inject constructor(
                     VaultManager.updateProgress(0f, "正在自动找回资源...", isActive = true)
                     repository.syncDatabase()
                     VaultManager.updateProgress(1f, "找回完成", isActive = true)
-                    delay(1000)
+                    delay(1000.milliseconds)
                     VaultManager.clearProgress()
                 } else {
                     // 如果当前分类文件夹为空，尝试扫描所有分类

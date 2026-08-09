@@ -102,6 +102,8 @@ dependencies {
     implementation("androidx.hilt:hilt-navigation-compose:1.2.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
     
+    implementation("com.composables:icons-lucide-cmp:2.2.1")
+    
     // 图片/视频加载与播放 (Coil 3)
     implementation("io.coil-kt.coil3:coil-compose:3.5.0")
     implementation("io.coil-kt.coil3:coil-video:3.5.0")

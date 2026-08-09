@@ -7,15 +7,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Description
-import androidx.compose.material.icons.filled.FolderZip
-import androidx.compose.material.icons.filled.Image
-import androidx.compose.material.icons.filled.Movie
-import androidx.compose.material.icons.filled.PictureAsPdf
-import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -32,6 +23,14 @@ import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import coil3.video.VideoFrameDecoder
+import com.composables.icons.lucide.Lucide
+import com.composables.icons.lucide.Image
+import com.composables.icons.lucide.Film
+import com.composables.icons.lucide.Music
+import com.composables.icons.lucide.FileText
+import com.composables.icons.lucide.FileArchive
+import com.composables.icons.lucide.File
+import com.composables.icons.lucide.Check
 import com.dhhxfggg.pjm.data.model.FileEntity
 import com.dhhxfggg.pjm.domain.util.FileUtils
 import com.dhhxfggg.pjm.domain.util.VaultManager
@@ -41,13 +40,12 @@ import com.dhhxfggg.pjm.domain.util.VaultManager
  */
 private fun getIconForExtension(extension: String): androidx.compose.ui.graphics.vector.ImageVector {
     return when (extension.lowercase()) {
-        "jpg", "jpeg", "png", "gif", "webp" -> Icons.Default.Image
-        "mp4", "avi", "mov", "mkv", "wmv", "flv", "webm" -> Icons.Default.Movie
-        "mp3", "wav", "flac", "aac" -> Icons.Default.AudioFile
-        "pdf" -> Icons.Default.PictureAsPdf
-        "doc", "docx", "txt" -> Icons.Default.Description
-        "zip", "rar", "7z", "pjm" -> Icons.Default.FolderZip
-        else -> Icons.AutoMirrored.Filled.InsertDriveFile
+        "jpg", "jpeg", "png", "gif", "webp" -> Lucide.Image
+        "mp4", "avi", "mov", "mkv", "wmv", "flv", "webm" -> Lucide.Film
+        "mp3", "wav", "flac", "aac" -> Lucide.Music
+        "pdf", "doc", "docx", "txt" -> Lucide.FileText
+        "zip", "rar", "7z", "pjm" -> Lucide.FileArchive
+        else -> Lucide.File
     }
 }
 
@@ -147,7 +145,7 @@ fun SelectableFileCard(
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
-                            imageVector = Icons.Default.Check,
+                            imageVector = Lucide.Check,
                             contentDescription = "Selected",
                             tint = MaterialTheme.colorScheme.onPrimary,
                             modifier = Modifier.size(16.dp)
@@ -244,7 +242,7 @@ fun SelectableFileCard(
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
-                            imageVector = Icons.Default.Check,
+                            imageVector = Lucide.Check,
                             contentDescription = "Selected",
                             tint = MaterialTheme.colorScheme.onPrimary,
                             modifier = Modifier.size(16.dp)

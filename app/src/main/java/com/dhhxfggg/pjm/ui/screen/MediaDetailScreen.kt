@@ -1,12 +1,12 @@
 package com.dhhxfggg.pjm.ui.screen
 
+import com.composables.icons.lucide.Lucide
+import com.composables.icons.lucide.ArrowLeft
 import androidx.annotation.OptIn
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -69,7 +69,7 @@ fun MediaDetailScreen(
                 },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = Color.White)
+                        Icon(Lucide.ArrowLeft, null, tint = Color.White)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Black.copy(alpha = 0.5f))
@@ -84,7 +84,8 @@ fun MediaDetailScreen(
             contentAlignment = Alignment.Center
         ) {
             if (fileEntity != null && file != null) {
-                if (fileEntity!!.isImage) {
+                val entity = fileEntity
+                if (entity?.isImage == true) {
                     ImageViewer(
                         filePath = file.absolutePath
                     )

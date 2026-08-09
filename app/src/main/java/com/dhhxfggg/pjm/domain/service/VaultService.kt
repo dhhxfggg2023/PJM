@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import androidx.core.content.IntentCompat
 import com.dhhxfggg.pjm.MainActivity
 import com.dhhxfggg.pjm.R
 import com.dhhxfggg.pjm.data.repository.FileRepository
@@ -16,6 +17,8 @@ import com.dhhxfggg.pjm.domain.util.VaultManager
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.*
 import javax.inject.Inject
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * Foreground Service responsible for long-running vault operations such as file ingestion
@@ -89,12 +92,7 @@ class VaultService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action ?: return START_NOT_STICKY
-        val uris = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            intent.getParcelableArrayListExtra(EXTRA_URIS, Uri::class.java) ?: emptyList()
-        } else {
-            @Suppress("DEPRECATION")
-            intent.getParcelableArrayListExtra<Uri>(EXTRA_URIS) ?: emptyList()
-        }
+        val uris = IntentCompat.getParcelableArrayListExtra(intent, EXTRA_URIS, Uri::class.java) ?: emptyList()
         val password = intent.getStringExtra(EXTRA_PASSWORD)
 
         // Android 14+ requirement: Specify foreground service type
@@ -129,12 +127,12 @@ class VaultService : Service() {
                         VaultManager.notifyResult(OperationResult.Success(ACTION_ENCRYPT, uris))
                     }
                 }
-                delay(500) // Brief delay to ensure UI consistency
+                delay(500.milliseconds) // Brief delay to ensure UI consistency
             } catch (e: Exception) {
                 PjmLogger.e("VaultService", "Task failed", e)
                 VaultManager.updateProgress(0f, "Operation failed: ${e.message}", isError = true)
                 VaultManager.notifyResult(OperationResult.Error(action, e.message ?: "Unknown error"))
-                delay(2000)
+                delay(2.seconds)
             } finally {
                 VaultManager.clearProgress()
                 stopForeground(STOP_FOREGROUND_REMOVE)

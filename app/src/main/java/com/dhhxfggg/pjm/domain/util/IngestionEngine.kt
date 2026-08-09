@@ -31,7 +31,7 @@ object IngestionEngine {
         onStatus: (String) -> Unit = {},
         onProgress: (Float) -> Unit = {},
         onUnsupported: (Uri, String) -> Unit = { _, _ -> }
-    ) = withContext(Dispatchers.IO) {
+    ) = withContext(VaultManager.PjmDispatchers.IO) {
         val totalBytes = uris.sumOf { FileUtils.getFileSize(context, it) }.coerceAtLeast(1L)
         val globalProcessedBytes = AtomicLong(0L)
         val duplicateCount = AtomicInteger(0)
@@ -57,89 +57,103 @@ object IngestionEngine {
         }
 
         val collectedEntities = java.util.Collections.synchronizedList(mutableListOf<FileEntity>())
+        val passwordChars = password?.toCharArray()
 
-        coroutineScope {
-            val processedUris = java.util.Collections.synchronizedSet(mutableSetOf<Uri>())
-            val splitGroups = uris.filter { FileUtils.getFileName(context, it).contains(".pjm.") }
-                .groupBy { it.toString().substringBeforeLast('.') }
+        try {
+            coroutineScope {
+                val processedUris = java.util.Collections.synchronizedSet(mutableSetOf<Uri>())
+                val splitGroups = uris.filter { FileUtils.getFileName(context, it).contains(".pjm.") }
+                    .groupBy { it.toString().substringBeforeLast('.') }
 
-            uris.forEach { uri ->
-                launch {
-                    jobSemaphore.withPermit {
-                        if (processedUris.contains(uri)) return@withPermit
-                        
-                        val name = FileUtils.getFileName(context, uri)
-                        val size = FileUtils.getFileSize(context, uri)
-
-                        // 智能查重：如果是顶层文件且已存在，则直接跳过
-                        if (fileDao.isDuplicate(name, size)) {
-                            duplicateCount.incrementAndGet()
-                            reportProgress(size)
-                            processedUris.add(uri)
-                            return@withPermit
-                        }
-                        
-                        try {
-                            // 1. 处理分卷
-                            if (name.contains(".pjm.1")) {
-                                val groupBase = uri.toString().substringBeforeLast('.')
-                                val groupUris = splitGroups[groupBase]?.sortedBy { 
-                                    it.toString().substringAfterLast('.').toIntOrNull() ?: 0 
-                                } ?: listOf(uri)
-                                
-                                onStatus("正在处理加密分卷: ${name.substringBefore(".pjm.")}")
-                                SequentialUriInputStream(context, groupUris).use { input ->
-                                    val progressInput = ProgressInputStream(input) { reportProgress(it) }
-                                    val xorInput = CryptoUtils.createXorStream(progressInput, 0)
-                                    processRecursiveStream(context, name.substringBefore(".pjm."), xorInput, collectedEntities, fileDao, onStatus, 0)
-                                }
-                                groupUris.forEach { processedUris.add(it) }
-                                return@withPermit
-                            } else if (name.contains(".pjm.") && !name.contains(".pjm.1")) {
-                                return@withPermit
-                            }
-
-                            // 2. 处理压缩包或普通文件
-                            onStatus("正在入库: $name")
-                            var handled = false
+                uris.forEach { uri ->
+                    launch {
+                        jobSemaphore.withPermit {
+                            if (processedUris.contains(uri)) return@withPermit
                             
-                            if (FileUtils.isArchiveFile(name) && isAutoExtractEnabled) {
-                                try {
-                                    handled = SevenZipUtils.extractArchive(
-                                        context, uri, password, onStatus, 
-                                        onProgress = { reportProgress(it) }
-                                    ) { entryName, inputStream ->
-                                        // 压缩包内部文件也进行查重（如果能获取到大小）
-                                        // 注意：有些压缩流无法直接获取 entry 大小，此处保守处理
-                                        processRecursiveStream(context, entryName.substringAfterLast('/'), inputStream, collectedEntities, fileDao, onStatus, 1)
-                                    }
-                                } catch (e: SevenZipUtils.EncryptedArchiveException) {
-                                    VaultManager.notifyResult(OperationResult.PasswordRequired(e.fileName, listOf(uri)))
-                                    return@withPermit 
-                                }
-                            }
+                            val name = FileUtils.getFileName(context, uri)
+                            val size = FileUtils.getFileSize(context, uri)
 
-                            if (!handled) {
-                                context.contentResolver.openInputStream(uri)?.use { input ->
-                                    val progressInput = ProgressInputStream(input) { reportProgress(it) }
-                                    processRecursiveStream(context, name, progressInput, collectedEntities, fileDao, onStatus, 0)
-                                }
-                            }
-                            processedUris.add(uri)
-                        } catch (e: Exception) {
-                            if (e !is CancellationException) {
-                                PjmLogger.e(TAG, "处理失败: $name", e)
+                            // 智能查重：如果是顶层文件且已存在，则直接跳过
+                            if (fileDao.isDuplicate(name, size)) {
+                                duplicateCount.incrementAndGet()
+                                reportProgress(size)
                                 processedUris.add(uri)
+                                return@withPermit
+                            }
+                            
+                            try {
+                                // 1. 处理分卷
+                                if (name.contains(".pjm.1")) {
+                                    val groupBase = uri.toString().substringBeforeLast('.')
+                                    val groupUris = splitGroups[groupBase]?.sortedBy { 
+                                        it.toString().substringAfterLast('.').toIntOrNull() ?: 0 
+                                    } ?: listOf(uri)
+                                    
+                                    onStatus("正在处理加密分卷: ${name.substringBefore(".pjm.")}")
+                                    SequentialUriInputStream(context, groupUris).use { input ->
+                                        val progressInput = ProgressInputStream(input) { reportProgress(it) }
+                                        val xorInput = CryptoUtils.createXorStream(progressInput, 0)
+                                        processRecursiveStream(context, name.substringBefore(".pjm."), xorInput, collectedEntities, fileDao, onStatus, 0)
+                                    }
+                                    groupUris.forEach { processedUris.add(it) }
+                                    return@withPermit
+                                } else if (name.contains(".pjm.") && !name.contains(".pjm.1")) {
+                                    return@withPermit
+                                }
+
+                                // 2. 处理压缩包或普通文件
+                                onStatus("正在入库: $name")
+                                var handled = false
+                                
+                                if (FileUtils.isArchiveFile(name) && isAutoExtractEnabled) {
+                                    try {
+                                        handled = SevenZipUtils.extractArchive(
+                                            context, uri, passwordChars, onStatus, 
+                                            onProgress = { reportProgress(it) }
+                                        ) { entryName, inputStream ->
+                                            // 压缩包内部文件也进行查重（如果能获取到大小）
+                                            // 注意：有些压缩流无法直接获取 entry 大小，此处保守处理
+                                            processRecursiveStream(context, entryName.substringAfterLast('/'), inputStream, collectedEntities, fileDao, onStatus, 1)
+                                        }
+                                    } catch (e: SevenZipUtils.EncryptedArchiveException) {
+                                        VaultManager.notifyResult(OperationResult.PasswordRequired(e.fileName, listOf(uri)))
+                                        return@withPermit 
+                                    }
+                                }
+
+                                if (!handled) {
+                                    context.contentResolver.openInputStream(uri)?.use { input ->
+                                        val progressInput = ProgressInputStream(input) { reportProgress(it) }
+                                        processRecursiveStream(context, name, progressInput, collectedEntities, fileDao, onStatus, 0)
+                                    }
+                                }
+                                processedUris.add(uri)
+                            } catch (e: Exception) {
+                                if (e !is CancellationException) {
+                                    PjmLogger.e(TAG, "处理失败: $name", e)
+                                    processedUris.add(uri)
+                                    throw e // Re-throw to trigger cleanup
+                                }
                             }
                         }
                     }
                 }
             }
-        }
-        
-        if (collectedEntities.isNotEmpty()) {
-            onStatus("正在更新索引...")
-            fileDao.upsertAll(collectedEntities)
+            
+            if (collectedEntities.isNotEmpty()) {
+                onStatus("正在更新索引...")
+                fileDao.upsertAll(collectedEntities)
+            }
+        } catch (e: Exception) {
+            if (e !is CancellationException) {
+                PjmLogger.e(TAG, "Ingestion failed, cleaning up partial files...", e)
+                collectedEntities.forEach { entity ->
+                    VaultManager.shredFile(VaultManager.getFileFromEntity(context, entity))
+                }
+            }
+            throw e
+        } finally {
+            passwordChars?.let { java.util.Arrays.fill(it, '0') }
         }
         
         val finalMsg = if (duplicateCount.get() > 0) "入库完成 (跳过 ${duplicateCount.get()} 个重复文件)" else "任务全部完成"

@@ -8,8 +8,14 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
+import com.composables.icons.lucide.Lucide
+import com.composables.icons.lucide.CloudUpload
+import com.composables.icons.lucide.ShieldCheck
+import com.composables.icons.lucide.Image
+import com.composables.icons.lucide.Video
+import com.composables.icons.lucide.Music
+import com.composables.icons.lucide.FileArchive
+import com.composables.icons.lucide.HardDrive
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -127,7 +133,7 @@ fun MainScreen(
                     modifier = Modifier.padding(16.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(Icons.Default.CloudUpload, null)
+                    Icon(Lucide.CloudUpload, null)
                     Spacer(Modifier.width(12.dp))
                     Text("一键全库加密导出", style = MaterialTheme.typography.titleSmall)
                 }
@@ -167,11 +173,11 @@ fun getCategoryInfo(category: String): Triple<String, ImageVector, Color> {
     val primaryColor = MaterialTheme.colorScheme.primary
     return remember(category, primaryColor) {
         when (category) {
-            "pjm" -> Triple("PJM 归档", Icons.Default.EnhancedEncryption, primaryColor)
-            "images" -> Triple("相册照片", Icons.Default.Image, Color(0xFF4CAF50))
-            "videos" -> Triple("视频影像", Icons.Default.VideoLibrary, Color(0xFFFF9800))
-            "audios" -> Triple("音乐音频", Icons.Default.AudioFile, Color(0xFFE91E63))
-            else -> Triple("其它杂项", Icons.Default.FolderZip, Color(0xFF607D8B))
+            "pjm" -> Triple("PJM 归档", Lucide.ShieldCheck, primaryColor)
+            "images" -> Triple("相册照片", Lucide.Image, Color(0xFF4CAF50))
+            "videos" -> Triple("视频影像", Lucide.Video, Color(0xFFFF9800))
+            "audios" -> Triple("音乐音频", Lucide.Music, Color(0xFFE91E63))
+            else -> Triple("其它杂项", Lucide.FileArchive, Color(0xFF607D8B))
         }
     }
 }
@@ -195,7 +201,7 @@ fun StorageUsageModule(
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.Storage, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+                Icon(Lucide.HardDrive, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
                 Spacer(Modifier.width(8.dp))
                 Text("保险库占用详情", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.weight(1f))

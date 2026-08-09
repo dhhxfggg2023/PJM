@@ -7,6 +7,25 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import com.composables.icons.lucide.Lucide
+import com.composables.icons.lucide.ArrowLeft
+import com.composables.icons.lucide.Image
+import com.composables.icons.lucide.Images
+import com.composables.icons.lucide.Contrast
+import com.composables.icons.lucide.Type
+import com.composables.icons.lucide.Eraser
+import com.composables.icons.lucide.Maximize
+import com.composables.icons.lucide.Trash2
+import com.composables.icons.lucide.FileUp
+import com.composables.icons.lucide.Save
+import com.composables.icons.lucide.SquareCheck
+import com.composables.icons.lucide.ShieldCheck
+import com.composables.icons.lucide.Brush
+import com.composables.icons.lucide.Bug
+import com.composables.icons.lucide.RotateCcw
+import com.composables.icons.lucide.ChevronRight
+import com.composables.icons.lucide.Minus
+import com.composables.icons.lucide.Plus
 import androidx.compose.animation.*
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -14,9 +33,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -36,6 +52,7 @@ import com.dhhxfggg.pjm.R
 import com.dhhxfggg.pjm.data.model.FileEntity
 import com.dhhxfggg.pjm.data.model.Settings
 import com.dhhxfggg.pjm.domain.util.FileUtils
+import com.dhhxfggg.pjm.domain.util.VaultManager
 import com.dhhxfggg.pjm.ui.viewmodel.CryptoViewModel
 import com.dhhxfggg.pjm.ui.viewmodel.SettingsViewModel
 import kotlinx.coroutines.Dispatchers
@@ -97,7 +114,7 @@ fun SettingsScreen(
                 title = { Text("个性化与资产管理", style = MaterialTheme.typography.titleMedium) },
                 navigationIcon = { 
                     IconButton(onClick = onBack) { 
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, null) 
+                        Icon(Lucide.ArrowLeft, null) 
                     } 
                 },
                 colors = TopAppBarDefaults.centerAlignedTopAppBarColors(containerColor = Color.Transparent)
@@ -135,7 +152,7 @@ fun SettingsScreen(
                 }
                 
                 SettingsSwitch(
-                    icon = Icons.Default.Image,
+                    icon = Lucide.Image,
                     title = "启用全景背景",
                     checked = settings.isCustomBackgroundEnabled,
                     onCheckedChange = { 
@@ -144,13 +161,13 @@ fun SettingsScreen(
                 )
                 if (settings.isCustomBackgroundEnabled) {
                     SettingsButton(
-                        icon = Icons.Default.PhotoLibrary, 
+                        icon = Lucide.Images, 
                         title = "选择背景图", 
                         description = "建议使用高分辨率图片", 
                         onClick = { bgImagePicker.launch(arrayOf("image/*")) }
                     )
                     SettingsStepper(
-                        icon = Icons.Default.Opacity, 
+                        icon = Lucide.Contrast, 
                         title = "背景亮度", 
                         value = settings.backgroundOpacity, 
                         step = 0.05f, 
@@ -161,7 +178,7 @@ fun SettingsScreen(
                 }
                 
                 SettingsButton(
-                    icon = Icons.Default.FontDownload, 
+                    icon = Lucide.Type, 
                     title = "自定义应用字体", 
                     description = if (settings.customFontUri != null) "当前已启用自定义字体" else "选择 .ttf 字体文件",
                     onClick = { 
@@ -170,14 +187,14 @@ fun SettingsScreen(
                 )
                 if (settings.customFontUri != null) {
                     SettingsButton(
-                        icon = Icons.Default.FormatClear, 
+                        icon = Lucide.Eraser, 
                         title = "清除自定义字体", 
                         onClick = { settingsViewModel.updateSetting(Settings.KEY_CUSTOM_FONT_URI, null) }
                     )
                 }
 
                 SettingsStepper(
-                    icon = Icons.Default.AspectRatio, 
+                    icon = Lucide.Maximize, 
                     title = "全局 UI 缩放", 
                     value = settings.globalUiScale, 
                     valueRange = 0.8f..1.2f, 
@@ -211,7 +228,7 @@ fun SettingsScreen(
                 }
 
                 SettingsSwitch(
-                    icon = Icons.Default.DeleteSweep,
+                    icon = Lucide.Trash2,
                     title = stringResource(R.string.setting_auto_delete_original),
                     description = stringResource(R.string.setting_auto_delete_original_desc),
                     checked = settings.autoDeleteOriginal,
@@ -219,7 +236,7 @@ fun SettingsScreen(
                 )
 
                 SettingsSwitch(
-                    icon = Icons.Default.Unarchive,
+                    icon = Lucide.FileUp,
                     title = "压缩包自动提取入库",
                     description = "存入 ZIP/7z/RAR 时自动将其解压并分类存储",
                     checked = settings.isArchiveAutoExtractionEnabled,
@@ -227,7 +244,7 @@ fun SettingsScreen(
                 )
 
                 SettingsStepper(
-                    icon = Icons.Default.Save, 
+                    icon = Lucide.Save, 
                     title = "导出分卷大小 (MB)", 
                     description = "打包导出时每个分卷的最大容量",
                     value = settings.exportSplitSize.toFloat(), 
@@ -237,19 +254,21 @@ fun SettingsScreen(
                 )
 
                 SettingsButton(
-                    icon = Icons.Default.FactCheck, 
+                    icon = Lucide.SquareCheck, 
                     title = "一键清理库内重复项", 
                     description = "基于指纹识别移除内容完全一致的冗余副本",
                     onClick = { settingsViewModel.scanForDuplicates() }
                 )
                 
                 SettingsButton(
-                    icon = Icons.Default.GppGood, 
+                    icon = Lucide.ShieldCheck, 
                     title = "库文件完整性校验", 
                     description = "验证库内文件物理存在及内容指纹",
                     onClick = { 
-                        settingsViewModel.checkIntegrity { results ->
-                            integrityResults = results
+                        scope.launch(VaultManager.PjmDispatchers.IO) {
+                            settingsViewModel.checkIntegrity { results ->
+                                integrityResults = results
+                            }
                         }
                     }
                 )
@@ -257,11 +276,11 @@ fun SettingsScreen(
 
             SettingsCategory(title = "系统与维护") {
                 SettingsButton(
-                    icon = Icons.Default.CleaningServices, 
+                    icon = Lucide.Brush, 
                     title = "清理缓存与临时文件", 
                     description = "释放缩略图占用及过期的日志数据",
                     onClick = { 
-                        scope.launch(Dispatchers.IO) {
+                        scope.launch(VaultManager.PjmDispatchers.IO) {
                             // 1. 系统缓存
                             context.cacheDir.deleteRecursively()
                             // 2. 缩略图磁盘缓存
@@ -276,12 +295,12 @@ fun SettingsScreen(
                     }
                 )
                 SettingsButton(
-                    icon = Icons.Default.BugReport, 
+                    icon = Lucide.Bug, 
                     title = "导出诊断日志", 
                     onClick = { exportPjmLogs(context) }
                 )
                 SettingsButton(
-                    icon = Icons.Default.SettingsBackupRestore, 
+                    icon = Lucide.RotateCcw, 
                     title = "恢复出厂设置", 
                     onClick = { settingsViewModel.resetAllSettings() }
                 )
@@ -325,7 +344,7 @@ fun SettingsScreen(
         } else {
             AlertDialog(
                 onDismissRequest = { settingsViewModel.clearDuplicateState() },
-                icon = { Icon(Icons.Default.CleaningServices, null, tint = MaterialTheme.colorScheme.error) },
+                icon = { Icon(Lucide.Brush, null, tint = MaterialTheme.colorScheme.error) },
                 title = { Text("清理重复内容") },
                 text = {
                     Column {
@@ -451,7 +470,7 @@ fun SettingsButton(
                 Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) 
             }
         }
-        Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f))
+        Icon(Lucide.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f))
     }
 }
 
@@ -486,7 +505,7 @@ fun SettingsStepper(
         }
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = { onValueChange((value - step).coerceIn(valueRange)) }) { 
-                Icon(Icons.Default.Remove, null) 
+                Icon(Lucide.Minus, null) 
             }
             Slider(
                 value = value, 
@@ -495,7 +514,7 @@ fun SettingsStepper(
                 modifier = Modifier.weight(1f)
             )
             IconButton(onClick = { onValueChange((value + step).coerceIn(valueRange)) }) { 
-                Icon(Icons.Default.Add, null) 
+                Icon(Lucide.Plus, null) 
             }
         }
     }

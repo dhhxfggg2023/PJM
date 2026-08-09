@@ -2,7 +2,6 @@ package com.dhhxfggg.pjm.domain.util
 
 import android.content.Context
 import android.net.Uri
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.apache.commons.compress.archivers.zip.Zip64Mode
 import org.apache.commons.compress.archivers.zip.ZipArchiveEntry
@@ -18,6 +17,7 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
+import java.util.Arrays
 import java.util.zip.Deflater
 
 /**
@@ -34,7 +34,7 @@ object CryptoUtils {
     const val FILE_MAGIC = 0x504A4D01 
     
     private val BUFFER_SIZE get() = VaultManager.ADAPTIVE_BUFFER_SIZE
-    private val XOR_KEY = "dhhxfggg_is_the_best_pjm_key_!!!".toByteArray(StandardCharsets.UTF_8)
+    private val XOR_KEY = "dhhxfggg_is_the_best_pjm_key_fixed".toByteArray(StandardCharsets.UTF_8)
     private const val KEY_SIZE_MASK = 31L 
 
     private var isNativeAvailable = false
@@ -89,28 +89,23 @@ object CryptoUtils {
     /**
      * Encrypts a list of Uris into a single PJM container file.
      * Uses atomic write (temp file + rename) to ensure data integrity.
-     *
-     * @param context Android context for resolving Uris.
-     * @param inputUris List of content Uris to encrypt.
-     * @param outputPath Target file path for the .pjm container.
-     * @param onProgress Callback for tracking encryption progress (0.0 to 1.0).
-     * @return A [Result] indicating success or containing the failure exception.
      */
     suspend fun encryptUris(
         context: Context,
         inputUris: List<Uri>,
         outputPath: String,
         onProgress: (Float) -> Unit = {}
-    ): Result<Unit> = withContext(Dispatchers.IO) {
+    ): Result<Unit> = withContext(VaultManager.PjmDispatchers.Crypto) {
         runCatching {
+            val totalSize = inputUris.sumOf { FileUtils.getFileSize(context, it) }.coerceAtLeast(1L)
+            VaultManager.ensureDiskSpace(context, totalSize)
+
             val finalFile = File(outputPath)
             val tmpFile = File("${outputPath}.tmp_${System.currentTimeMillis()}")
             
             try {
                 tmpFile.parentFile?.mkdirs()
                 FileOutputStream(tmpFile).use { fos ->
-                    val totalSize = inputUris.sumOf { FileUtils.getFileSize(context, it) }.coerceAtLeast(1L)
-                    var processedBytes = 0L
                     var streamPos = 0L 
 
                     val xorWrapper = object : FilterOutputStream(fos) {
@@ -121,10 +116,14 @@ object CryptoUtils {
                         }
                         override fun write(b: ByteArray, off: Int, len: Int) {
                             if (len <= 0) return
-                            val copy = b.copyOfRange(off, off + len) // Don't modify original during write
-                            transformBytesInPlace(copy, 0, len, streamPos)
-                            out.write(copy, 0, len)
-                            streamPos += len.toLong()
+                            val copy = b.copyOfRange(off, off + len) 
+                            try {
+                                transformBytesInPlace(copy, 0, len, streamPos)
+                                out.write(copy, 0, len)
+                                streamPos += len.toLong()
+                            } finally {
+                                Arrays.fill(copy, 0.toByte()) // Zero out sensitive data copy
+                            }
                         }
                     }
 
@@ -134,34 +133,40 @@ object CryptoUtils {
                     ZipArchiveOutputStream(BufferedOutputStream(xorWrapper as OutputStream, BUFFER_SIZE)).use { zos ->
                         zos.setUseZip64(Zip64Mode.AsNeeded)
                         zos.setEncoding("UTF-8")
-                        val buffer = ByteArray(BUFFER_SIZE)
-                        for (uri in inputUris) {
-                            val fileName = FileUtils.getFileName(context, uri)
-                            val entry = ZipArchiveEntry(fileName)
-                            zos.setLevel(if (FileUtils.shouldCompress(fileName)) Deflater.BEST_SPEED else Deflater.NO_COMPRESSION)
-                            zos.putArchiveEntry(entry)
-                            context.contentResolver.openInputStream(uri)?.use { fis ->
-                                var len: Int
-                                while (fis.read(buffer).also { len = it } > 0) {
-                                    zos.write(buffer, 0, len)
-                                    processedBytes += len
-                                    onProgress(processedBytes.toFloat() / totalSize)
+                        val buffer = VaultManager.acquireBuffer()
+                        var processedBytes = 0L
+                        try {
+                            for (uri in inputUris) {
+                                val fileName = FileUtils.getFileName(context, uri)
+                                val entry = ZipArchiveEntry(fileName)
+                                zos.setLevel(if (FileUtils.shouldCompress(fileName)) Deflater.BEST_SPEED else Deflater.NO_COMPRESSION)
+                                zos.putArchiveEntry(entry)
+                                context.contentResolver.openInputStream(uri)?.use { fis ->
+                                    var len: Int
+                                    while (fis.read(buffer).also { len = it } > 0) {
+                                        zos.write(buffer, 0, len)
+                                        processedBytes += len
+                                        onProgress(processedBytes.toFloat() / totalSize)
+                                    }
                                 }
+                                zos.closeArchiveEntry()
                             }
-                            zos.closeArchiveEntry()
+                            zos.finish()
+                        } finally {
+                            VaultManager.releaseBuffer(buffer)
                         }
-                        zos.finish()
+                        xorWrapper.flush()
                         fos.fd.sync() 
                     }
                 }
                 
-                if (finalFile.exists()) finalFile.delete()
+                if (finalFile.exists()) VaultManager.shredFile(finalFile)
                 if (!tmpFile.renameTo(finalFile)) {
                     throw IOException("Failed to finalize file: rename failed")
                 }
                 PjmLogger.i(TAG, "Successfully encrypted ${inputUris.size} files to $outputPath")
             } catch (e: Exception) {
-                if (tmpFile.exists()) tmpFile.delete()
+                VaultManager.shredFile(tmpFile)
                 PjmLogger.e(TAG, "Encryption failed for $outputPath", e)
                 throw e
             }
@@ -179,7 +184,7 @@ object CryptoUtils {
         context: Context,
         uris: List<Uri>,
         onEntry: suspend (String, InputStream) -> Unit
-    ) = withContext(Dispatchers.IO) {
+    ) = withContext(VaultManager.PjmDispatchers.Crypto) {
         for (uri in uris) {
             try {
                 context.contentResolver.openInputStream(uri)?.use { fis ->

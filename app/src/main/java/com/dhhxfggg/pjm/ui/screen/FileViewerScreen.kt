@@ -4,19 +4,17 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.LocalActivity
 import androidx.compose.animation.*
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.grid.GridItemSpan
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.ViewList
-import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -29,20 +27,29 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
+import androidx.hilt.navigation.compose.hiltViewModel
+import com.composables.icons.lucide.Lucide
+import com.composables.icons.lucide.ArrowLeft
+import com.composables.icons.lucide.LayoutGrid
+import com.composables.icons.lucide.LayoutList
+import com.composables.icons.lucide.ListTodo
+import com.composables.icons.lucide.Save
+import com.composables.icons.lucide.Share2
+import com.composables.icons.lucide.Square
+import com.composables.icons.lucide.SquareCheck
+import com.composables.icons.lucide.Trash2
+import com.composables.icons.lucide.X
+import com.dhhxfggg.pjm.MainApplication
 import com.dhhxfggg.pjm.R
 import com.dhhxfggg.pjm.data.model.FileEntity
 import com.dhhxfggg.pjm.domain.util.FileUtils
 import com.dhhxfggg.pjm.domain.util.VaultManager
 import com.dhhxfggg.pjm.ui.component.FileCard
 import com.dhhxfggg.pjm.ui.component.SelectableFileCard
-import com.dhhxfggg.pjm.ui.viewmodel.FileViewerViewModel
-import com.dhhxfggg.pjm.ui.viewmodel.FileListItem
-import com.dhhxfggg.pjm.ui.viewmodel.SettingsViewModel
 import com.dhhxfggg.pjm.ui.viewmodel.CryptoViewModel
-import androidx.hilt.navigation.compose.hiltViewModel
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.LocalActivity
-import com.dhhxfggg.pjm.MainApplication
+import com.dhhxfggg.pjm.ui.viewmodel.FileListItem
+import com.dhhxfggg.pjm.ui.viewmodel.FileViewerViewModel
+import com.dhhxfggg.pjm.ui.viewmodel.SettingsViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -119,121 +126,82 @@ fun FileViewerScreen(
 
     Scaffold(
         topBar = {
-            if (uiState.isSearchMode && !uiState.isBatchMode) {
-                TopAppBar(
-                    title = {
-                        TextField(
-                            value = uiState.searchQuery, 
-                            onValueChange = { fileViewModel.updateSearchQuery(it) },
-                            placeholder = { Text("搜索库内资源...") },
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = TextFieldDefaults.colors(
-                                focusedContainerColor = Color.Transparent, 
-                                unfocusedContainerColor = Color.Transparent, 
-                                focusedIndicatorColor = Color.Transparent, 
-                                unfocusedIndicatorColor = Color.Transparent
-                            ),
-                            singleLine = true,
-                            leadingIcon = { Icon(Icons.Default.Search, null) },
-                            trailingIcon = { 
-                                IconButton(onClick = { 
-                                    if (uiState.searchQuery.isNotEmpty()) {
-                                        fileViewModel.updateSearchQuery("")
-                                    } else {
-                                        fileViewModel.setSearchMode(false)
-                                    }
-                                }) { 
-                                    Icon(Icons.Default.Close, null) 
-                                } 
-                            }
-                        )
-                    },
-                    navigationIcon = { 
-                        IconButton(onClick = { 
-                            fileViewModel.setSearchMode(false)
-                            fileViewModel.updateSearchQuery("") 
-                        }) { 
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, null) 
-                        } 
-                    }
-                )
-            } else {
-                CenterAlignedTopAppBar(
-                    title = { 
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(if (uiState.isBatchMode) "多选操作" else categoryDisplayName, style = MaterialTheme.typography.titleMedium)
-                            if (uiState.isBatchMode) {
-                                Text(
-                                    text = "已选中 ${selectedFiles.size} 项", 
-                                    style = MaterialTheme.typography.labelSmall, 
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                            }
-                        }
-                    },
-                    navigationIcon = { 
-                        IconButton(onClick = {
-                            if (uiState.isBatchMode) {
-                                fileViewModel.setBatchMode(false)
-                                selectedFiles.clear()
-                            } else {
-                                onBack()
-                            }
-                        }) { 
-                            Icon(if (uiState.isBatchMode) Icons.Default.Close else Icons.AutoMirrored.Filled.ArrowBack, null) 
-                        } 
-                    },
-                    actions = {
+            CenterAlignedTopAppBar(
+                title = { 
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(if (uiState.isBatchMode) "多选操作" else categoryDisplayName, style = MaterialTheme.typography.titleMedium)
                         if (uiState.isBatchMode) {
-                            val allFilteredFiles = remember(flattenedItems) { 
-                                flattenedItems.filterIsInstance<FileListItem.FileItem>().map { it.entity } 
-                            }
-                            val isAllSelected = selectedFiles.size == allFilteredFiles.size && allFilteredFiles.isNotEmpty()
-                            IconButton(onClick = { 
-                                if (isAllSelected) { 
-                                    selectedFiles.clear()
-                                    fileViewModel.setBatchMode(false) 
-                                } else { 
-                                    selectedFiles.clear()
-                                    selectedFiles.addAll(allFilteredFiles) 
-                                } 
-                            }) {
-                                Icon(if (isAllSelected) Icons.Default.Deselect else Icons.Default.SelectAll, null)
-                            }
-                            if (category == VaultManager.CAT_IMAGES || category == VaultManager.CAT_VIDEOS || category == VaultManager.CAT_AUDIOS) {
-                                IconButton(onClick = {
-                                    scope.launch(Dispatchers.IO) {
-                                        var count = 0
-                                        selectedFiles.forEach { 
-                                            if (FileUtils.exportToPublicDirectory(context, VaultManager.getFileFromEntity(context, it), it.name)) count++ 
-                                        }
-                                        withContext(Dispatchers.Main) { 
-                                            Toast.makeText(context, "成功导出 $count 个资源", Toast.LENGTH_SHORT).show()
-                                            selectedFiles.clear()
-                                            fileViewModel.setBatchMode(false) 
-                                        }
-                                    }
-                                }) { Icon(Icons.Default.DownloadForOffline, "导出到系统库") }
-                            }
-                            IconButton(onClick = { shareFiles(context, selectedFiles.toList()) }) { Icon(Icons.Default.Share, null) }
-                            IconButton(onClick = { showBatchDeleteConfirmDialog = true }) { 
-                                Icon(Icons.Default.DeleteForever, null, tint = MaterialTheme.colorScheme.error) 
-                            }
+                            Text(
+                                text = "已选中 ${selectedFiles.size} 项", 
+                                style = MaterialTheme.typography.labelSmall, 
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                },
+                navigationIcon = { 
+                    IconButton(onClick = {
+                        if (uiState.isBatchMode) {
+                            fileViewModel.setBatchMode(false)
+                            selectedFiles.clear()
                         } else {
-                            IconButton(onClick = { fileViewModel.setSearchMode(true) }) { Icon(Icons.Default.Search, null) }
-                            IconButton(onClick = { settingsViewModel.toggleViewMode() }) { 
-                                Icon(if (settings.fileViewMode == "grid") Icons.AutoMirrored.Filled.ViewList else Icons.Default.GridView, null) 
-                            }
-                            if (flattenedItems.isNotEmpty()) {
-                                IconButton(onClick = { fileViewModel.setBatchMode(true) }) { 
-                                    Icon(Icons.Default.Checklist, null) 
+                            onBack()
+                        }
+                    }) { 
+                        Icon(if (uiState.isBatchMode) Lucide.X else Lucide.ArrowLeft, null) 
+                    } 
+                },
+                actions = {
+                    if (uiState.isBatchMode) {
+                        val allFilteredFiles = remember(flattenedItems) { 
+                            flattenedItems.filterIsInstance<FileListItem.FileItem>().map { it.entity } 
+                        }
+                        val isAllSelected = selectedFiles.size == allFilteredFiles.size && allFilteredFiles.isNotEmpty()
+                        IconButton(onClick = { 
+                            if (isAllSelected) { 
+                                selectedFiles.clear()
+                                fileViewModel.setBatchMode(false) 
+                            } else { 
+                                selectedFiles.clear()
+                                selectedFiles.addAll(allFilteredFiles) 
+                            } 
+                        }) {
+                            Icon(if (isAllSelected) Lucide.Square else Lucide.SquareCheck, null)
+                        }
+                        IconButton(onClick = { shareFiles(context, selectedFiles.toList()) }) { Icon(Lucide.Share2, null) }
+                        
+                        if (category == VaultManager.CAT_IMAGES || category == VaultManager.CAT_VIDEOS || category == VaultManager.CAT_AUDIOS) {
+                            IconButton(onClick = {
+                                scope.launch(Dispatchers.IO) {
+                                    var count = 0
+                                    selectedFiles.forEach { 
+                                        if (FileUtils.exportToPublicDirectory(context, VaultManager.getFileFromEntity(context, it), it.name)) count++ 
+                                    }
+                                    withContext(Dispatchers.Main) { 
+                                        Toast.makeText(context, "成功导出 $count 个资源", Toast.LENGTH_SHORT).show()
+                                        selectedFiles.clear()
+                                        fileViewModel.setBatchMode(false) 
+                                    }
                                 }
+                            }) { Icon(Lucide.Save, "导出到系统库") }
+                        }
+
+                        IconButton(onClick = { showBatchDeleteConfirmDialog = true }) { 
+                            Icon(Lucide.Trash2, null, tint = MaterialTheme.colorScheme.error) 
+                        }
+                    } else {
+                        IconButton(onClick = { settingsViewModel.toggleViewMode() }) { 
+                            Icon(if (settings.fileViewMode == "grid") Lucide.LayoutList else Lucide.LayoutGrid, null) 
+                        }
+                        if (flattenedItems.isNotEmpty()) {
+                            IconButton(onClick = { fileViewModel.setBatchMode(true) }) { 
+                                Icon(Lucide.ListTodo, null) 
                             }
                         }
-                    },
-                    colors = TopAppBarDefaults.centerAlignedTopAppBarColors(containerColor = Color.Transparent)
-                )
-            }
+                    }
+                },
+                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(containerColor = Color.Transparent)
+            )
         },
         containerColor = Color.Transparent
     ) { innerPadding ->
@@ -241,7 +209,7 @@ fun FileViewerScreen(
             if (flattenedItems.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { 
                     Text(
-                        text = if (uiState.searchQuery.isNotEmpty()) "未找到匹配项" else "暂无加密资源", 
+                        text = "暂无加密资源", 
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     ) 
                 }
@@ -389,7 +357,7 @@ fun FileViewerScreen(
     }
 
     if (showDeleteConfirmDialog != null) {
-        val entity = showDeleteConfirmDialog!!
+        val entity = showDeleteConfirmDialog ?: return
         AlertDialog(
             onDismissRequest = { showDeleteConfirmDialog = null },
             title = { Text(stringResource(R.string.dialog_delete_title)) },

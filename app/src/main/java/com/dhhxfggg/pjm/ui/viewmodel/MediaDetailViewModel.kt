@@ -13,7 +13,7 @@ import javax.inject.Inject
 
 /**
  * ViewModel for managing the state of the Media Detail screen.
- * Handles fetching file metadata and managing media playback states.
+ * Handles retrieving file metadata and managing media playback states.
  */
 @HiltViewModel
 class MediaDetailViewModel @Inject constructor(

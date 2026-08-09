@@ -2,9 +2,6 @@ package com.dhhxfggg.pjm.ui.component
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.layout.*
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -12,6 +9,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import com.composables.icons.lucide.Lucide
+import com.composables.icons.lucide.Eye
+import com.composables.icons.lucide.EyeOff
 
 /**
  * An enhanced password input field with visibility toggle and a password strength indicator.
@@ -61,9 +61,9 @@ fun EnhancedPasswordInput(
                 IconButton(onClick = { passwordVisible = !passwordVisible }) {
                     Icon(
                         imageVector = if (passwordVisible) {
-                            Icons.Default.Visibility
+                            Lucide.Eye
                         } else {
-                            Icons.Default.VisibilityOff
+                            Lucide.EyeOff
                         },
                         contentDescription = "Toggle Password Visibility"
                     )

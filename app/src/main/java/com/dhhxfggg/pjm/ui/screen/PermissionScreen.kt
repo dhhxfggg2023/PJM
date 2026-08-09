@@ -1,10 +1,11 @@
 package com.dhhxfggg.pjm.ui.screen
 
+import com.composables.icons.lucide.Lucide
+import com.composables.icons.lucide.Shield
+import com.composables.icons.lucide.ShieldCheck
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -41,7 +42,7 @@ fun PermissionScreen(
             verticalArrangement = Arrangement.Center
         ) {
             Icon(
-                imageVector = Icons.Default.Security,
+                imageVector = Lucide.Shield,
                 contentDescription = null,
                 modifier = Modifier.size(80.dp),
                 tint = MaterialTheme.colorScheme.primary
@@ -88,7 +89,7 @@ fun PermissionScreen(
                     .fillMaxWidth()
                     .height(56.dp)
             ) {
-                Icon(Icons.Default.VerifiedUser, contentDescription = null)
+                Icon(Lucide.ShieldCheck, contentDescription = null)
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(text = "立即授权")
             }
