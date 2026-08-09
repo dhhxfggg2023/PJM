@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">PJM</string>
+    
+    <!-- Actions -->
+    <string name="action_encrypt">加密</string>
+    <string name="action_decrypt">解密</string>
+    <string name="action_clear_cache">清空缓存</string>
+    <string name="action_select_all">全选</string>
+    <string name="action_share">分享</string>
+    <string name="action_open">打开</string>
+    <string name="action_export_to_gallery">导出到相册</string>
+    
+    <!-- Shortcuts -->
+    <string name="shortcut_encrypt">加密</string>
+    <string name="shortcut_encrypt_long">立即开始加密文件</string>
+    <string name="shortcut_cabinet">查看文件</string>
+    <string name="shortcut_cabinet_long">打开文件柜查看已还原文件</string>
+    
+    <!-- Status & Progress -->
+    <string name="status_ready">就绪</string>
+    <string name="status_processing">正在处理文件...</string>
+    <string name="status_storing">正在存放...</string>
+    <string name="status_encrypting">正在加密...</string>
+    <string name="status_decrypting">正在解密...</string>
+    <string name="status_storing_with_progress">正在存放 (%1$d%%)</string>
+    <string name="status_encrypt_success">加密完成</string>
+    <string name="status_cache_cleared">缓存已清空</string>
+
+    <!-- Errors -->
+    <string name="error_password_empty">密码不能为空</string>
+    <string name="error_enter_password">请输入密码</string>
+    <string name="error_encrypt_failed">加密失败: %1$s</string>
+    <string name="error_decrypt_failed">解密失败: %1$s</string>
+    <string name="error_open_file_failed">无法打开文件: %1$s</string>
+    <string name="error_delete_failed">删除失败: %1$s</string>
+    <string name="error_export_failed">导出失败: %1$s</string>
+    
+    <!-- File Explorer & Selection -->
+    <string name="empty_folder">文件夹为空或无法访问</string>
+    <string name="selected_count">已选择 %1$d 项</string>
+
+    <!-- Dialogs -->
+    <string name="dialog_password_title">请输入密码</string>
+    <string name="dialog_delete_title">确认删除</string>
+    <string name="toast_file_deleted">文件已删除</string>
+    <string name="toast_batch_processed">已处理 %1$d 个文件</string>
+    
+    <!-- Settings -->
+    <string name="setting_category_automation_vault">自动化与存放</string>
+    <string name="setting_auto_delete_original">存放后自动清理原图</string>
+    <string name="setting_auto_delete_original_desc">进入保险箱，原件即消失（需系统授权）</string>
+    <string name="action_store_and_classify">📥 存放并自动分类</string>
+
+    <!-- Password Strength -->
+    <string name="password_hint">输入至少6位字符</string>
+    <string name="password_label">加密口令</string>
+    <string name="strength_label">密码强度</string>
+    <string name="strength_weak">弱</string>
+    <string name="strength_medium">中等</string>
+    <string name="strength_strong">强</string>
+    <string name="strength_very_strong">非常强</string>
+    <string name="password_too_short">密码至少需要6个字符</string>
+    <string name="password_too_weak">密码太弱，建议使用更复杂的密码</string>
+
+    <!-- Navigation -->
+    <string name="nav_home">主页</string>
+    <string name="nav_settings">设置</string>
+</resources>

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- Base application theme. -->
+    <style name="Theme.PJM" parent="android:Theme.Material.Light.NoActionBar">
+        <!-- Customize your theme here. -->
+        <!-- 为了快速构建成功，先使用简单主题 -->
+    </style>
+
+    <!-- 或者用这个更简单的主题 -->
+    <style name="Theme.PJM.Simple" parent="android:Theme.Material.Light">
+        <item name="android:colorPrimary">#FF6200EE</item>
+        <item name="android:colorPrimaryDark">#FF3700B3</item>
+        <item name="android:colorAccent">#FF03DAC6</item>
+    </style>
+</resources>

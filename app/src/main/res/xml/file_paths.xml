@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 应用私有文件目录 -->
+    <files-path name="files_root" path="." />
+    <files-path name="pjm_storage" path="PJMStorage/" />
+    <files-path name="decrypted_files" path="PJMStorage/decrypted/" />
+
+    <!-- 应用缓存目录 -->
+    <cache-path name="cache_root" path="." />
+    <cache-path name="pjm_cache" path="pjm_temp/" />
+
+    <!-- 外部存储目录 -->
+    <external-path name="external_root" path="." />
+    <external-files-path name="external_files" path="." />
+</paths>
