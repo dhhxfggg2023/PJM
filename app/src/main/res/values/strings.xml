@@ -10,7 +10,22 @@
     <string name="action_delete">删除</string>
     <string name="action_cancel">取消</string>
     <string name="action_export_to_gallery">导出到相册</string>
-    
+    <string name="action_back">返回</string>
+    <string name="action_confirm">确定</string>
+    <string name="action_pack_and_encrypt">🔒 打包并加密</string>
+    <string name="action_extract_now">立即提取</string>
+    <string name="action_close">关闭</string>
+    <string name="action_shred_now">立即粉碎</string>
+    <string name="action_export_vault">一键全库加密导出</string>
+    <string name="action_confirm_export">确认导出</string>
+    <string name="action_grant_now">立即授权</string>
+    <string name="action_open_settings">前往系统设置确认权限</string>
+    <string name="action_dismiss">知道了</string>
+    <string name="action_repair_now">立即修复</string>
+    <string name="action_confirm_cleanup">确认清理</string>
+    <string name="action_import_bili_now">立即合并入库</string>
+    <string name="action_import_bili_merged_now">立即入库</string>
+
     <!-- Shortcuts -->
     <string name="shortcut_encrypt">加密</string>
     <string name="shortcut_encrypt_long">立即开始加密文件</string>
@@ -22,50 +37,219 @@
     <string name="status_processing">正在处理文件...</string>
     <string name="status_storing">正在存放...</string>
     <string name="status_encrypting">正在加密...</string>
-    <string name="status_decrypting">正在解密...</string>
+    <string name="status_decrypting">正在解密: %1$s</string>
     <string name="status_storing_with_progress">正在存放 (%1$d%%)</string>
     <string name="status_encrypt_success">加密完成</string>
     <string name="status_cache_cleared">缓存已清空</string>
+    <string name="status_export_success">成功导出资源</string>
+    <string name="status_processing_split_volume">正在处理加密分卷: %1$s</string>
+    <string name="status_ingesting_file">正在入库: %1$s</string>
+    <string name="status_updating_index">正在更新索引...</string>
+    <string name="status_ingestion_complete_with_skips">入库完成 (跳过 %1$d 个重复文件)</string>
+    <string name="status_all_tasks_complete">任务全部完成</string>
+    <string name="status_extracting">正在解压: %1$s</string>
+    <string name="status_extract_complete">提取完成：%1$d 个文件已入库</string>
+    <string name="error_extract_failed">提取失败：%1$s</string>
+    <string name="status_recovering_files">正在自动找回以前的文件...</string>
+    <string name="status_recovering_assets">正在自动找回资源...</string>
+    <string name="status_recovery_complete">找回完成</string>
+    <string name="status_exporting_vault">正在打包导出...</string>
+    <string name="status_analyzing_duplicates">正在分析重复内容...</string>
+    <string name="status_calculating_fingerprints">正在计算内容指纹...</string>
+    <string name="status_calculating_image_fingerprints">正在计算图片感知指纹...</string>
+    <string name="status_comparing_images">正在比对图片内容...</string>
+    <string name="status_syncing_fast">正在快速同步...</string>
+    <string name="status_indexing_files">正在索引文件...</string>
+    <string name="status_sync_complete">同步完成</string>
+    <string name="status_cleaning_duplicates">正在清理副本...</string>
+    <string name="status_clearing_cache">正在清理缓存...</string>
+    <string name="status_resetting">正在恢复出厂设置...</string>
+    <string name="status_reset_done">已恢复出厂设置</string>
+    <string name="status_clearing_logs">正在清除日志...</string>
+    <string name="status_logs_cleared">日志已清除</string>
+    <string name="settings_title_clear_logs">清除日志</string>
+    <string name="settings_desc_clear_logs">仅删除运行日志，不影响任何缓存与文件</string>
+    <string name="status_shredding">正在安全粉碎...</string>
+    <string name="status_delete_done">已删除</string>
+    <string name="status_searching_bili_cache">正在扫描缓存...</string>
+    <string name="status_searching_bili_merged">正在扫描已合并视频...</string>
+    <string name="status_processing_bili_batch">正在导入 (%1$d/%2$d): %3$s</string>
+    <string name="status_starting_integrity_check">正在校验文件完整性...</string>
+    <string name="status_verifying_fingerprints">正在校验指纹...</string>
 
     <!-- Errors -->
-    <string name="error_password_empty">密码不能为空</string>
-    <string name="error_enter_password">请输入密码</string>
     <string name="error_encrypt_failed">加密失败: %1$s</string>
     <string name="error_decrypt_failed">解密失败: %1$s</string>
     <string name="error_open_file_failed">无法打开文件: %1$s</string>
     <string name="error_delete_failed">删除失败: %1$s</string>
     <string name="error_export_failed">导出失败: %1$s</string>
     <string name="error_read_failed">读取失败</string>
+    <string name="error_unable_to_open_external_tool">无法调起外部工具</string>
+    <string name="error_processing_failed">处理失败: %1$s</string>
+    <string name="error_insufficient_storage_extract">磁盘空间不足以进行解压预处理</string>
+    <string name="error_unsupported_preview">不支持预览此类型文件</string>
+    <string name="error_media_load_failed">无法加载媒体内容</string>
+    <string name="error_export_failed_simple">导出失败</string>
+    <string name="error_password_empty">密码不能为空</string>
 
     <!-- File Explorer & Selection -->
     <string name="empty_folder">文件夹为空或无法访问</string>
     <string name="selected_count">已选择 %1$d 项</string>
+    <string name="share_to_pjm">分享到 PJM</string>
+    <string name="cat_pjm_display">PJM 加密包</string>
+    <string name="cat_images_display">图片库</string>
+    <string name="cat_videos_display">视频库</string>
+    <string name="cat_audios_display">音频库</string>
+    <string name="cat_others_display">其他</string>
+    <string name="empty_vault_msg">暂无加密资源</string>
 
     <!-- Dialogs -->
-    <string name="dialog_password_title">请输入密码</string>
     <string name="dialog_delete_title">确认删除</string>
     <string name="toast_file_deleted">文件已删除</string>
     <string name="toast_batch_processed">已处理 %1$d 个文件</string>
-    
+    <string name="toast_original_files_deleted">原文件已成功清理</string>
+    <string name="dialog_title_encrypted_archive">加密归档</string>
+    <string name="dialog_msg_password_required">文件 %1$s 已加密，请输入密码：</string>
+    <string name="dialog_msg_new_file_found">发现新文件，如何存放？</string>
+    <string name="toast_pjm_archive_detected">识别到 PJM 加密包，自动存放中...</string>
+    <string name="dialog_delete_msg_discovery">确定要永久移除这项资源吗？</string>
+    <string name="dialog_title_details">详情</string>
+    <string name="dialog_title_shred_confirm">安全粉碎确认</string>
+    <string name="dialog_delete_msg_single">确定要永久抹除此项资源吗？</string>
+    <string name="dialog_delete_msg_batch">确定要抹除选中的 %1$d 个文件吗？</string>
+    <string name="dialog_title_export_vault">加密导出</string>
+    <string name="dialog_msg_export_vault">确定要将整个资源柜的所有内容加密导出吗？该操作将生成 PJM 加密分卷文件。</string>
+    <string name="toast_vault_exported">全库已加密导出</string>
+    <string name="toast_ingest_summary">导入完成：成功 %1$d · 跳过 %2$d</string>
+    <string name="toast_ingest_summary_failed">导入完成：成功 %1$d · 跳过 %2$d · 失败 %3$d</string>
+    <string name="toast_encrypt_volumes">加密完成：生成 %1$d 个分卷</string>
+    <string name="dialog_title_integrity_results">自检结果</string>
+    <string name="dialog_title_clean_duplicates_confirm">清理重复内容</string>
+    <string name="action_deselect_all">取消全选</string>
+    <string name="action_delete_selected">删除选中 (%1$d)</string>
+    <string name="label_selected_count_total">已选 %1$d / %2$d</string>
+    <string name="msg_delete_select_hint">请勾选要删除的文件，未勾选的将保留。</string>
+    <string name="dialog_title_bili_detected">识别到 Bili 缓存</string>
+    <string name="dialog_msg_bili_found_count">发现 %1$d 个可合并的项目，请选择：</string>
+    <string name="dialog_title_bili_merged_detected">识别到已合并视频</string>
+    <string name="dialog_msg_bili_merged_found_count">发现 %1$d 个视频文件（含子文件夹），请选择：</string>
+
     <!-- Settings -->
     <string name="setting_category_automation_vault">自动化与存放</string>
     <string name="setting_auto_delete_original">存放后自动清理原图</string>
     <string name="setting_auto_delete_original_desc">进入保险箱，原件即消失（需系统授权）</string>
     <string name="action_store_and_classify">📥 存放并自动分类</string>
+    <string name="settings_title">个性化与资产管理</string>
+    <string name="settings_cat_appearance">个性化外观</string>
+    <string name="settings_label_theme">显示主题</string>
+    <string name="theme_system">系统默认</string>
+    <string name="theme_light">明亮模式</string>
+    <string name="theme_dark">深色模式</string>
+    <string name="settings_title_custom_bg">启用全景背景</string>
+    <string name="settings_title_select_bg">选择背景图</string>
+    <string name="settings_desc_select_bg">建议使用高分辨率图片</string>
+    <string name="toast_bg_set">背景已设置</string>
+    <string name="dialog_title_factory_reset_confirm">恢复出厂设置</string>
+    <string name="dialog_msg_factory_reset_confirm">将重置所有个性化设置（主题、背景、分卷大小、自动删除等），不影响已存文件。确定继续？</string>
+    <string name="action_confirm_reset">确认重置</string>
+    <string name="toast_settings_reset">已恢复出厂设置</string>
+    <string name="settings_title_bg_opacity">背景亮度</string>
+    <string name="settings_title_custom_font">自定义应用字体</string>
+    <string name="settings_desc_font_enabled">当前已启用自定义字体</string>
+    <string name="settings_desc_font_disabled">选择 .ttf 字体文件</string>
+    <string name="settings_title_clear_font">清除自定义字体</string>
+    <string name="settings_title_ui_scale">全局 UI 缩放</string>
+    <string name="settings_cat_assets">资产深度管理</string>
+    <string name="settings_label_grid_columns">文件柜宫格列数</string>
+    <string name="settings_title_auto_extract">压缩包自动提取入库</string>
+    <string name="settings_desc_auto_extract">存入 ZIP/7z/RAR 时自动将其解压并分类存储</string>
+    <string name="settings_title_random_share">随机图片分享</string>
+    <string name="settings_desc_random_share">从 PJM 图片库随机抽取图片，加密打包成 PJM，方便随机分享给好友</string>
+    <string name="dialog_title_random_share">随机图片盲盒</string>
+    <string name="dialog_msg_random_share">从 PJM 图片库（图片分类）随机抽取指定数量的图片，加密打包存入 PJM 库。抽取后即可在 PJM 分类中分享。</string>
+    <string name="label_random_count">抽取数量</string>
+    <string name="action_start_random">开始抽取</string>
+    <string name="status_random_pick">正在从图片库随机抽取图片...</string>
+    <string name="toast_random_pick_empty">图片库中暂无可用图片</string>
+    <string name="toast_random_pick_done">已随机加密 %1$d 张图片到 PJM 库</string>
+    <string name="settings_title_split_size">导出分卷大小 (MB)</string>
+    <string name="settings_desc_split_size">打包导出时每个分卷的最大容量</string>
+    <string name="settings_title_bili_import">Bilibili 视频导入</string>
+    <string name="settings_desc_bili_import">扫描并合并 B站 离线缓存</string>
+    <string name="settings_title_bili_merged_import">导入已合并视频</string>
+    <string name="settings_desc_bili_merged_import">选择目录，将其中（含子文件夹）的已合并视频文件存入 B站视频分类</string>
+    <string name="setting_bili_merged_auto_delete">导入已合并视频后删除源文件</string>
+    <string name="setting_bili_merged_auto_delete_desc">存入保险柜后，物理删除源目录中的视频文件</string>
+    <string name="settings_title_bili_auto_delete">导入后自动删除源文件</string>
+    <string name="settings_desc_bili_auto_delete">B站视频导入成功后，物理删除原始缓存/源文件</string>
+    <string name="toast_operation_in_progress">操作进行中，请稍候</string>
+    <string name="shizuku_title">Shizuku 特权访问</string>
+    <string name="shizuku_desc_not_installed">未安装 Shizuku，点击前往安装（需配合无线调试）</string>
+    <string name="shizuku_desc_not_running">Shizuku 未启动，点击打开 Shizuku 并启动服务</string>
+    <string name="shizuku_desc_no_permission">Shizuku 已运行，点击授予 PJM 访问权限</string>
+    <string name="shizuku_desc_ready">Shizuku 已就绪，B站 缓存可直接访问</string>
+    <string name="settings_title_clean_duplicates">清理重复内容</string>
+    <string name="settings_desc_clean_duplicates">扫描并移除库内完全一致的冗余文件</string>
+    <string name="settings_title_integrity_check">完整性校验</string>
+    <string name="settings_desc_integrity_check">验证库内文件是否损坏或丢失</string>
+    <string name="settings_cat_system">系统与维护</string>
+    <string name="settings_title_clear_cache_all">清理缓存与临时文件</string>
+    <string name="settings_desc_clear_cache_all">仅清理临时缓存，保留缩略图、感知指纹与灰度缓存</string>
+    <string name="toast_system_cleaned">系统清理完成</string>
+    <string name="settings_title_export_logs">导出诊断日志</string>
+    <string name="settings_title_factory_reset">恢复出厂设置</string>
+    <string name="toast_custom_font_applied">自定义字体已应用，建议重启App以获得最佳效果</string>
+    <string name="toast_font_load_failed">字体加载失败</string>
+    <string name="toast_no_duplicates">库内未发现内容重复项</string>
+    <string name="toast_bili_merged_empty">未在选定目录识别到视频文件</string>
 
-    <!-- Password Strength -->
-    <string name="password_hint">输入至少6位字符</string>
-    <string name="password_label">加密口令</string>
-    <string name="strength_label">密码强度</string>
-    <string name="strength_weak">弱</string>
-    <string name="strength_medium">中等</string>
-    <string name="strength_strong">强</string>
-    <string name="strength_very_strong">非常强</string>
-    <string name="password_valid">密码有效</string>
-    <string name="password_too_short">密码至少需要6个字符</string>
-    <string name="password_too_weak">密码太弱，建议使用更复杂的密码</string>
+    <!-- UI Labels -->
+    <string name="main_title">PJM 资源柜</string>
+    <string name="label_vault_usage">保险库占用详情</string>
+    <string name="label_category_count">共 %1$d 个项目</string>
+    <string name="label_file_size">大小: %1$s</string>
+    <string name="label_selected_count">已选中 %1$d 项</string>
+    <string name="label_enter_password">输入解压/访问密码</string>
+    <string name="label_reclaimable_space">可回收空间: %1$s</string>
+    <string name="label_seek_forward">快进 +5%</string>
+    <string name="label_seek_backward">后退 -5%</string>
+
+    <!-- Messages -->
+    <string name="msg_integrity_ok">系统一切正常，所有文件完整。</string>
+    <string name="msg_integrity_missing">丢失文件: %1$d 个</string>
+    <string name="msg_integrity_corrupted">损坏文件: %1$d 个</string>
+    <string name="msg_integrity_advice">建议执行“同步数据库”或尝试重新导入。</string>
+    <string name="msg_duplicates_found">扫描完成，发现 %1$d 个冗余副本（含原图/缩略图感知查重）。</string>
+    <string name="msg_duplicates_cleanup_info">左右对比确认无误后再删除。默认勾选建议删除项，取消勾选可保留。</string>
+    <string name="label_duplicate_group">第 %1$d 组 · %2$d 张</string>
+    <string name="label_recommended_keep">推荐保留：%1$s</string>
+    <string name="label_recommended_keep_short">推荐保留</string>
+    <string name="action_delete_mark">将删除</string>
+    <string name="action_keep">保留</string>
+    <string name="msg_pjm_archive_info">这是加密归档，您可以将其内容提取。</string>
+
+    <!-- Passwords -->
+    <string name="strength_weak_desc">密码太弱 (建议至少6位)</string>
+    <string name="strength_medium_desc">强度中等</string>
+    <string name="strength_strong_desc">密码非常安全</string>
+
+    <!-- Permissions -->
+    <string name="permission_title">权限申请</string>
+    <string name="permission_header">需要文件访问权限</string>
+    <string name="permission_msg_1">为了管理哔哩哔哩缓存并执行深度清理，应用需要获得“允许访问所有文件”权限。</string>
+    <string name="permission_msg_2">请在接下来的设置页面中开启此权限，否则部分核心功能将无法运行。</string>
 
     <!-- Navigation -->
     <string name="nav_home">主页</string>
+    <string name="nav_discovery">发现</string>
     <string name="nav_settings">设置</string>
+    <string name="title_batch_mode">多选操作</string>
+    <string name="mode_bili_videos">B站视频</string>
+    <string name="mode_images">图片</string>
+    <string name="mode_videos">视频</string>
+
+    <!-- Choosers -->
+    <string name="chooser_title_share_content">分享内容</string>
+    <string name="chooser_title_share_files">分享文件</string>
+    <string name="chooser_title_share_logs">分享 PJM 运行日志</string>
 </resources>

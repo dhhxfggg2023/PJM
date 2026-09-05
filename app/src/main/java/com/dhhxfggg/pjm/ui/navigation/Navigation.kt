@@ -1,20 +1,13 @@
 package com.dhhxfggg.pjm.ui.navigation
 
-import androidx.activity.compose.LocalActivity
-import androidx.activity.ComponentActivity
 import androidx.compose.animation.*
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -28,9 +21,8 @@ import com.dhhxfggg.pjm.ui.screen.FileViewerScreen
 import com.dhhxfggg.pjm.ui.screen.DiscoveryScreen
 import com.dhhxfggg.pjm.ui.screen.MediaDetailScreen
 import com.dhhxfggg.pjm.domain.util.VaultManager
-import androidx.hilt.navigation.compose.hiltViewModel
 import com.dhhxfggg.pjm.ui.component.BottomNavBar
-import com.dhhxfggg.pjm.ui.viewmodel.CryptoViewModel
+import com.dhhxfggg.pjm.ui.theme.rememberIconPack
 
 sealed class Screen(val route: String) {
     object Main : Screen("main")
@@ -47,24 +39,24 @@ sealed class Screen(val route: String) {
 @Composable
 fun AppNavHost(
     navController: NavHostController = rememberNavController(),
-    startDestination: String = Screen.Main.route
+    startDestination: String = Screen.Main.route,
 ) {
-    val viewModel: CryptoViewModel = hiltViewModel(LocalActivity.current as ComponentActivity)
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
     
-    // 全屏状态提升到 Navigation 层级
+    val iconPack = rememberIconPack()
+    
     var isDiscoveryFullScreen by remember { mutableStateOf(false) }
     
     val showBottomBar = remember(currentRoute, isDiscoveryFullScreen) {
-        currentRoute in listOf(Screen.Main.route, Screen.Discovery.route, Screen.Settings.route) && 
+        (currentRoute in listOf(Screen.Main.route, Screen.Discovery.route, Screen.Settings.route)) && 
         !(currentRoute == Screen.Discovery.route && isDiscoveryFullScreen)
     }
     
-    val animDuration = 350
+    val animDuration = 250
 
     Scaffold(
-        bottomBar = { if (showBottomBar) BottomNavBar(navController = navController) },
+        bottomBar = { if (showBottomBar) BottomNavBar(navController = navController, iconPack = iconPack) },
         containerColor = Color.Transparent 
     ) { innerPadding ->
         NavHost(
@@ -86,9 +78,10 @@ fun AppNavHost(
         ) {
             composable(Screen.Main.route) {
                 MainScreen(
-                    navController = navController,
                     bottomPadding = innerPadding.calculateBottomPadding(),
-                    onNavigateToCategory = { category -> navController.navigate(Screen.FileViewer.createRoute(category)) }
+                    onNavigateToCategory = { category ->
+                        navController.navigate(Screen.FileViewer.createRoute(category))
+                    }
                 )
             }
             composable(Screen.Discovery.route) {

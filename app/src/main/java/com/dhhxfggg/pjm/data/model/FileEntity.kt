@@ -1,35 +1,32 @@
 package com.dhhxfggg.pjm.data.model
 
+import androidx.compose.runtime.Immutable
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
 
 /**
- * Room 数据库中的文件实体。
- * 
- * @property relativePath 文件的相对路径，作为唯一标识符 (主键)
- * @property name 文件名
- * @property size 文件大小
- * @property category 文件柜分类
- * @property lastModified 最后修改时间戳
- * @property isImage 是否为图像
- * @property extension 扩展名
- * @property contentHash 文件内容摘要 (用于去重)
+ * PJM 核心资产实体。
+ * 增加了复合索引以支撑万级文件的高性能检索。
  */
 @Entity(
     tableName = "files",
     indices = [
+        Index(value = ["relativePath"], unique = true),
         Index(value = ["category"]),
-        Index(value = ["name"])
+        Index(value = ["contentHash"]),
+        Index(value = ["lastModified"])
     ]
 )
+@Immutable
 data class FileEntity(
-    @PrimaryKey val relativePath: String,
-    val name: String,
-    val size: Long,
-    val category: String,
-    val lastModified: Long,
-    val isImage: Boolean,
-    val extension: String,
-    val contentHash: String? = null
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val relativePath: String, // 库内相对路径 (UUID格式)
+    val name: String,         // 原始文件名
+    val size: Long,           // 字节大小
+    val category: String,     // 资产分类 (images, videos, bili_videos etc.)
+    val lastModified: Long,   // 最后修改时间
+    val isImage: Boolean,     // 快捷识别是否为图片
+    val extension: String,    // 后缀名
+    val contentHash: String?  // MD5 指纹 (延迟计算，用于去重)
 )

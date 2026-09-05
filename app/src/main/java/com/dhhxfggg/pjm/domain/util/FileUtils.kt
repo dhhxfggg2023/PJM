@@ -14,6 +14,7 @@ import android.widget.Toast
 import androidx.core.content.FileProvider
 import com.dhhxfggg.pjm.data.model.FileEntity
 import java.io.File
+import java.nio.file.Files
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -40,11 +41,87 @@ object FileUtils {
         override fun initialValue(): SimpleDateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US)
     }
 
+    private val compactTsFormat = object : ThreadLocal<SimpleDateFormat>() {
+        override fun initialValue(): SimpleDateFormat = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
+    }
+
+    /** 规范命名分享目录（缓存目录下，可被系统自动回收；存放与原文件同内容的硬链接/副本） */
+    private const val NAMED_SHARE_DIR = "pjm_named_share"
+    /** 硬链接不可用时，超过该体积的文件不再复制（避免大文件分享卡顿），退回原始命名 */
+    private const val MAX_COPY_FALLBACK_BYTES = 256L * 1024 * 1024
+
     /**
      * Generates a unique fingerprint for a file entity based on its metadata.
      */
     fun getFileFingerprint(entity: FileEntity): String {
         return "${entity.extension}_${entity.size}_${entity.lastModified}"
+    }
+
+    /**
+     * 规范化显示名（用于列表/详情/导出/分享的文件名，磁盘物理文件不变）。
+     * - PJM 加密容器：本身已是规范命名（Export_/Pack_/Random_ + 可读时间），原样返回；
+     * - 其他文件：统一为 `PJM_yyyyMMdd_HHmmss.扩展名`（时间取入库时间 lastModified）。
+     */
+    fun normalizedDisplayName(entity: FileEntity): String {
+        if (entity.extension.equals("pjm", ignoreCase = true)) return entity.name
+        val ts = compactTsFormat.get()?.format(Date(entity.lastModified)) ?: "unknown"
+        val base = "PJM_$ts"
+        val ext = entity.extension.lowercase().trim('.')
+        return if (ext.isEmpty()) base else "$base.$ext"
+    }
+
+    /**
+     * 获得一个“文件名为规范名、且可被 FileProvider 暴露/分享”的副本。
+     * 优先硬链接（同文件系统、零拷贝、瞬间完成），失败则对小文件复制兜底；
+     * 磁盘原文件始终不被改动。大文件复制兜底不可用时退回原文件（原始命名）。
+     */
+    fun obtainNamedShareFile(context: Context, entity: FileEntity): File {
+        val src = VaultManager.getFileFromEntity(context, entity)
+        if (!src.exists()) return src
+        val displayName = normalizedDisplayName(entity)
+        // 磁盘文件已是规范名（如 pjm 容器或已被规范命名的文件）→ 直接用
+        if (src.name == displayName) return src
+
+        val dir = File(context.cacheDir, NAMED_SHARE_DIR)
+        runCatching { dir.mkdirs() }
+        cleanupOldNamedFiles(dir)
+
+        val target = uniqueNamedFile(dir, displayName)
+        // 1) 硬链接：零拷贝，与磁盘原文件同 inode，删除不影响原文件（API 26+ 支持）
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            runCatching {
+                Files.createLink(target.toPath(), src.toPath())
+                return target
+            }
+        }
+        // 2) 复制兜底：仅限体积适中的文件，避免大文件分享明显卡顿
+        if (src.length() <= MAX_COPY_FALLBACK_BYTES) {
+            runCatching {
+                src.copyTo(target)
+                return target
+            }
+        }
+        // 3) 都不行 → 退回原文件（外部看到的仍是磁盘原名）
+        PjmLogger.w(TAG, "无法生成规范名副本，退回原文件: ${src.name}")
+        return src
+    }
+
+    private fun uniqueNamedFile(dir: File, displayName: String): File {
+        val candidate = File(dir, displayName)
+        if (!candidate.exists()) return candidate
+        val dot = displayName.lastIndexOf('.')
+        val base = if (dot > 0) displayName.substring(0, dot) else displayName
+        val ext = if (dot > 0) displayName.substring(dot) else ""
+        var n = 2
+        while (File(dir, "${base}_$n$ext").exists()) n++
+        return File(dir, "${base}_$n$ext")
+    }
+
+    private fun cleanupOldNamedFiles(dir: File) {
+        val now = System.currentTimeMillis()
+        dir.listFiles()?.forEach { f ->
+            if (now - f.lastModified() > 24 * 60 * 60 * 1000L) runCatching { f.delete() }
+        }
     }
 
     /**
@@ -83,7 +160,11 @@ object FileUtils {
             }
         }
         if (result == null) {
-            result = uri.path?.substringAfterLast('/')
+            // 核心修复：同时兼容 '/' 与 Windows '\\' 分隔符。
+            // Android 真机路径均为正斜杠；但在 Windows JVM（如 Robolectric 单测）上
+            // Uri.fromFile 的 path 使用反斜杠，只切 '/' 会返回整条完整路径，
+            // 导致加密包内的条目名变成绝对路径。
+            result = uri.path?.substringAfterLast('/')?.substringAfterLast('\\')
         }
         return result ?: "file_${System.currentTimeMillis()}"
     }
@@ -102,7 +183,7 @@ object FileUtils {
     fun shouldCompress(fileName: String): Boolean = getFileExtension(fileName) !in ALREADY_COMPRESSED
     fun isImageFile(fileName: String): Boolean = getFileExtension(fileName) in IMAGE_EXT
     fun isVideoFile(fileName: String): Boolean = getFileExtension(fileName) in VIDEO_EXT
-    fun isAudioFile(fileName: String): Boolean = getFileExtension(fileName) in AUDIO_EXT
+    fun isAudioFile(fileName: String): Boolean = (getFileExtension(fileName) in AUDIO_EXT)
     fun isArchiveFile(fileName: String): Boolean = getFileExtension(fileName) in setOf("zip", "rar", "7z", "tar", "gz", "bz2", "xz")
 
     /**
@@ -110,11 +191,11 @@ object FileUtils {
      */
     fun getCategory(fileName: String): String {
         val ext = getFileExtension(fileName)
-        return when {
-            ext == "pjm" -> "pjm"
-            ext in IMAGE_EXT -> "images"
-            ext in VIDEO_EXT -> "videos"
-            ext in AUDIO_EXT -> "audios"
+        return when (ext) {
+            "pjm" -> "pjm"
+            in IMAGE_EXT -> "images"
+            in VIDEO_EXT -> "videos"
+            in AUDIO_EXT -> "audios"
             else -> "others"
         }
     }
@@ -166,21 +247,84 @@ object FileUtils {
 
     /**
      * Creates a MediaStore delete request for the given Uris (Android 11+).
+     * Includes intelligent URI conversion for cross-provider compatibility.
      */
     fun createDeleteRequest(context: Context, uris: List<Uri>): IntentSender? {
         if (uris.isEmpty()) return null
-        val mediaStoreUris = uris.filter { uri ->
-            (uri.authority == "media" && uri.pathSegments.isNotEmpty() && uri.lastPathSegment?.toLongOrNull() != null)
+        
+        val mediaStoreUris = mutableListOf<Uri>()
+        uris.forEach { uri ->
+            if (uri.scheme != "content") return@forEach
+            
+            if (uri.authority == MediaStore.AUTHORITY || uri.authority?.contains("media") == true) {
+                mediaStoreUris.add(uri)
+            } else {
+                // 核心修复：尝试从非 MediaStore URI 反查媒体库索引
+                try {
+                    val filePath = getPathFromUri(context, uri)
+                    if (filePath != null) {
+                        val mediaUri = getMediaUriFromPath(context, filePath)
+                        if (mediaUri != null) {
+                            PjmLogger.i(TAG, "Resolved MediaStore URI for non-media provider: $mediaUri")
+                            mediaStoreUris.add(mediaUri)
+                        }
+                    }
+                } catch (e: Exception) {
+                    PjmLogger.w(TAG, "Failed to resolve MediaStore URI for $uri", e)
+                }
+            }
         }
-        if (mediaStoreUris.isEmpty()) return null
+        
+        if (mediaStoreUris.isEmpty()) {
+            PjmLogger.w(TAG, "No compatible MediaStore URIs found for auto-deletion.")
+            return null
+        }
+        
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             try {
-                MediaStore.createDeleteRequest(context.contentResolver, mediaStoreUris).intentSender
+                // 使用去重后的 URI 列表
+                MediaStore.createDeleteRequest(context.contentResolver, mediaStoreUris.distinct()).intentSender
             } catch (e: Exception) { 
-                PjmLogger.e(TAG, "Failed to create delete request", e)
+                PjmLogger.e(TAG, "System MediaStore delete request failed", e)
                 null 
             }
         } else null
+    }
+
+    private fun getPathFromUri(context: Context, uri: Uri): String? {
+        if (uri.scheme == "file") return uri.path
+        return try {
+            context.contentResolver.query(uri, arrayOf("_data"), null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) cursor.getString(0) else null
+            }
+        } catch (_: Exception) { null }
+    }
+
+    private fun getMediaUriFromPath(context: Context, path: String): Uri? {
+        val file = File(path)
+        val projection = arrayOf(MediaStore.MediaColumns._ID)
+        val selection = "${MediaStore.MediaColumns.DATA} = ?"
+        val args = arrayOf(file.absolutePath)
+        
+        // 分别尝试图片、视频和音频集合，因为 "external" 集合在某些版本上查询 _data 受限
+        val collections = listOf(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+            MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+            MediaStore.Files.getContentUri("external")
+        )
+        
+        for (collection in collections) {
+            try {
+                context.contentResolver.query(collection, projection, selection, args, null)?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        val id = cursor.getLong(0)
+                        return Uri.withAppendedPath(collection, id.toString())
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+        return null
     }
 
     /**

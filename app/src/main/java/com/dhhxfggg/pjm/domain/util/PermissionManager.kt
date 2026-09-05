@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
 import android.provider.Settings
 import androidx.core.content.ContextCompat
 
@@ -41,20 +42,39 @@ object PermissionManager {
      * 检查核心权限是否已授予
      */
     fun checkPermissions(context: Context): Boolean {
-        // 如果是 Android 13+ 且只打算用系统 Picker 处理文件，这里甚至可以返回 true
-        return REQUIRED_PERMISSIONS.all { permission ->
+        // 1. 基础权限检查
+        val basicGranted = REQUIRED_PERMISSIONS.all { permission ->
             ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
         }
+        
+        // 2. 高级权限检查 (Android 11+ 的所有文件访问)
+        val manageGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            Environment.isExternalStorageManager()
+        } else true
+        
+        return basicGranted && manageGranted
     }
 
     fun openPermissionSettings(activity: Activity) {
-        try {
-            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                data = Uri.fromParts("package", activity.packageName, null)
+        // 如果是 Android 11+ 且未授予全盘访问权限，优先引导至对应的设置页
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
+            try {
+                val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                    data = Uri.parse("package:${activity.packageName}")
+                }
+                activity.startActivity(intent)
+            } catch (e: Exception) {
+                activity.startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
             }
-            activity.startActivity(intent)
-        } catch (e: Exception) {
-            activity.startActivity(Intent(Settings.ACTION_SETTINGS))
+        } else {
+            try {
+                val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                    data = Uri.fromParts("package", activity.packageName, null)
+                }
+                activity.startActivity(intent)
+            } catch (e: Exception) {
+                activity.startActivity(Intent(Settings.ACTION_SETTINGS))
+            }
         }
     }
 }

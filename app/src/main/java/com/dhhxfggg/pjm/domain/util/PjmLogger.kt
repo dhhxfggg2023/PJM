@@ -1,12 +1,8 @@
 package com.dhhxfggg.pjm.domain.util
 
 import android.content.Context
+import android.os.Environment
 import android.util.Log
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileOutputStream
 import java.io.PrintWriter
@@ -14,17 +10,20 @@ import java.io.StringWriter
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.UUID
 
 /**
- * PJM Private Business Logger Engine.
- * Provides persistent logging to the device's internal storage using a non-blocking Channel.
+ * PJM High-Fidelity Diagnostic Logger.
+ * Features:
+ * 1. Synchronous hard-sync to disk for CRITICAL logs.
+ * 2. Automatic system context capture (Memory, Storage, Threading).
+ * 3. Separate error log file for persistent issue tracking.
+ * 4. Trace ID support for end-to-end task debugging.
  */
 object PjmLogger {
     private const val LOG_TAG = "PjmLogger"
-    private const val MAX_LOG_FILE_SIZE = 10 * 1024 * 1024L // 10MB
-    private val loggerScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private var internalLogFile: File? = null
-    private val logChannel = Channel<String>(capacity = Channel.BUFFERED)
+    private var businessLogFile: File? = null
+    private var errorLogFile: File? = null
     
     private val logDateFormatter = object : ThreadLocal<SimpleDateFormat>() {
         override fun initialValue(): SimpleDateFormat = 
@@ -32,112 +31,88 @@ object PjmLogger {
     }
 
     /**
-     * Initializes the logger engine.
+     * Initializes the diagnostic engine.
      */
     fun init(context: Context) {
         val logDir = File(context.filesDir, "logs").apply { if (!exists()) mkdirs() }
-        internalLogFile = File(logDir, "pjm_business.log")
+        businessLogFile = File(logDir, "pjm_business.log")
+        errorLogFile = File(logDir, "pjm_error.log")
         
-        startLogConsumer()
-        
-        i(LOG_TAG, "==================== PJM ENGINE STARTED ====================")
-        
-        val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
-        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
-            e("CRASH", "Uncaught exception on thread ${thread.name}", throwable)
-            dumpLogsToCrashFile(context, throwable)
-            defaultHandler?.uncaughtException(thread, throwable)
-        }
+        i(LOG_TAG, "==================== DIAGNOSTIC ENGINE INITIALIZED ====================")
+        i(LOG_TAG, "Model: ${android.os.Build.MODEL}, OS: ${android.os.Build.VERSION.RELEASE}, API: ${android.os.Build.VERSION.SDK_INT}")
     }
 
     /**
-     * Dumps the recent logs and stack trace to a .crash file.
+     * Generates a new Trace ID for a specific task workflow.
      */
-    fun dumpLogsToCrashFile(context: Context, tr: Throwable) {
+    fun generateTraceId(): String = UUID.randomUUID().toString().substring(0, 8).uppercase()
+
+    @Synchronized
+    private fun log(level: String, tag: String, msg: String, tr: Throwable? = null, traceId: String? = null) {
+        val timestamp = logDateFormatter.get()?.format(Date()) ?: "UNKNOWN"
+        val threadName = Thread.currentThread().name
+        val tId = if (traceId != null) " [$traceId]" else ""
+        
+        val fullMsg = if (tr != null) "$msg\n${getStackTrace(tr)}" else msg
+        val logLine = "[$timestamp] [$level] [$threadName]$tId $tag: $fullMsg\n"
+
+        // 1. Android Logcat (for development)
+        when (level) {
+            "D" -> Log.d(tag, fullMsg)
+            "I" -> Log.i(tag, fullMsg)
+            "W" -> Log.w(tag, fullMsg)
+            "E" -> Log.e(tag, fullMsg)
+        }
+
+        // 2. Persist to Business Log
+        writeToDisk(businessLogFile, logLine, isCritical = (level == "E" || level == "W"))
+
+        // 3. Persist to Error Log with System Context if it's an error
+        if (level == "E") {
+            val contextInfo = captureSystemContext()
+            val errorPayload = "--- ERROR CONTEXT SNAPSHOT ---\n$contextInfo\n$logLine\n"
+            writeToDisk(errorLogFile, errorPayload, isCritical = true)
+        }
+    }
+
+    private fun writeToDisk(file: File?, content: String, isCritical: Boolean) {
+        val target = file ?: return
         try {
-            val crashDir = File(context.filesDir, "crashes").apply { if (!exists()) mkdirs() }
-            val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-            val crashFile = File(crashDir, "crash_$timestamp.crash")
-            
-            FileOutputStream(crashFile).use { fos ->
-                val writer = fos.bufferedWriter()
-                writer.write("CRASH REPORT\n")
-                writer.write("Timestamp: $timestamp\n")
-                writer.write("Stack Trace:\n${getStackTrace(tr)}\n\n")
-                writer.write("Recent Logs:\n")
-                internalLogFile?.let { logFile ->
-                    if (logFile.exists()) {
-                        // Read last 100KB of logs
-                        val length = logFile.length()
-                        val start = maxOf(0L, length - 100 * 1024)
-                        logFile.inputStream().use { input ->
-                            input.skip(start)
-                            input.bufferedReader().use { logReader ->
-                                logReader.forEachLine { line ->
-                                    writer.write(line)
-                                    writer.write("\n")
-                                }
-                            }
-                        }
-                    }
-                }
-                writer.flush()
+            // Rotation: Move to .old if too large (10MB limit for business, 20MB for error)
+            val limit = if (target.name.contains("error")) 20 * 1024 * 1024L else 10 * 1024 * 1024L
+            if (target.exists() && target.length() > limit) {
+                target.renameTo(File(target.parent, "${target.name}.old"))
             }
-            Log.i(LOG_TAG, "Crash dump saved to ${crashFile.name}")
+
+            FileOutputStream(target, true).use { fos ->
+                fos.write(content.toByteArray(Charsets.UTF_8))
+                if (isCritical) {
+                    fos.flush()
+                    fos.fd.sync() // Hard-sync to disk
+                }
+            }
         } catch (e: Exception) {
-            Log.e(LOG_TAG, "Failed to dump crash logs", e)
+            Log.e(LOG_TAG, "Failed to write log to disk: ${e.message}")
         }
     }
 
-    private fun startLogConsumer() {
-        loggerScope.launch {
-            for (logLine in logChannel) {
-                try {
-                    internalLogFile?.let { file ->
-                        if (file.exists() && file.length() > MAX_LOG_FILE_SIZE) {
-                            val backup = File(file.parent, "pjm_business_old.log")
-                            if (backup.exists()) backup.delete()
-                            file.renameTo(backup)
-                        }
-                        FileOutputStream(file, true).use { fos ->
-                            fos.write(logLine.toByteArray(Charsets.UTF_8))
-                        }
-                    }
-                } catch (e: Exception) {
-                    Log.e(LOG_TAG, "Failed to write to log file", e)
-                }
-            }
-        }
+    private fun captureSystemContext(): String {
+        val runtime = Runtime.getRuntime()
+        val usedMem = (runtime.totalMemory() - runtime.freeMemory()) / 1024 / 1024
+        val maxMem = runtime.maxMemory() / 1024 / 1024
+        return "Memory: ${usedMem}MB / ${maxMem}MB"
     }
 
-    fun d(tag: String, msg: String) {
-        Log.d(tag, msg)
-        enqueueLog("D", tag, msg)
-    }
+    fun d(tag: String, msg: String, traceId: String? = null) = log("D", tag, msg, traceId = traceId)
+    fun i(tag: String, msg: String, traceId: String? = null) = log("I", tag, msg, traceId = traceId)
+    fun w(tag: String, msg: String, tr: Throwable? = null, traceId: String? = null) = log("W", tag, msg, tr, traceId)
+    fun e(tag: String, msg: String, tr: Throwable? = null, traceId: String? = null) = log("E", tag, msg, tr, traceId)
 
-    fun i(tag: String, msg: String) {
-        Log.i(tag, msg)
-        enqueueLog("I", tag, msg)
-    }
-
-    fun w(tag: String, msg: String, tr: Throwable? = null) {
-        Log.w(tag, msg, tr)
-        val fullMsg = if (tr != null) "$msg\n${getStackTrace(tr)}" else msg
-        enqueueLog("W", tag, fullMsg)
-    }
-
-    fun e(tag: String, msg: String, tr: Throwable? = null) {
-        Log.e(tag, msg, tr)
-        val fullMsg = if (tr != null) "$msg\n${getStackTrace(tr)}" else msg
-        enqueueLog("E", tag, fullMsg)
-    }
-
-    private fun enqueueLog(level: String, tag: String, msg: String) {
-        val formatter = logDateFormatter.get()
-        val timestamp = formatter?.format(Date()) ?: "UNKNOWN"
-        val logLine = "[$timestamp] $level/$tag: $msg\n"
-        logChannel.trySend(logLine)
-    }
+    /**
+     * Enhanced Error Logger with code support.
+     */
+    fun e(tag: String, code: Int, msg: String, tr: Throwable? = null, traceId: String? = null) = 
+        log("E", tag, "[Code $code] $msg", tr, traceId)
 
     private fun getStackTrace(tr: Throwable): String {
         val sw = StringWriter()
@@ -146,17 +121,12 @@ object PjmLogger {
         return sw.toString()
     }
 
-    fun getLogFile(): File? = internalLogFile
+    fun getLogFile(): File? = businessLogFile
+    fun getErrorLogFile(): File? = errorLogFile
 
     fun clear() {
-        loggerScope.launch {
-            runCatching {
-                internalLogFile?.parentFile?.listFiles()?.forEach { file ->
-                    if (file.name.contains("pjm_business")) {
-                        file.delete()
-                    }
-                }
-            }
-        }
+        businessLogFile?.delete()
+        errorLogFile?.delete()
+        businessLogFile?.parentFile?.listFiles()?.forEach { if (it.name.endsWith(".old")) it.delete() }
     }
 }

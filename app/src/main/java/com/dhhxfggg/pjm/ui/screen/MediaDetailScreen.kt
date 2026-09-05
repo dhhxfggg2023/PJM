@@ -16,6 +16,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.media3.common.MediaItem
@@ -25,6 +26,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
+import com.dhhxfggg.pjm.R
 import com.dhhxfggg.pjm.domain.util.FileUtils
 import com.dhhxfggg.pjm.domain.util.VaultManager
 import com.dhhxfggg.pjm.ui.viewmodel.MediaDetailViewModel
@@ -64,7 +66,8 @@ fun MediaDetailScreen(
             TopAppBar(
                 title = { 
                     fileEntity?.let { 
-                        Text(it.name, color = Color.White, style = MaterialTheme.typography.titleMedium) 
+                        // 显示规范化名称（PJM_入库时间.ext）；pjm 容器显示其规范原名
+                        Text(FileUtils.normalizedDisplayName(it), color = Color.White, style = MaterialTheme.typography.titleMedium) 
                     } 
                 },
                 navigationIcon = {
@@ -94,7 +97,7 @@ fun MediaDetailScreen(
                         filePath = file.absolutePath
                     )
                 } else {
-                    Text("不支持预览此类型文件", color = Color.White)
+                    Text(stringResource(R.string.error_unsupported_preview), color = Color.White)
                 }
             } else if (fileEntity == null) {
                 // Check if we are still loading or if it failed
@@ -104,7 +107,7 @@ fun MediaDetailScreen(
                     showEmptyState = true
                 }
                 if (showEmptyState) {
-                    Text("无法加载媒体内容", color = Color.White)
+                    Text(stringResource(R.string.error_media_load_failed), color = Color.White)
                 } else {
                     CircularProgressIndicator(color = Color.White)
                 }

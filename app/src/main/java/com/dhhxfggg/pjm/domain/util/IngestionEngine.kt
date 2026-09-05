@@ -2,6 +2,7 @@ package com.dhhxfggg.pjm.domain.util
 
 import android.content.Context
 import android.net.Uri
+import com.dhhxfggg.pjm.R
 import com.dhhxfggg.pjm.data.db.FileDao
 import com.dhhxfggg.pjm.data.model.FileEntity
 import kotlinx.coroutines.*
@@ -10,15 +11,19 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.flow.first
 import org.apache.commons.compress.archivers.zip.ZipArchiveInputStream
 import java.io.*
+import java.util.Collections
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.coroutineContext
 
 object IngestionEngine {
     private const val TAG = "IngestionEngine"
+    /** 入库任务进度 id */
+    private const val TASK_STORE = "store"
     private val XOR_KEY = CryptoUtils.getXorKey()
-    private val IO_BUFFER_SIZE get() = VaultManager.ADAPTIVE_BUFFER_SIZE
-    private const val KEY_SIZE_MASK = 31L
+    private val IO_BUFFER_SIZE = VaultManager.ADAPTIVE_BUFFER_SIZE
+    // 动态 mask，与 CryptoUtils/native 的 keyLen-1 保持一致，避免魔数检测错位
+    private val KEY_SIZE_MASK: Long get() = (XOR_KEY.size - 1).toLong()
     private const val MAX_RECURSION_DEPTH = 10 
 
     private val jobSemaphore = Semaphore(VaultManager.MAX_PARALLEL_TASKS)
@@ -30,15 +35,17 @@ object IngestionEngine {
         fileDao: FileDao, 
         onStatus: (String) -> Unit = {},
         onProgress: (Float) -> Unit = {},
-        onUnsupported: (Uri, String) -> Unit = { _, _ -> }
-    ) = withContext(VaultManager.PjmDispatchers.IO) {
+        onUnsupported: (Uri, String) -> Unit = { _, _ -> },
+    ): IngestionSummary = withContext(VaultManager.PjmDispatchers.IO) {
         val totalBytes = uris.sumOf { FileUtils.getFileSize(context, it) }.coerceAtLeast(1L)
         val globalProcessedBytes = AtomicLong(0L)
-        val duplicateCount = AtomicInteger(0)
+        val failedCount = AtomicInteger(0)
         
-        // 动态获取解压设置
         val settings = SettingsManager.getSettingsFlow(context).first()
         val isAutoExtractEnabled = settings.isArchiveAutoExtractionEnabled
+
+        // 顶部横幅进度（独立任务 id，可与其他任务并行）
+        VaultManager.updateProgress(0.02f, context.getString(R.string.status_storing), taskId = TASK_STORE)
 
         var lastReportedProgress = -1f
         var lastReportTime = 0L
@@ -48,162 +55,145 @@ object IngestionEngine {
             val totalProcessed = globalProcessedBytes.addAndGet(processedInThisStep)
             val currentProgress = (totalProcessed.toFloat() / totalBytes).coerceIn(0f, 1f)
             val currentTime = System.currentTimeMillis()
-            
-            if (currentProgress - lastReportedProgress >= 0.01f || currentTime - lastReportTime > 500) {
+            if ((currentProgress - lastReportedProgress >= 0.01f) || (currentTime - lastReportTime > 500)) {
                 onProgress(currentProgress)
+                // 同步到顶部横幅
+                VaultManager.updateProgress(currentProgress, context.getString(R.string.status_storing), taskId = TASK_STORE)
                 lastReportedProgress = currentProgress
                 lastReportTime = currentTime
             }
         }
 
         val collectedEntities = java.util.Collections.synchronizedList(mutableListOf<FileEntity>())
+        // 只记录“以普通文件入库成功”的源 uri（pjm 容器解密入库不记录，避免其进入“删除原件”询问）
+        val deletableOriginals = Collections.synchronizedList(mutableListOf<Uri>())
         val passwordChars = password?.toCharArray()
 
         try {
             coroutineScope {
                 val processedUris = java.util.Collections.synchronizedSet(mutableSetOf<Uri>())
-                val splitGroups = uris.filter { FileUtils.getFileName(context, it).contains(".pjm.") }
-                    .groupBy { it.toString().substringBeforeLast('.') }
 
                 uris.forEach { uri ->
                     launch {
                         jobSemaphore.withPermit {
                             if (processedUris.contains(uri)) return@withPermit
-                            
                             val name = FileUtils.getFileName(context, uri)
-                            val size = FileUtils.getFileSize(context, uri)
-
-                            // 智能查重：如果是顶层文件且已存在，则直接跳过
-                            if (fileDao.isDuplicate(name, size)) {
-                                duplicateCount.incrementAndGet()
-                                reportProgress(size)
-                                processedUris.add(uri)
-                                return@withPermit
-                            }
-                            
+                            val nameIsPjm = (name.contains(".pjm.") || name.endsWith(".pjm"))
+                            // 核心修复：分享器（微信/QQ 等）可能改名/丢失后缀，仅靠文件名判断会漏判，
+                            // 导致加密容器被当成普通文件入库（无扩展名 → 存进 other/others 分类）。
+                            // 对名字不像 pjm 的 URI 再做内容级魔数检测兜底，命中即按 pjm 解密。
+                            val isPjm = nameIsPjm || CryptoUtils.isPjmUri(context, uri)
+                            // 需求变更：导入时【不再自动过滤】库中已存在的重复文件，
+                            // 所有文件一律正常入库（UUID 文件名，互不冲突）。
+                            // 去重仅由用户点击"清除重复内容"按钮时手动触发。
                             try {
-                                // 1. 处理分卷
-                                if (name.contains(".pjm.1")) {
-                                    val groupBase = uri.toString().substringBeforeLast('.')
-                                    val groupUris = splitGroups[groupBase]?.sortedBy { 
-                                        it.toString().substringAfterLast('.').toIntOrNull() ?: 0 
-                                    } ?: listOf(uri)
-                                    
-                                    onStatus("正在处理加密分卷: ${name.substringBefore(".pjm.")}")
-                                    SequentialUriInputStream(context, groupUris).use { input ->
-                                        val progressInput = ProgressInputStream(input) { reportProgress(it) }
-                                        val xorInput = CryptoUtils.createXorStream(progressInput, 0)
-                                        processRecursiveStream(context, name.substringBefore(".pjm."), xorInput, collectedEntities, fileDao, onStatus, 0)
-                                    }
-                                    groupUris.forEach { processedUris.add(it) }
-                                    return@withPermit
-                                } else if (name.contains(".pjm.") && !name.contains(".pjm.1")) {
-                                    return@withPermit
-                                }
-
-                                // 2. 处理压缩包或普通文件
-                                onStatus("正在入库: $name")
-                                var handled = false
-                                
-                                if (FileUtils.isArchiveFile(name) && isAutoExtractEnabled) {
-                                    try {
-                                        handled = SevenZipUtils.extractArchive(
-                                            context, uri, passwordChars, onStatus, 
-                                            onProgress = { reportProgress(it) }
-                                        ) { entryName, inputStream ->
-                                            // 压缩包内部文件也进行查重（如果能获取到大小）
-                                            // 注意：有些压缩流无法直接获取 entry 大小，此处保守处理
-                                            processRecursiveStream(context, entryName.substringAfterLast('/'), inputStream, collectedEntities, fileDao, onStatus, 1)
-                                        }
-                                    } catch (e: SevenZipUtils.EncryptedArchiveException) {
-                                        VaultManager.notifyResult(OperationResult.PasswordRequired(e.fileName, listOf(uri)))
-                                        return@withPermit 
-                                    }
-                                }
-
-                                if (!handled) {
+                                if (isPjm) {
+                                    // 新版格式：每个 .pjm.N 分卷都是独立完整的 PJM 容器（magic + 完整 ZIP，XOR 从 0 开始），
+                                    // 单独解密入库即可，无需拼接；丢失其他分卷不影响本卷解密。
+                                    // 核心修复：strictPjm=true —— 魔数命中但解压失败时直接报错，
+                                    // 不再降级把加密原始数据当普通文件入库（否则会污染 other/others 分类）。
+                                    onStatus(context.getString(R.string.status_decrypting, name))
                                     context.contentResolver.openInputStream(uri)?.use { input ->
                                         val progressInput = ProgressInputStream(input) { reportProgress(it) }
-                                        processRecursiveStream(context, name, progressInput, collectedEntities, fileDao, onStatus, 0)
+                                        processRecursiveStream(context, name, progressInput, collectedEntities, fileDao, onStatus, 0, strictPjm = true)
                                     }
+                                    processedUris.add(uri)
+                                } else {
+                                    onStatus(context.getString(R.string.status_ingesting_file, name))
+                                    var handled = false
+                                    if (FileUtils.isArchiveFile(name) && isAutoExtractEnabled) {
+                                        try {
+                                            handled = SevenZipUtils.extractArchive(context, uri, passwordChars, onStatus, { reportProgress(it) }) { entryName, inputStream ->
+                                                processRecursiveStream(context, entryName.substringAfterLast('/'), inputStream, collectedEntities, fileDao, onStatus, 1)
+                                            }
+                                        } catch (e: SevenZipUtils.EncryptedArchiveException) {
+                                            VaultManager.notifyResult(OperationResult.PasswordRequired(e.fileName, listOf(uri)))
+                                            return@withPermit 
+                                        }
+                                    }
+                                    if (!handled) {
+                                        context.contentResolver.openInputStream(uri)?.use { input ->
+                                            val progressInput = ProgressInputStream(input) { reportProgress(it) }
+                                            processRecursiveStream(context, name, progressInput, collectedEntities, fileDao, onStatus, 0)
+                                        }
+                                    }
+                                    processedUris.add(uri)
+                                    deletableOriginals.add(uri)
                                 }
-                                processedUris.add(uri)
                             } catch (e: Exception) {
                                 if (e !is CancellationException) {
-                                    PjmLogger.e(TAG, "处理失败: $name", e)
+                                    PjmLogger.e(TAG, "Processing fail: $name", e)
+                                    failedCount.incrementAndGet()
                                     processedUris.add(uri)
-                                    throw e // Re-throw to trigger cleanup
                                 }
                             }
                         }
                     }
                 }
             }
-            
             if (collectedEntities.isNotEmpty()) {
-                onStatus("正在更新索引...")
+                onStatus(context.getString(R.string.status_updating_index))
                 fileDao.upsertAll(collectedEntities)
             }
         } catch (e: Exception) {
             if (e !is CancellationException) {
-                PjmLogger.e(TAG, "Ingestion failed, cleaning up partial files...", e)
-                collectedEntities.forEach { entity ->
-                    VaultManager.shredFile(VaultManager.getFileFromEntity(context, entity))
-                }
+                PjmLogger.e(TAG, "Storage fail, cleaning up...", e)
+                collectedEntities.forEach { VaultManager.shredFile(VaultManager.getFileFromEntity(context, it)) }
             }
-            throw e
         } finally {
             passwordChars?.let { java.util.Arrays.fill(it, '0') }
+            onStatus(context.getString(R.string.status_all_tasks_complete))
+            onProgress(1f)
+            // 顶部横幅完成提示
+            VaultManager.updateProgress(1f, context.getString(R.string.status_all_tasks_complete), taskId = TASK_STORE)
+            VaultManager.triggerRefresh()
         }
-        
-        val finalMsg = if (duplicateCount.get() > 0) "入库完成 (跳过 ${duplicateCount.get()} 个重复文件)" else "任务全部完成"
-        onStatus(finalMsg)
-        onProgress(1f)
-        VaultManager.triggerRefresh()
+        IngestionSummary(
+            imported = collectedEntities.size,
+            skipped = 0,
+            failed = failedCount.get(),
+            deletableUris = deletableOriginals.toList()
+        )
     }
 
-    private suspend fun processRecursiveStream(context: Context, name: String, inputStream: InputStream, collectedEntities: MutableList<FileEntity>, fileDao: FileDao, onStatus: (String) -> Unit, depth: Int) {
+    private suspend fun processRecursiveStream(
+        context: Context, name: String, inputStream: InputStream, collectedEntities: MutableList<FileEntity>,
+        fileDao: FileDao, onStatus: (String) -> Unit, depth: Int, strictPjm: Boolean = false
+    ) {
         if (depth > MAX_RECURSION_DEPTH) return
         coroutineContext.ensureActive()
-
-        val bis = if (inputStream is BufferedInputStream && inputStream.markSupported()) inputStream 
-                  else BufferedInputStream(inputStream, IO_BUFFER_SIZE)
-        
+        val bis = if (inputStream is BufferedInputStream && inputStream.markSupported()) inputStream else BufferedInputStream(inputStream, IO_BUFFER_SIZE)
         var handled = false
         if (bis.markSupported()) {
             bis.mark(2048)
             val header = ByteArray(4)
-            val read = try { bis.read(header) } catch (e: Exception) { 0 }
-            
+            val read = try { bis.read(header) } catch (_: Exception) { 0 }
             if (read >= 4) {
                 val dec = ByteArray(4) { i -> (header[i].toInt() xor XOR_KEY[(i.toLong() and KEY_SIZE_MASK).toInt()].toInt()).toByte() }
                 if (java.nio.ByteBuffer.wrap(dec).int == CryptoUtils.FILE_MAGIC) {
                     try {
                         extractPjmStream(context, CryptoUtils.createXorStream(bis, 4), collectedEntities, fileDao, onStatus, depth + 1)
                         handled = true
-                    } catch (e: Exception) { 
-                        try { bis.reset() } catch (re: Exception) {}
+                    } catch (e: Exception) {
+                        if (strictPjm) throw IOException("PJM container corrupted: $name", e)
+                        try { bis.reset() } catch (_: Exception) {}
                     }
-                } else { try { bis.reset() } catch (re: Exception) {} }
-            } else if (read > 0) { try { bis.reset() } catch (re: Exception) {} }
+                } else { try { bis.reset() } catch (_: Exception) {} }
+            } else if (read > 0) { try { bis.reset() } catch (_: Exception) {} }
         }
-        
         if (!handled) {
-            // 注意：对于从 InputStream 进来的流，如果不知道确切大小，查重可能不准确
-            // 目前主要针对顶层导入的文件进行“同名同大小”查重
-            val entity = VaultManager.digestFileToEntity(context, name, bis)
-            collectedEntities.add(entity)
+            if (strictPjm) throw IOException("Not a valid PJM container: $name")
+            VaultManager.digestFileToEntity(context, name, bis).onSuccess { collectedEntities.add(it) }
         }
     }
 
     private suspend fun extractPjmStream(context: Context, inputStream: InputStream, collectedEntities: MutableList<FileEntity>, fileDao: FileDao, onStatus: (String) -> Unit, depth: Int) {
         ZipArchiveInputStream(inputStream, "UTF-8", true, true).use { zais ->
-            var ze = zais.nextZipEntry
+            var ze = zais.nextEntry
             while (ze != null) {
                 coroutineContext.ensureActive()
                 if (!ze.isDirectory) {
                     val wrapper = object : FilterInputStream(zais) { override fun close() {} }
-                    // 内部 PJM 流解压查重逻辑（可选）
                     processRecursiveStream(context, ze.name.substringAfterLast('/'), wrapper, collectedEntities, fileDao, onStatus, depth)
                 }
                 ze = zais.nextZipEntry
@@ -213,54 +203,10 @@ object IngestionEngine {
 
     private class ProgressInputStream(val input: InputStream, val onBytesRead: (Long) -> Unit) : InputStream() {
         override fun read(): Int = input.read().also { if (it != -1) onBytesRead(1) }
-        override fun read(b: ByteArray, off: Int, len: Int): Int {
-            return input.read(b, off, len).also { if (it > 0) onBytesRead(it.toLong()) }
-        }
+        override fun read(b: ByteArray, off: Int, len: Int): Int = input.read(b, off, len).also { if (it > 0) onBytesRead(it.toLong()) }
         override fun close() = input.close()
         override fun available(): Int = input.available()
     }
 
-    private class SequentialUriInputStream(val context: Context, val uris: List<Uri>) : InputStream() {
-        private var currentIdx = 0
-        private var currentStream: InputStream? = null
 
-        private fun ensureStream(): InputStream? {
-            if (currentStream != null) return currentStream
-            if (currentIdx >= uris.size) return null
-            currentStream = try {
-                context.contentResolver.openInputStream(uris[currentIdx++])?.let {
-                    BufferedInputStream(it, 1024 * 512)
-                }
-            } catch (e: Exception) { null }
-            return currentStream
-        }
-
-        override fun read(): Int {
-            while (true) {
-                val stream = ensureStream() ?: return -1
-                val b = try { stream.read() } catch (e: Exception) { -1 }
-                if (b != -1) return b
-                closeCurrent()
-            }
-        }
-
-        override fun read(b: ByteArray, off: Int, len: Int): Int {
-            while (true) {
-                val stream = ensureStream() ?: return -1
-                val n = try { stream.read(b, off, len) } catch (e: Exception) { -1 }
-                if (n != -1) return n
-                closeCurrent()
-            }
-        }
-
-        private fun closeCurrent() {
-            try { currentStream?.close() } catch (e: Exception) {}
-            currentStream = null
-        }
-
-        override fun close() {
-            closeCurrent()
-            super.close()
-        }
-    }
 }

@@ -39,16 +39,22 @@ class VaultService : Service() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var currentJob: Job? = null
-    
+    /** 当前任务 id（store/encrypt），进度条独立显示 */
+    private var currentTaskId: String = TASK_STORE
+
     // Throttling for system notification updates
     private var lastNotificationTime = 0L
 
     companion object {
         private const val CHANNEL_ID = "vault_operation_channel"
         private const val NOTIFICATION_ID = 1001
+        /** 加密/入库任务进度 id（独立进度条，可与其他任务并行） */
+        private const val TASK_ENCRYPT = "encrypt"
 
         const val ACTION_STORE = "com.dhhxfggg.pjm.ACTION_STORE"
         const val ACTION_ENCRYPT = "com.dhhxfggg.pjm.ACTION_ENCRYPT"
+        /** 入库任务进度 id */
+        private const val TASK_STORE = "store"
 
         const val EXTRA_URIS = "extra_uris"
         const val EXTRA_PASSWORD = "extra_password"
@@ -95,6 +101,15 @@ class VaultService : Service() {
         val uris = IntentCompat.getParcelableArrayListExtra(intent, EXTRA_URIS, Uri::class.java) ?: emptyList()
         val password = intent.getStringExtra(EXTRA_PASSWORD)
 
+        // 核心修复：防重复触发 —— 同任务 id 已有进行中任务时忽略本次启动（连点不叠加）；
+        // 不同任务（如查重/删除）允许并行，互不阻塞。
+        val taskId = if (action == ACTION_ENCRYPT) TASK_ENCRYPT else TASK_STORE
+        currentTaskId = taskId
+        if (!VaultManager.tryBeginOperation(taskId)) {
+            PjmLogger.w("VaultService", "Operation already in progress, ignoring duplicate trigger")
+            return START_NOT_STICKY
+        }
+
         // Android 14+ requirement: Specify foreground service type
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(
@@ -111,30 +126,48 @@ class VaultService : Service() {
             try {
                 when (action) {
                     ACTION_STORE -> {
-                        repository.storeFiles(
+                        val summary = repository.storeFiles(
                             uris = uris,
                             password = password,
                             onStatus = { updateNotification(it) },
                             onProgress = { updateNotification(null, (it * 100).toInt()) },
                             onUnsupported = { _, _ -> }
                         )
-                        VaultManager.notifyResult(OperationResult.Success(ACTION_STORE, uris))
+                        VaultManager.notifyResult(OperationResult.Success(
+                            action = ACTION_STORE,
+                            // 只上报以普通文件入库的源 uri（用于“是否删除原件”询问）；
+                            // pjm 容器只解密不落库，已被 IngestionEngine 排除在 deletableUris 之外。
+                            uris = summary.deletableUris,
+                            imported = summary.imported,
+                            skipped = summary.skipped,
+                            failed = summary.failed
+                        ))
                     }
                     ACTION_ENCRYPT -> {
-                        repository.packAndEncrypt(uris) { progress ->
+                        // 顶部横幅：加密开始（独立任务 id，可与其他任务并行）
+                        VaultManager.updateProgress(0f, getString(R.string.status_encrypting), taskId = TASK_ENCRYPT)
+                        val volumes = repository.packAndEncrypt(uris) { progress ->
                             updateNotification("Packing and encrypting...", (progress * 100).toInt())
+                            VaultManager.updateProgress(progress, getString(R.string.status_encrypting), taskId = TASK_ENCRYPT)
                         }.getOrThrow()
-                        VaultManager.notifyResult(OperationResult.Success(ACTION_ENCRYPT, uris))
+                        // 顶部横幅：加密完成（delay(500) 后 finally 清除）
+                        VaultManager.updateProgress(1f, getString(R.string.status_encrypt_success), taskId = TASK_ENCRYPT)
+                        VaultManager.notifyResult(OperationResult.Success(
+                            action = ACTION_ENCRYPT,
+                            uris = uris,
+                            volumes = volumes
+                        ))
                     }
                 }
                 delay(500.milliseconds) // Brief delay to ensure UI consistency
             } catch (e: Exception) {
                 PjmLogger.e("VaultService", "Task failed", e)
-                VaultManager.updateProgress(0f, "Operation failed: ${e.message}", isError = true)
+                VaultManager.updateProgress(0f, "Operation failed: ${e.message}", taskId = taskId, isError = true)
                 VaultManager.notifyResult(OperationResult.Error(action, e.message ?: "Unknown error"))
                 delay(2.seconds)
             } finally {
-                VaultManager.clearProgress()
+                VaultManager.clearProgress(taskId)
+                VaultManager.endOperation(taskId) // 释放该任务（不影响其他并发任务）
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             }
@@ -150,7 +183,7 @@ class VaultService : Service() {
     override fun onTimeout(startId: Int, fgsType: Int) {
         PjmLogger.w("VaultService", "Foreground service timed out for type $fgsType")
         currentJob?.cancel()
-        VaultManager.updateProgress(0f, "Operation timed out", isError = true)
+        VaultManager.updateProgress(0f, "Operation timed out", taskId = TASK_ENCRYPT, isError = true)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -168,11 +201,17 @@ class VaultService : Service() {
         
         // Always update the internal state for smooth UI progress bars
         if (progress >= 0) {
-            VaultManager.updateProgress(progress / 100f, status ?: VaultManager.operationState.value.message)
+            VaultManager.updateProgress(progress / 100f, status ?: currentTaskMessage(), taskId = currentTaskId)
         } else if (status != null) {
-            VaultManager.updateProgress(VaultManager.operationState.value.progress, status)
+            VaultManager.updateProgress(currentTaskProgress(), status, taskId = currentTaskId)
         }
     }
+
+    private fun currentTaskMessage(): String =
+        VaultManager.activeTasks.value.firstOrNull { it.taskId == currentTaskId }?.message ?: ""
+
+    private fun currentTaskProgress(): Float =
+        VaultManager.activeTasks.value.firstOrNull { it.taskId == currentTaskId }?.progress ?: 0f
 
     private fun createNotification(content: String, progress: Int): Notification {
         val intent = Intent(this, MainActivity::class.java)

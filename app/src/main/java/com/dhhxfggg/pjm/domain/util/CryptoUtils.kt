@@ -35,7 +35,10 @@ object CryptoUtils {
     
     private val BUFFER_SIZE get() = VaultManager.ADAPTIVE_BUFFER_SIZE
     private val XOR_KEY = "dhhxfggg_is_the_best_pjm_key_fixed".toByteArray(StandardCharsets.UTF_8)
-    private const val KEY_SIZE_MASK = 31L 
+    // 核心修复：mask 必须与 native 实现（keyLen-1）保持一致。
+    // 此前 Kotlin fallback 用 31（假设 key 为 32 字节），但 key 实际 34 字节，
+    // native 用 keyLen-1=33，导致跨设备（native 可用性不同）加解密错乱。
+    private val KEY_SIZE_MASK: Long get() = (XOR_KEY.size - 1).toLong()
 
     private var isNativeAvailable = false
 
@@ -72,10 +75,11 @@ object CryptoUtils {
             }
         }
         
-        // Kotlin Fallback implementation
+        // Kotlin Fallback implementation（mask 与 native 的 keyLen-1 一致）
+        val mask = KEY_SIZE_MASK
         var currentPos = startIndex
         for (i in 0 until len) {
-            val keyIndex = (currentPos and KEY_SIZE_MASK).toInt()
+            val keyIndex = (currentPos and mask).toInt()
             b[off + i] = (b[off + i].toInt() xor XOR_KEY[keyIndex].toInt()).toByte()
             currentPos++
         }
@@ -94,14 +98,14 @@ object CryptoUtils {
         context: Context,
         inputUris: List<Uri>,
         outputPath: String,
-        onProgress: (Float) -> Unit = {}
+        onProgress: (Float) -> Unit = {},
     ): Result<Unit> = withContext(VaultManager.PjmDispatchers.Crypto) {
         runCatching {
             val totalSize = inputUris.sumOf { FileUtils.getFileSize(context, it) }.coerceAtLeast(1L)
             VaultManager.ensureDiskSpace(context, totalSize)
 
             val finalFile = File(outputPath)
-            val tmpFile = File("${outputPath}.tmp_${System.currentTimeMillis()}")
+            val tmpFile = File("$outputPath.tmp_${System.currentTimeMillis()}")
             
             try {
                 tmpFile.parentFile?.mkdirs()
@@ -109,9 +113,15 @@ object CryptoUtils {
                     var streamPos = 0L 
 
                     val xorWrapper = object : FilterOutputStream(fos) {
+                        // 核心修复：单字节写入必须与批量写入走【同一个】 mask 计算路径（transformBytesInPlace）。
+                        // 此前单字节用 KEY_SIZE_MASK(31)，批量走 native(keyLen-1=33) 或 Kotlin(31)，
+                        // 而 ZipArchiveOutputStream 会混合调用 write(int) 与 write(byte[],off,len)，
+                        // 导致同一文件内不同字节用不同 mask 加密，解密端批量读取时部分字节解不开，
+                        // ZIP 数据损坏 → 解密失败。
                         override fun write(b: Int) {
-                            val keyIndex = (streamPos and KEY_SIZE_MASK).toInt()
-                            out.write(b xor XOR_KEY[keyIndex].toInt())
+                            val tmp = byteArrayOf((b and 0xFF).toByte())
+                            transformBytesInPlace(tmp, 0, 1, streamPos)
+                            out.write(tmp[0].toInt() and 0xFF)
                             streamPos++
                         }
                         override fun write(b: ByteArray, off: Int, len: Int) {
@@ -132,7 +142,7 @@ object CryptoUtils {
 
                     ZipArchiveOutputStream(BufferedOutputStream(xorWrapper as OutputStream, BUFFER_SIZE)).use { zos ->
                         zos.setUseZip64(Zip64Mode.AsNeeded)
-                        zos.setEncoding("UTF-8")
+                        zos.encoding = "UTF-8"
                         val buffer = VaultManager.acquireBuffer()
                         var processedBytes = 0L
                         try {
@@ -201,9 +211,14 @@ object CryptoUtils {
                         return@use
                     }
                     
-                    ZipArchiveInputStream(xorStream).use { zis ->
+                    // 核心修复：必须允许 stored entry + data descriptor。
+                    // 加密端对已压缩格式(图片/视频等)使用 Deflater.NO_COMPRESSION(stored)，
+                    // 且底层输出流不可 seekable，ZipArchiveOutputStream 会为 stored entry
+                    // 写入 data descriptor；默认构造(allowStoredEntriesWithDataDescriptor=false)
+                    // 会导致这些条目读取失败/错位，解密出损坏或错误类型的文件。
+                    ZipArchiveInputStream(xorStream, "UTF-8", true, true).use { zis ->
                         var entry: ZipArchiveEntry?
-                        while (zis.nextZipEntry.also { entry = it } != null) {
+                        while (zis.nextEntry.also { entry = it } != null) {
                             entry?.name?.let { onEntry(it, zis) }
                         }
                     }
@@ -211,6 +226,26 @@ object CryptoUtils {
             } catch (e: Exception) {
                 PjmLogger.e(TAG, "Decryption failed for $uri", e)
             }
+        }
+    }
+
+    /**
+     * 内容级 PJM 容器检测：读取前 4 字节并 XOR 解密后比对文件魔数。
+     * 不依赖文件名 —— 分享场景（微信/QQ 等）的 content URI 经常拿不到正确文件名，
+     * 文件名识别会失败，必须用内容确认。
+     */
+    suspend fun isPjmUri(context: Context, uri: Uri): Boolean = withContext(kotlinx.coroutines.Dispatchers.IO) {
+        try {
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                val header = ByteArray(4)
+                val read = input.read(header)
+                if (read < 4) return@use false
+                val tmp = header.copyOf()
+                transformBytesInPlace(tmp, 0, 4, 0L)
+                ByteBuffer.wrap(tmp).int == FILE_MAGIC
+            } ?: false
+        } catch (_: Exception) {
+            false
         }
     }
 
@@ -224,12 +259,15 @@ object CryptoUtils {
     fun createXorStream(inputStream: InputStream, initialPos: Long = 0L): InputStream {
         return object : FilterInputStream(inputStream) {
             private var pos = initialPos
+            // 核心修复：单字节读取与批量读取必须走【同一个】 mask 计算路径（transformBytesInPlace），
+            // 与加密端 write(int)/write(byte[],off,len) 保持严格对称，否则混合读写时部分字节解不开。
             override fun read(): Int {
                 val b = super.read()
                 if (b == -1) return -1
-                val res = (b xor XOR_KEY[(pos and KEY_SIZE_MASK).toInt()].toInt()) and 0xFF
+                val tmp = byteArrayOf(b.toByte())
+                transformBytesInPlace(tmp, 0, 1, pos)
                 pos++
-                return res
+                return tmp[0].toInt() and 0xFF
             }
             override fun read(b: ByteArray, off: Int, len: Int): Int {
                 val n = super.read(b, off, len)

@@ -16,8 +16,8 @@ android {
         applicationId = "com.dhhxfggg.pjm"
         minSdk = 24
         targetSdk = 35
-        versionCode = 29
-        versionName = "1.7.9"
+        versionCode = 34
+        versionName = "1.8.7"
 
         ndk {
             abiFilters.addAll(listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64"))
@@ -48,6 +48,8 @@ android {
         }
         release {
             isMinifyEnabled = true
+            isShrinkResources = true
+            signingConfig = signingConfigs.getByName("debug")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
@@ -59,12 +61,24 @@ android {
 
     buildFeatures {
         compose = true
+        aidl = true
     }
 
     lint {
         abortOnError = false
         checkReleaseBuilds = false
     }
+
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+        }
+    }
+}
+
+// Room：导出数据库 schema JSON 到 app/schemas（纳入版本控制，用于编写/测试显式迁移）
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
 }
 
 dependencies {
@@ -100,6 +114,7 @@ dependencies {
     ksp("com.google.dagger:hilt-compiler:2.60.1")
     ksp("org.jetbrains.kotlin:kotlin-metadata-jvm:2.4.10")
     implementation("androidx.hilt:hilt-navigation-compose:1.2.0")
+    implementation("androidx.documentfile:documentfile:1.0.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
     
     implementation("com.composables:icons-lucide-cmp:2.2.1")
@@ -116,7 +131,13 @@ dependencies {
     
     implementation("com.jakewharton.timber:timber:5.0.1")
 
+    // Shizuku：以 shell/root 身份访问 Android/data（突破 Android 14 SAF 限制）
+    implementation("dev.rikka.shizuku:api:13.1.5")
+    implementation("dev.rikka.shizuku:provider:13.1.5")
+
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.16.1")
+    testImplementation("androidx.test:core:1.7.0")
 }
 
 tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {

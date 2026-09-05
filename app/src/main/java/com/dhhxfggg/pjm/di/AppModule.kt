@@ -2,6 +2,7 @@ package com.dhhxfggg.pjm.di
 
 import android.content.Context
 import androidx.room.Room
+import androidx.room.RoomDatabase
 import com.dhhxfggg.pjm.data.db.AppDatabase
 import com.dhhxfggg.pjm.data.db.FileDao
 import com.dhhxfggg.pjm.data.repository.FileRepository
@@ -33,6 +34,10 @@ abstract class AppModule {
         /**
          * 提供 Room 数据库实例。
          * 启用了 WAL 模式以支持高效的读写并发。
+         *
+         * 安全策略：不再使用 fallbackToDestructiveMigration ——
+         * 未来 schema 变更必须注册显式 Migration（见 AppDatabase.MIGRATIONS），
+         * 否则版本不一致会 fail-fast 崩溃，而绝不静默删库重建（保护用户索引/数据）。
          */
         @Provides
         @Singleton
@@ -43,7 +48,12 @@ abstract class AppModule {
                 "pjm_app_database"
             )
             .setJournalMode(androidx.room.RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
-            .fallbackToDestructiveMigration()
+            .addMigrations(*AppDatabase.MIGRATIONS)
+            .addCallback(object : RoomDatabase.Callback() {
+                override fun onOpen(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                    AppDatabase.openDb = db
+                }
+            })
             .build()
         }
 

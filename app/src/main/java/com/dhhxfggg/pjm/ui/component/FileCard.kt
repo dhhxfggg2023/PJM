@@ -1,23 +1,8 @@
 package com.dhhxfggg.pjm.ui.component
 
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.media.MediaMetadataRetriever
 import com.composables.icons.lucide.Lucide
-import com.composables.icons.lucide.Image
-import com.composables.icons.lucide.Film
-import com.composables.icons.lucide.Music
-import com.composables.icons.lucide.FileText
-import com.composables.icons.lucide.FileArchive
-import com.composables.icons.lucide.Smartphone
-import com.composables.icons.lucide.File
 import com.composables.icons.lucide.CircleCheck
-import com.composables.icons.lucide.X
-import androidx.compose.animation.AnimatedVisibilityScope
-import androidx.compose.animation.ExperimentalSharedTransitionApi
-import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
@@ -28,52 +13,32 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil3.compose.AsyncImage
-import coil3.request.ImageRequest
-import coil3.request.crossfade
-import coil3.video.VideoFrameDecoder
 import com.dhhxfggg.pjm.data.model.FileEntity
 import com.dhhxfggg.pjm.domain.util.FileUtils
-import com.dhhxfggg.pjm.domain.util.VaultManager
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import com.dhhxfggg.pjm.ui.theme.rememberIconPack
+import com.dhhxfggg.pjm.ui.viewmodel.SettingsViewModel
+import androidx.hilt.navigation.compose.hiltViewModel
 
 /**
  * Returns an appropriate icon vector based on the file extension.
  */
-private fun getIconForExtension(extension: String): ImageVector {
+private fun getIconForExtension(extension: String, iconPack: com.dhhxfggg.pjm.ui.theme.IconPack): ImageVector {
     return when (extension.lowercase()) {
-        "jpg", "jpeg", "png", "gif", "webp" -> Lucide.Image
-        "mp4", "avi", "mov", "mkv", "wmv", "flv", "webm" -> Lucide.Film
-        "mp3", "wav", "flac", "aac", "m4a" -> Lucide.Music
-        "pdf", "doc", "docx", "txt" -> Lucide.FileText
-        "zip", "rar", "7z", "pjm" -> Lucide.FileArchive
-        "apk" -> Lucide.Smartphone
-        else -> Lucide.File
+        "jpg", "jpeg", "png", "gif", "webp" -> iconPack.fileImage
+        "mp4", "avi", "mov", "mkv", "wmv", "flv", "webm" -> iconPack.fileVideo
+        "mp3", "wav", "flac", "aac", "m4a" -> iconPack.fileAudio
+        "pdf", "doc", "docx", "txt" -> iconPack.fileDoc
+        "zip", "rar", "7z", "pjm" -> iconPack.fileArchive
+        "apk" -> iconPack.fileApk
+        else -> iconPack.fileGeneric
     }
 }
 
 /**
  * A card component representing a file in the vault.
- * Supports thumbnail previews, selection states, and different display modes.
- *
- * @param fileEntity Metadata of the file to display.
- * @param onClick Callback invoked when the card is clicked.
- * @param modifier Modifier to be applied to the card.
- * @param isSelected Whether the file is currently selected.
- * @param onDelete Optional callback for a delete action.
- * @param onLongClick Optional callback for long-press interaction.
- * @param showThumbnail Whether to attempt loading a thumbnail preview.
- * @param imageOnly If true, displays only the image/thumbnail without textual metadata.
- * @param gridSpanCount Number of columns in the grid, used for thumbnail size optimization.
- * @param sharedTransitionScope Optional scope for shared element transitions.
- * @param animatedVisibilityScope Optional scope for animated visibility during transitions.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -82,28 +47,15 @@ fun FileCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     isSelected: Boolean = false,
-    onDelete: (() -> Unit)? = null,
     onLongClick: (() -> Unit)? = null,
     showThumbnail: Boolean = true,
     imageOnly: Boolean = false,
     gridSpanCount: Int = 2,
-    thumbnail: Bitmap? = null
+    settingsViewModel: SettingsViewModel = hiltViewModel()
 ) {
-    val context = LocalContext.current
-    val file = remember(fileEntity.relativePath) { 
-        VaultManager.getFileFromEntity(context, fileEntity) 
-    }
+    val iconPack = rememberIconPack()
 
-    val thumbnailSize = remember(gridSpanCount) {
-        when (gridSpanCount) {
-            1, 2 -> 640
-            3, 4 -> 320
-            5, 6 -> 160
-            else -> 160
-        }
-    }
-
-    val icon = remember(fileEntity.extension) { getIconForExtension(fileEntity.extension) }
+    val icon = remember(fileEntity.extension, iconPack) { getIconForExtension(fileEntity.extension, iconPack) }
 
     Card(
         modifier = modifier
@@ -146,29 +98,13 @@ fun FileCard(
                     }
                 }
 
-                thumbnail?.let { bitmap ->
-                    Image(
-                        bitmap = bitmap.asImageBitmap(), 
-                        contentDescription = null, 
-                        modifier = Modifier.fillMaxSize(), 
-                        contentScale = ContentScale.Crop
+                if (showThumbnail) {
+                    FileThumbnail(
+                        fileEntity = fileEntity,
+                        size = thumbnailSizeFor(gridSpanCount),
+                        crossfade = gridSpanCount <= 3,
+                        modifier = Modifier.fillMaxSize()
                     )
-                } ?: run {
-                    if (showThumbnail && file.exists() && (fileEntity.isImage || FileUtils.isVideoFile(file.name))) {
-                        AsyncImage(
-                            model = ImageRequest.Builder(context)
-                                .data(file.absolutePath)
-                                .decoderFactory(VideoFrameDecoder.Factory())
-                                .crossfade(gridSpanCount <= 3)
-                                .size(thumbnailSize, thumbnailSize)
-                                .diskCacheKey(FileUtils.getFileFingerprint(fileEntity))
-                                .memoryCachePolicy(coil3.request.CachePolicy.ENABLED)
-                                .build(),
-                            contentDescription = null,
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Crop
-                        )
-                    }
                 }
                 
                 if (isSelected) {
@@ -186,23 +122,7 @@ fun FileCard(
                     )
                 }
 
-                if (gridSpanCount <= 3) {
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.BottomCenter)
-                            .fillMaxWidth()
-                            .background(Color.Black.copy(alpha = 0.3f))
-                            .padding(vertical = 2.dp)
-                    ) {
-                        Text(
-                            text = FileUtils.formatFileTime(fileEntity.lastModified),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = Color.White,
-                            modifier = Modifier.align(Alignment.Center),
-                            maxLines = 1
-                        )
-                    }
-                }
+                // 核心修复：根据用户要求，网格模式（imageOnly）下彻底移除所有文字覆盖层（包括时间/名字）
             }
         } else {
             Row(
@@ -226,27 +146,13 @@ fun FileCard(
                             modifier = Modifier.size(32.dp)
                         )
                     }
-                    thumbnail?.let { bitmap ->
-                        Image(
-                            bitmap = bitmap.asImageBitmap(), 
-                            contentDescription = null, 
-                            modifier = Modifier.fillMaxSize(), 
-                            contentScale = ContentScale.Crop
+                    if (showThumbnail) {
+                        FileThumbnail(
+                            fileEntity = fileEntity,
+                            size = 256,
+                            crossfade = false,
+                            modifier = Modifier.fillMaxSize()
                         )
-                    } ?: run {
-                        if (showThumbnail && file.exists() && (fileEntity.isImage || FileUtils.isVideoFile(file.name))) {
-                            AsyncImage(
-                                model = ImageRequest.Builder(context)
-                                    .data(file.absolutePath)
-                                    .decoderFactory(VideoFrameDecoder.Factory())
-                                    .size(256, 256)
-                                    .diskCacheKey(FileUtils.getFileFingerprint(fileEntity))
-                                    .build(),
-                                contentDescription = null,
-                                modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Crop
-                            )
-                        }
                     }
                     if (isSelected) {
                         Box(modifier = Modifier
@@ -277,14 +183,6 @@ fun FileCard(
                 }
                 if (isSelected) {
                     Checkbox(checked = true, onCheckedChange = { onClick() })
-                } else if (onDelete != null) {
-                    IconButton(onClick = onDelete) { 
-                        Icon(
-                            imageVector = Lucide.X, 
-                            contentDescription = null, 
-                            modifier = Modifier.size(20.dp)
-                        ) 
-                    }
                 }
             }
         }

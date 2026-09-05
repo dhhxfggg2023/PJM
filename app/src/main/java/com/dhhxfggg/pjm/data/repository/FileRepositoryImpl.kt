@@ -6,6 +6,7 @@ import com.dhhxfggg.pjm.data.db.FileDao
 import com.dhhxfggg.pjm.data.model.FileEntity
 import com.dhhxfggg.pjm.domain.util.CryptoUtils
 import com.dhhxfggg.pjm.domain.util.IngestionEngine
+import com.dhhxfggg.pjm.domain.util.IngestionSummary
 import com.dhhxfggg.pjm.domain.util.VaultManager
 import com.dhhxfggg.pjm.domain.util.SettingsManager
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -75,12 +76,16 @@ class FileRepositoryImpl @Inject constructor(
         VaultManager.fullSyncDatabase(context, fileDao)
     }
 
-    override suspend fun exportVault(onProgress: (Float) -> Unit): Result<Unit> {
+    override suspend fun exportVault(onProgress: (Float) -> Unit): Result<Int> {
         return VaultManager.exportVaultToPjmModule(context, fileDao, onProgress)
     }
 
     override suspend fun getRandomFileByCategory(category: String): FileEntity? {
         return fileDao.getRandomFileByCategory(category)
+    }
+
+    override suspend fun getLatestFileByCategory(category: String): FileEntity? {
+        return fileDao.getLatestFileByCategory(category)
     }
 
     override suspend fun storeFiles(
@@ -89,8 +94,8 @@ class FileRepositoryImpl @Inject constructor(
         onStatus: (String) -> Unit,
         onProgress: (Float) -> Unit,
         onUnsupported: (Uri, String) -> Unit
-    ) {
-        IngestionEngine.store(
+    ): IngestionSummary {
+        return IngestionEngine.store(
             context = context,
             uris = uris,
             password = password,
@@ -101,7 +106,7 @@ class FileRepositoryImpl @Inject constructor(
         )
     }
 
-    override suspend fun packAndEncrypt(uris: List<Uri>, onProgress: (Float) -> Unit): Result<Unit> {
+    override suspend fun packAndEncrypt(uris: List<Uri>, onProgress: (Float) -> Unit): Result<Int> {
         val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
         val baseName = "Pack_$timeStamp"
         return VaultManager.packUrisWithSplitting(

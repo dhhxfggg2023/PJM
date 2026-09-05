@@ -2,6 +2,7 @@ package com.dhhxfggg.pjm.data.repository
 
 import android.net.Uri
 import com.dhhxfggg.pjm.data.model.FileEntity
+import com.dhhxfggg.pjm.domain.util.IngestionSummary
 import kotlinx.coroutines.flow.Flow
 import java.io.File
 
@@ -21,9 +22,12 @@ interface FileRepository {
     suspend fun initialize(onProgress: (Float) -> Unit = {})
     
     suspend fun syncDatabase()
-    suspend fun exportVault(onProgress: (Float) -> Unit): Result<Unit>
+    suspend fun exportVault(onProgress: (Float) -> Unit): Result<Int>
     
     suspend fun getRandomFileByCategory(category: String): FileEntity?
+
+    /** 大库优化：取分类最近文件作封面（替代 RANDOM，O(log n)） */
+    suspend fun getLatestFileByCategory(category: String): FileEntity?
     
     suspend fun storeFiles(
         uris: List<Uri>,
@@ -31,9 +35,9 @@ interface FileRepository {
         onStatus: (String) -> Unit,
         onProgress: (Float) -> Unit,
         onUnsupported: (Uri, String) -> Unit
-    )
+    ): IngestionSummary
     
-    suspend fun packAndEncrypt(uris: List<Uri>, onProgress: (Float) -> Unit): Result<Unit>
+    suspend fun packAndEncrypt(uris: List<Uri>, onProgress: (Float) -> Unit): Result<Int>
     
     suspend fun getNextVaultPath(category: String, originalName: String): File
 

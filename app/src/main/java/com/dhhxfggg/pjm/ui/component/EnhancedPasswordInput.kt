@@ -9,9 +9,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.stringResource
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.Eye
 import com.composables.icons.lucide.EyeOff
+import com.dhhxfggg.pjm.R
 
 /**
  * An enhanced password input field with visibility toggle and a password strength indicator.
@@ -50,7 +52,7 @@ fun EnhancedPasswordInput(
             value = password,
             onValueChange = onPasswordChange,
             modifier = Modifier.fillMaxWidth(),
-            label = { Text("输入解压/访问密码") },
+            label = { Text(stringResource(R.string.label_enter_password)) },
             singleLine = true,
             visualTransformation = if (passwordVisible) {
                 VisualTransformation.None
@@ -65,7 +67,7 @@ fun EnhancedPasswordInput(
                         } else {
                             Lucide.EyeOff
                         },
-                        contentDescription = "Toggle Password Visibility"
+                        contentDescription = null
                     )
                 }
             }
@@ -85,9 +87,9 @@ fun EnhancedPasswordInput(
         Text(
             text = when {
                 strength == 0f -> ""
-                strength <= 0.3f -> "密码太弱 (建议至少6位)"
-                strength <= 0.6f -> "强度中等"
-                else -> "密码非常安全"
+                strength <= 0.3f -> stringResource(R.string.strength_weak_desc)
+                strength <= 0.6f -> stringResource(R.string.strength_medium_desc)
+                else -> stringResource(R.string.strength_strong_desc)
             },
             style = MaterialTheme.typography.labelSmall,
             color = strengthColor,

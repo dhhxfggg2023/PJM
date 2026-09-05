@@ -1,8 +1,9 @@
 package com.dhhxfggg.pjm.ui.screen
 
 import com.composables.icons.lucide.Lucide
-import com.composables.icons.lucide.Shield
-import com.composables.icons.lucide.ShieldCheck
+import com.composables.icons.lucide.ShieldAlert
+import com.composables.icons.lucide.Settings
+import com.dhhxfggg.pjm.R
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -10,28 +11,22 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 
 /**
- * Screen that explains and requests necessary permissions from the user.
- *
- * @param onRequestPermissions Callback invoked to trigger the system permission request.
- * @param onOpenSettings Callback invoked to open the app's system settings page.
+ * High-authority Permission Screen for PJM.
+ * Designed for personal use with zero-friction redirection to system settings.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PermissionScreen(
-    onRequestPermissions: () -> Unit,
-    onOpenSettings: () -> Unit
+    onOpenSettings: () -> Unit,
+    _onRequestPermissions: () -> Unit = {} // Kept for compatibility but unused
 ) {
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("权限申请") }
-            )
-        }
-    ) { paddingValues ->
+    Scaffold { paddingValues ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -42,17 +37,18 @@ fun PermissionScreen(
             verticalArrangement = Arrangement.Center
         ) {
             Icon(
-                imageVector = Lucide.Shield,
+                imageVector = Lucide.ShieldAlert,
                 contentDescription = null,
-                modifier = Modifier.size(80.dp),
-                tint = MaterialTheme.colorScheme.primary
+                modifier = Modifier.size(100.dp),
+                tint = MaterialTheme.colorScheme.error
             )
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(32.dp))
 
             Text(
-                text = "需要基础访问权限",
-                style = MaterialTheme.typography.headlineSmall,
+                text = stringResource(R.string.permission_header),
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Black,
                 textAlign = TextAlign.Center
             )
 
@@ -61,43 +57,47 @@ fun PermissionScreen(
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant
-                )
+                    containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f)
+                ),
+                shape = MaterialTheme.shapes.large
             ) {
                 Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                    modifier = Modifier.padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
                     Text(
-                        text = "为了确保能够安全地处理和解密您的文件，应用需要获得基础的文件读取权限。",
-                        style = MaterialTheme.typography.bodyMedium
+                        text = stringResource(R.string.permission_msg_1),
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.Bold
                     )
                     
                     Text(
-                        text = "注：PJM 采用现代 Android 安全规范，仅在您手动选择文件时获得授权，不会扫描您的整个手机存储。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        text = stringResource(R.string.permission_msg_2),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onErrorContainer
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(32.dp))
+            Spacer(modifier = Modifier.height(48.dp))
 
             Button(
-                onClick = onRequestPermissions,
+                onClick = onOpenSettings,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(56.dp)
+                    .height(64.dp),
+                shape = MaterialTheme.shapes.extraLarge,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.primary
+                )
             ) {
-                Icon(Lucide.ShieldCheck, contentDescription = null)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(text = "立即授权")
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            TextButton(onClick = onOpenSettings) {
-                Text(text = "前往系统设置确认权限")
+                Icon(Lucide.Settings, contentDescription = null)
+                Spacer(modifier = Modifier.width(12.dp))
+                Text(
+                    text = stringResource(R.string.action_open_settings),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
             }
         }
     }

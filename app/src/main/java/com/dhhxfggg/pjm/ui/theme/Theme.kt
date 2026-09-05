@@ -7,6 +7,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -20,34 +21,134 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 import coil3.compose.AsyncImage
+import coil3.compose.AsyncImagePainter
 import coil3.request.ImageRequest
-import coil3.size.Precision
 import coil3.request.crossfade
-import coil3.request.bitmapConfig
-import android.graphics.Bitmap
 import com.dhhxfggg.pjm.data.model.Settings
 import com.dhhxfggg.pjm.domain.util.PjmLogger
-import java.io.File
-import androidx.compose.ui.text.font.Font
 
-// 定义颜色方案
-private val DarkColorScheme = darkColorScheme(
-    primary = PrimaryDark,
-    background = BackgroundDark,
-    surface = SurfaceDark,
-    onBackground = Color.White,
-    onSurface = Color.White
+/**
+ * 完整 Light 配色方案（莫兰迪化海洋蓝 + 青绿 + 琥珀强调）
+ * 补齐了所有 Material3 色槽，消除与默认紫色系打架的问题。
+ */
+internal val LightColorScheme = lightColorScheme(
+    primary = PrimaryLight,
+    onPrimary = OnPrimaryLight,
+    primaryContainer = PrimaryContainerLight,
+    onPrimaryContainer = OnPrimaryContainerLight,
+
+    secondary = SecondaryLight,
+    onSecondary = OnSecondaryLight,
+    secondaryContainer = SecondaryContainerLight,
+    onSecondaryContainer = OnSecondaryContainerLight,
+
+    tertiary = TertiaryLight,
+    onTertiary = OnTertiaryLight,
+    tertiaryContainer = TertiaryContainerLight,
+    onTertiaryContainer = OnTertiaryContainerLight,
+
+    background = BackgroundLight,
+    onBackground = OnBackgroundLight,
+    surface = SurfaceLight,
+    onSurface = OnSurfaceLight,
+    surfaceVariant = SurfaceVariantLight,
+    onSurfaceVariant = OnSurfaceVariantLight,
+
+    outline = OutlineLight,
+    outlineVariant = OutlineVariantLight,
+
+    error = ErrorLight,
+    onError = OnErrorLight,
+    errorContainer = ErrorContainerLight,
+    onErrorContainer = OnErrorContainerLight,
+
+    inverseSurface = InverseSurfaceLight,
+    inverseOnSurface = InverseOnSurfaceLight,
+    inversePrimary = InversePrimaryLight,
+
+    surfaceContainerLowest = SurfaceContainerLowestLight,
+    surfaceContainerLow = SurfaceContainerLowLight,
+    surfaceContainer = SurfaceContainerLight,
+    surfaceContainerHigh = SurfaceContainerHighLight,
+    surfaceContainerHighest = SurfaceContainerHighestLight
 )
 
-private val LightColorScheme = lightColorScheme(
-    primary = PrimaryLight,
-    background = BackgroundLight,
-    surface = SurfaceLight,
-    onBackground = Color.Black,
-    onSurface = Color.Black
+/**
+ * 完整 Dark 配色方案
+ */
+internal val DarkColorScheme = darkColorScheme(
+    primary = PrimaryDark,
+    onPrimary = OnPrimaryDark,
+    primaryContainer = PrimaryContainerDark,
+    onPrimaryContainer = OnPrimaryContainerDark,
+
+    secondary = SecondaryDark,
+    onSecondary = OnSecondaryDark,
+    secondaryContainer = SecondaryContainerDark,
+    onSecondaryContainer = OnSecondaryContainerDark,
+
+    tertiary = TertiaryDark,
+    onTertiary = OnTertiaryDark,
+    tertiaryContainer = TertiaryContainerDark,
+    onTertiaryContainer = OnTertiaryContainerDark,
+
+    background = BackgroundDark,
+    onBackground = OnBackgroundDark,
+    surface = SurfaceDark,
+    onSurface = OnSurfaceDark,
+    surfaceVariant = SurfaceVariantDark,
+    onSurfaceVariant = OnSurfaceVariantDark,
+
+    outline = OutlineDark,
+    outlineVariant = OutlineVariantDark,
+
+    error = ErrorDark,
+    onError = OnErrorDark,
+    errorContainer = ErrorContainerDark,
+    onErrorContainer = OnErrorContainerDark,
+
+    inverseSurface = InverseSurfaceDark,
+    inverseOnSurface = InverseOnSurfaceDark,
+    inversePrimary = InversePrimaryDark,
+
+    surfaceContainerLowest = SurfaceContainerLowestDark,
+    surfaceContainerLow = SurfaceContainerLowDark,
+    surfaceContainer = SurfaceContainerDark,
+    surfaceContainerHigh = SurfaceContainerHighDark,
+    surfaceContainerHighest = SurfaceContainerHighestDark
+)
+
+/**
+ * PJM 圆润形状定义
+ */
+private val PjmShapes = Shapes(
+    extraSmall = RoundedCornerShape(12.dp),
+    small = RoundedCornerShape(16.dp),
+    medium = RoundedCornerShape(24.dp),
+    large = RoundedCornerShape(32.dp),
+    extraLarge = RoundedCornerShape(42.dp)
+)
+
+/**
+ * PJM 完整字阶：为常用文字样式提供一致的默认 weight/size/行距。
+ */
+internal fun pjmTypography(textColor: Color) = Typography(
+    headlineLarge = TextStyle(fontWeight = FontWeight.Bold, fontSize = 30.sp, lineHeight = 38.sp, color = textColor),
+    headlineMedium = TextStyle(fontWeight = FontWeight.Bold, fontSize = 26.sp, lineHeight = 34.sp, color = textColor),
+    headlineSmall = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = 22.sp, lineHeight = 30.sp, color = textColor),
+    titleLarge = TextStyle(fontWeight = FontWeight.Bold, fontSize = 20.sp, lineHeight = 26.sp, color = textColor),
+    titleMedium = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = 16.sp, lineHeight = 22.sp, color = textColor),
+    titleSmall = TextStyle(fontWeight = FontWeight.SemiBold, fontSize = 14.sp, lineHeight = 20.sp, color = textColor),
+    bodyLarge = TextStyle(fontWeight = FontWeight.Normal, fontSize = 16.sp, lineHeight = 24.sp, color = textColor),
+    bodyMedium = TextStyle(fontWeight = FontWeight.Normal, fontSize = 14.sp, lineHeight = 20.sp, color = textColor),
+    bodySmall = TextStyle(fontWeight = FontWeight.Normal, fontSize = 12.sp, lineHeight = 16.sp, color = textColor),
+    labelLarge = TextStyle(fontWeight = FontWeight.Medium, fontSize = 14.sp, lineHeight = 20.sp, color = textColor),
+    labelMedium = TextStyle(fontWeight = FontWeight.Medium, fontSize = 12.sp, lineHeight = 16.sp, color = textColor),
+    labelSmall = TextStyle(fontWeight = FontWeight.Medium, fontSize = 11.sp, lineHeight = 14.sp, color = textColor),
 )
 
 @Composable
@@ -62,30 +163,17 @@ fun PJMTheme(
     }
     
     val context = LocalContext.current
+    // 动态取色仅当用户开启且系统为 Android 12+ 时使用；否则使用内置海洋蓝莫兰迪配色
+    val canUseDynamic = settings.isDynamicColorEnabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
     val colorScheme = when {
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && darkTheme -> dynamicDarkColorScheme(context)
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !darkTheme -> dynamicLightColorScheme(context)
+        canUseDynamic && darkTheme -> dynamicDarkColorScheme(context)
+        canUseDynamic && !darkTheme -> dynamicLightColorScheme(context)
         darkTheme -> DarkColorScheme
         else -> LightColorScheme
     }
 
-    val customFontFamily = remember(settings.customFontUri) {
-        settings.customFontUri?.let { path ->
-            val fontFile = File(path)
-            if (fontFile.exists()) {
-                try { FontFamily(Font(fontFile)) } catch (e: Exception) { FontFamily.Default }
-            } else FontFamily.Default
-        } ?: FontFamily.Default
-    }
-
     val textColor = colorScheme.onBackground
-    val typography = Typography(
-        headlineLarge = TextStyle(fontFamily = customFontFamily, fontWeight = FontWeight.Bold, fontSize = 28.sp, color = textColor),
-        titleLarge = TextStyle(fontFamily = customFontFamily, fontWeight = FontWeight.Bold, fontSize = 20.sp, color = textColor),
-        bodyLarge = TextStyle(fontFamily = customFontFamily, fontSize = 16.sp, color = textColor),
-        bodyMedium = TextStyle(fontFamily = customFontFamily, fontSize = 14.sp, color = textColor),
-        labelSmall = TextStyle(fontFamily = customFontFamily, fontSize = 11.sp, color = textColor)
-    )
+    val typography = pjmTypography(textColor)
 
     val view = LocalView.current
     if (!view.isInEditMode) {
@@ -102,7 +190,12 @@ fun PJMTheme(
     )
 
     CompositionLocalProvider(LocalDensity provides customDensity) {
-        MaterialTheme(colorScheme = colorScheme, typography = typography, content = content)
+        MaterialTheme(
+            colorScheme = colorScheme, 
+            typography = typography, 
+            shapes = PjmShapes,
+            content = content
+        )
     }
 }
 
@@ -132,7 +225,7 @@ fun AppTheme(settings: Settings.AppSettings, content: @Composable () -> Unit) {
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Crop,
                     onState = { state ->
-                        if (state is coil3.compose.AsyncImagePainter.State.Error) {
+                        if (state is AsyncImagePainter.State.Error) {
                             PjmLogger.e("AppTheme", "Background image load failed: ${state.result.throwable.message}")
                         }
                     }

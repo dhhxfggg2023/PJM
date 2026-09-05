@@ -31,6 +31,19 @@
 -dontwarn org.apache.commons.compress.harmony.pack200.**
 -dontwarn org.objectweb.asm.**
 
-# [Junrar] 忽略文件系统可选依赖
--dontwarn com.github.junrar.vfs2.**
--dontwarn org.apache.commons.vfs2.**
+# [PJM Core Utils]
+-keep class com.dhhxfggg.pjm.domain.util.** { *; }
+-keepclassmembers class com.dhhxfggg.pjm.domain.util.** { *; }
+
+# [PJM Shizuku/特权服务] 关键：FileServerMain 由 app_process 反射启动，
+# 类名/入口绝不能混淆（否则 release 版特权服务无法启动）
+-keep class com.dhhxfggg.pjm.domain.shizuku.** { *; }
+-keepclassmembers class com.dhhxfggg.pjm.domain.shizuku.** { *; }
+-keep class com.dhhxfggg.pjm.IFileBridgeService { *; }
+-keep class com.dhhxfggg.pjm.IFileBridgeService$Stub { *; }
+
+# [Models & Entities]
+-keep class com.dhhxfggg.pjm.data.model.** { *; }
+
+# [Android System / Support]
+-keep class androidx.core.content.FileProvider { *; }

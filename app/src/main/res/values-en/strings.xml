@@ -1,0 +1,255 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">PJM</string>
+
+    <!-- Actions -->
+    <string name="action_clear_cache">Clear Cache</string>
+    <string name="action_select_all">Select All</string>
+    <string name="action_share">Share</string>
+    <string name="action_open">Open</string>
+    <string name="action_delete">Delete</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="action_export_to_gallery">Export to Gallery</string>
+    <string name="action_back">Back</string>
+    <string name="action_confirm">Confirm</string>
+    <string name="action_pack_and_encrypt">🔒 Pack &amp; Encrypt</string>
+    <string name="action_extract_now">Extract Now</string>
+    <string name="action_close">Close</string>
+    <string name="action_shred_now">Shred Now</string>
+    <string name="action_export_vault">One-tap Full Export</string>
+    <string name="action_confirm_export">Confirm Export</string>
+    <string name="action_grant_now">Grant Now</string>
+    <string name="action_open_settings">Go to Settings</string>
+    <string name="action_dismiss">Dismiss</string>
+    <string name="action_repair_now">Repair Now</string>
+    <string name="action_confirm_cleanup">Confirm Cleanup</string>
+    <string name="action_import_bili_now">Import Now</string>
+    <string name="action_import_bili_merged_now">Import Now</string>
+
+    <!-- Shortcuts -->
+    <string name="shortcut_encrypt">Encrypt</string>
+    <string name="shortcut_encrypt_long">Start encrypting files immediately</string>
+    <string name="shortcut_cabinet">View Cabinet</string>
+    <string name="shortcut_cabinet_long">Open vault to view restored files</string>
+
+    <!-- Status & Progress -->
+    <string name="status_ready">Ready</string>
+    <string name="status_processing">Processing files...</string>
+    <string name="status_storing">Storing...</string>
+    <string name="status_encrypting">Encrypting...</string>
+    <string name="status_decrypting">Decrypting: %1$s</string>
+    <string name="status_storing_with_progress">Storing (%1$d%%)</string>
+    <string name="status_encrypt_success">Encryption Complete</string>
+    <string name="status_cache_cleared">Cache Cleared</string>
+    <string name="status_export_success">Assets exported successfully</string>
+    <string name="status_processing_split_volume">Processing split volume: %1$s</string>
+    <string name="status_ingesting_file">Ingesting: %1$s</string>
+    <string name="status_updating_index">Updating index...</string>
+    <string name="status_ingestion_complete_with_skips">Ingestion Complete (%1$d duplicates skipped)</string>
+    <string name="status_all_tasks_complete">All tasks complete</string>
+    <string name="status_extracting">Extracting: %1$s</string>
+    <string name="status_extract_complete">Extraction complete: %1$d files stored</string>
+    <string name="error_extract_failed">Extraction failed: %1$s</string>
+    <string name="status_recovering_files">Recovering previous files...</string>
+    <string name="status_recovering_assets">Recovering assets...</string>
+    <string name="status_recovery_complete">Recovery Complete</string>
+    <string name="status_exporting_vault">Packing for export...</string>
+    <string name="status_analyzing_duplicates">Analyzing duplicate content...</string>
+    <string name="status_calculating_fingerprints">Calculating content fingerprints...</string>
+    <string name="status_calculating_image_fingerprints">Calculating perceptual image fingerprints...</string>
+    <string name="status_comparing_images">Comparing image content...</string>
+    <string name="status_syncing_fast">Fast syncing...</string>
+    <string name="status_indexing_files">Indexing files...</string>
+    <string name="status_sync_complete">Sync Complete</string>
+    <string name="status_cleaning_duplicates">Cleaning up duplicates...</string>
+    <string name="status_clearing_cache">Clearing cache...</string>
+    <string name="status_resetting">Resetting to factory defaults...</string>
+    <string name="status_reset_done">Settings reset to factory defaults</string>
+    <string name="status_clearing_logs">Clearing logs...</string>
+    <string name="status_logs_cleared">Logs cleared</string>
+    <string name="settings_title_clear_logs">Clear logs</string>
+    <string name="settings_desc_clear_logs">Delete run logs only; caches and files are untouched</string>
+    <string name="status_shredding">Shredding securely...</string>
+    <string name="status_delete_done">Deleted</string>
+    <string name="status_searching_bili_cache">Searching Bili cache...</string>
+    <string name="status_searching_bili_merged">Scanning merged videos...</string>
+    <string name="status_processing_bili_batch">Processing (%1$d/%2$d): %3$s</string>
+    <string name="status_starting_integrity_check">Starting integrity check...</string>
+    <string name="status_verifying_fingerprints">Verifying fingerprints...</string>
+
+    <!-- Errors -->
+    <string name="error_encrypt_failed">Encryption failed: %1$s</string>
+    <string name="error_decrypt_failed">Decryption failed: %1$s</string>
+    <string name="error_open_file_failed">Unable to open file: %1$s</string>
+    <string name="error_delete_failed">Deletion failed: %1$s</string>
+    <string name="error_export_failed">Export failed: %1$s</string>
+    <string name="error_read_failed">Read failed</string>
+    <string name="error_unable_to_open_external_tool">Unable to open external tool</string>
+    <string name="error_processing_failed">Processing failed: %1$s</string>
+    <string name="error_insufficient_storage_extract">Insufficient storage for extraction pre-processing</string>
+    <string name="error_unsupported_preview">Preview not supported for this file type</string>
+    <string name="error_media_load_failed">Unable to load media content</string>
+    <string name="error_export_failed_simple">Export failed</string>
+    <string name="error_password_empty">Password cannot be empty</string>
+
+    <!-- File Explorer & Selection -->
+    <string name="empty_folder">Folder empty or inaccessible</string>
+    <string name="selected_count">%1$d items selected</string>
+    <string name="share_to_pjm">Share to PJM</string>
+    <string name="cat_pjm_display">PJM Archives</string>
+    <string name="cat_images_display">Image Vault</string>
+    <string name="cat_videos_display">Video Vault</string>
+    <string name="cat_audios_display">Audio Vault</string>
+    <string name="cat_others_display">Others</string>
+    <string name="empty_vault_msg">No encrypted items yet</string>
+
+    <!-- Dialogs -->
+    <string name="dialog_delete_title">Confirm Deletion</string>
+    <string name="toast_file_deleted">File deleted</string>
+    <string name="toast_batch_processed">%1$d files processed</string>
+    <string name="toast_original_files_deleted">Original files cleaned successfully</string>
+    <string name="dialog_title_encrypted_archive">Encrypted Archive</string>
+    <string name="dialog_msg_password_required">File %1$s is encrypted, please enter password:</string>
+    <string name="dialog_msg_new_file_found">New files found, how to store them?</string>
+    <string name="toast_pjm_archive_detected">PJM archive detected, auto-storing...</string>
+    <string name="dialog_delete_msg_discovery">Are you sure you want to permanently remove this item?</string>
+    <string name="dialog_title_details">Details</string>
+    <string name="dialog_title_shred_confirm">Security Shred Confirm</string>
+    <string name="dialog_delete_msg_single">Are you sure you want to permanently shred this item?</string>
+    <string name="dialog_delete_msg_batch">Are you sure you want to shred the selected %1$d files?</string>
+    <string name="dialog_title_export_vault">Encrypt &amp; Export</string>
+    <string name="dialog_msg_export_vault">Are you sure you want to encrypt and export the entire vault? This will generate PJM split volumes.</string>
+    <string name="toast_vault_exported">Full vault exported</string>
+    <string name="toast_ingest_summary">Import complete: %1$d imported · %2$d skipped</string>
+    <string name="toast_ingest_summary_failed">Import complete: %1$d imported · %2$d skipped · %3$d failed</string>
+    <string name="toast_encrypt_volumes">Encryption complete: %1$d volumes generated</string>
+    <string name="dialog_title_integrity_results">Check Results</string>
+    <string name="dialog_title_clean_duplicates_confirm">Clean Duplicates</string>
+    <string name="action_deselect_all">Deselect All</string>
+    <string name="action_delete_selected">Delete Selected (%1$d)</string>
+    <string name="label_selected_count_total">Selected %1$d / %2$d</string>
+    <string name="msg_delete_select_hint">Check the files to delete; unchecked files will be kept.</string>
+    <string name="dialog_title_bili_detected">Bili Cache Detected</string>
+    <string name="dialog_msg_bili_found_count">Found %1$d mergeable items, please select:</string>
+    <string name="dialog_title_bili_merged_detected">Merged Videos Detected</string>
+    <string name="dialog_msg_bili_merged_found_count">Found %1$d video files (incl. subfolders), please select:</string>
+
+    <!-- Settings -->
+    <string name="setting_category_automation_vault">Automation &amp; Storage</string>
+    <string name="setting_auto_delete_original">Auto-delete originals</string>
+    <string name="setting_auto_delete_original_desc">Originals vanish once moved to vault (Needs permission)</string>
+    <string name="action_store_and_classify">📥 Store &amp; Classify</string>
+    <string name="settings_title">Personalization &amp; Assets</string>
+    <string name="settings_cat_appearance">Personalization</string>
+    <string name="settings_label_theme">Display Theme</string>
+    <string name="theme_system">System Default</string>
+    <string name="theme_light">Light Mode</string>
+    <string name="theme_dark">Dark Mode</string>
+    <string name="settings_title_custom_bg">Enable Panorama Background</string>
+    <string name="settings_title_select_bg">Select Background Image</string>
+    <string name="settings_desc_select_bg">High-res images recommended</string>
+    <string name="toast_bg_set">Background set</string>
+    <string name="dialog_title_factory_reset_confirm">Factory reset</string>
+    <string name="dialog_msg_factory_reset_confirm">This resets all personalization settings (theme, background, split size, auto-delete, etc.). Your stored files are not affected. Continue?</string>
+    <string name="action_confirm_reset">Reset</string>
+    <string name="toast_settings_reset">Settings reset to factory defaults</string>
+    <string name="settings_title_bg_opacity">Background Opacity</string>
+    <string name="settings_title_custom_font">Custom App Font</string>
+    <string name="settings_desc_font_enabled">Custom font currently enabled</string>
+    <string name="settings_desc_font_disabled">Select a .ttf font file</string>
+    <string name="settings_title_clear_font">Clear Custom Font</string>
+    <string name="settings_title_ui_scale">Global UI Scale</string>
+    <string name="settings_cat_assets">Asset Management</string>
+    <string name="settings_label_grid_columns">Grid Columns</string>
+    <string name="settings_title_auto_extract">Auto-extract Archives</string>
+    <string name="settings_desc_auto_extract">Auto-extract and classify ZIP/7z/RAR upon ingestion</string>
+    <string name="settings_title_random_share">Random Photo Share</string>
+    <string name="settings_desc_random_share">Randomly pick photos from the PJM image vault, encrypt into PJM for sharing</string>
+    <string name="dialog_title_random_share">Random Photo Surprise</string>
+    <string name="dialog_msg_random_share">Randomly pick a number of photos from the PJM image category, encrypt them into the PJM vault. Share from the PJM category afterwards.</string>
+    <string name="label_random_count">Pick count</string>
+    <string name="action_start_random">Start pick</string>
+    <string name="status_random_pick">Picking random photos from the vault...</string>
+    <string name="toast_random_pick_empty">No photos available in the PJM image vault</string>
+    <string name="toast_random_pick_done">%1$d photos encrypted into PJM vault</string>
+    <string name="settings_title_split_size">Split Volume Size (MB)</string>
+    <string name="settings_desc_split_size">Max capacity of each volume during export</string>
+    <string name="settings_title_bili_import">Bilibili Video Import</string>
+    <string name="settings_desc_bili_import">Merge Bili cache fragments and import to vault</string>
+    <string name="settings_title_bili_merged_import">Import Merged Videos</string>
+    <string name="settings_desc_bili_merged_import">Pick a folder to store merged video files (incl. subfolders) into Bili Videos category</string>
+    <string name="setting_bili_merged_auto_delete">Delete source after importing merged videos</string>
+    <string name="setting_bili_merged_auto_delete_desc">Physically delete source video files after storing to vault</string>
+    <string name="settings_title_bili_auto_delete">Delete source files after import</string>
+    <string name="settings_desc_bili_auto_delete">Physically delete the original cache/source files after Bilibili videos are imported</string>
+    <string name="toast_operation_in_progress">Operation in progress, please wait</string>
+    <string name="shizuku_title">Shizuku Privileged Access</string>
+    <string name="shizuku_desc_not_installed">Shizuku not installed. Tap to install (requires wireless debugging)</string>
+    <string name="shizuku_desc_not_running">Shizuku not running. Tap to open and start the service</string>
+    <string name="shizuku_desc_no_permission">Shizuku running. Tap to grant PJM access</string>
+    <string name="shizuku_desc_ready">Shizuku ready. Bili cache accessible</string>
+    <string name="settings_title_clean_duplicates">Clean Duplicate Items</string>
+    <string name="settings_desc_clean_duplicates">Remove identical copies via fingerprinting</string>
+    <string name="settings_title_integrity_check">Vault Integrity Check</string>
+    <string name="settings_desc_integrity_check">Verify file existence and fingerprints</string>
+    <string name="settings_cat_system">System &amp; Maintenance</string>
+    <string name="settings_title_clear_cache_all">Clear Cache &amp; Temp Files</string>
+    <string name="settings_desc_clear_cache_all">Only clears temp cache; keeps thumbnails, perceptual fingerprints &amp; grayscale</string>
+    <string name="toast_system_cleaned">System cleanup complete</string>
+    <string name="settings_title_export_logs">Export Diagnostic Logs</string>
+    <string name="settings_title_factory_reset">Factory Reset</string>
+    <string name="toast_custom_font_applied">Font applied. Restart recommended for best effect.</string>
+    <string name="toast_font_load_failed">Font load failed</string>
+    <string name="toast_no_duplicates">No duplicates found in vault</string>
+    <string name="toast_bili_merged_empty">No video files found in selected directory</string>
+
+    <!-- UI Labels -->
+    <string name="main_title">PJM Vault</string>
+    <string name="label_vault_usage">Vault Storage Usage</string>
+    <string name="label_category_count">%1$d encrypted items</string>
+    <string name="label_file_size">Size: %1$s</string>
+    <string name="label_selected_count">%1$d items selected</string>
+    <string name="label_enter_password">Enter Password</string>
+    <string name="label_reclaimable_space">Reclaimable space: %1$s</string>
+    <string name="label_seek_forward">Fast forward +5%</string>
+    <string name="label_seek_backward">Rewind -5%</string>
+
+    <!-- Messages -->
+    <string name="msg_integrity_ok">System OK. All files are intact.</string>
+    <string name="msg_integrity_missing">Missing files: %1$d</string>
+    <string name="msg_integrity_corrupted">Corrupted files: %1$d</string>
+    <string name="msg_integrity_advice">Try "Sync Database" or re-importing.</string>
+    <string name="msg_duplicates_found">Scan complete. Found %1$d redundant copies (incl. original/thumbnail perceptual matching).</string>
+    <string name="msg_duplicates_cleanup_info">Compare side-by-side before deleting. Recommended deletions are checked by default; uncheck to keep.</string>
+    <string name="label_duplicate_group">Group %1$d · %2$d items</string>
+    <string name="label_recommended_keep">Recommended keep: %1$s</string>
+    <string name="label_recommended_keep_short">Recommended</string>
+    <string name="action_delete_mark">Will delete</string>
+    <string name="action_keep">Keep</string>
+    <string name="msg_pjm_archive_info">This is an archive. You can extract its contents.</string>
+
+    <!-- Passwords -->
+    <string name="strength_weak_desc">Too weak (at least 6 chars recommended)</string>
+    <string name="strength_medium_desc">Medium strength</string>
+    <string name="strength_strong_desc">Very secure password</string>
+
+    <!-- Permissions -->
+    <string name="permission_title">Permission Request</string>
+    <string name="permission_header">"God Mode" Access Required</string>
+    <string name="permission_msg_1">To enable full-disk asset harvesting, physical shredding, and cross-app cache merging (e.g. Bilibili), PJM requires the highest level of system file access.</string>
+    <string name="permission_msg_2">Click the button below to go to system settings and enable "Allow access to all files". This is the foundation of PJM\'s industrial-grade operation.</string>
+
+    <!-- Navigation -->
+    <string name="nav_home">Home</string>
+    <string name="nav_discovery">Explore</string>
+    <string name="nav_settings">Settings</string>
+    <string name="title_batch_mode">Batch Mode</string>
+    <string name="mode_bili_videos">Bili Videos</string>
+    <string name="mode_images">Photos</string>
+    <string name="mode_videos">Videos</string>
+
+    <!-- Choosers -->
+    <string name="chooser_title_share_content">Share Content</string>
+    <string name="chooser_title_share_files">Share Files</string>
+    <string name="chooser_title_share_logs">Share PJM Logs</string>
+</resources>

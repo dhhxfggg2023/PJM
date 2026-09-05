@@ -5,6 +5,7 @@ import android.net.Uri
 import androidx.compose.runtime.Immutable
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.dhhxfggg.pjm.R
 import com.dhhxfggg.pjm.domain.service.VaultService
 import com.dhhxfggg.pjm.domain.util.*
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -69,8 +70,33 @@ class CryptoViewModel @Inject constructor(
             VaultManager.operationResults.collect { result ->
                 when (result) {
                     is OperationResult.Success -> {
-                        if (result.action == VaultService.ACTION_STORE) {
-                            _events.emit(CryptoEvent.RequestDeletePermission(result.uris))
+                        when (result.action) {
+                            VaultService.ACTION_STORE -> {
+                                // 操作结果汇总反馈
+                                if (result.failed > 0) {
+                                    android.widget.Toast.makeText(
+                                        app,
+                                        app.getString(R.string.toast_ingest_summary_failed, result.imported, result.skipped, result.failed),
+                                        android.widget.Toast.LENGTH_LONG
+                                    ).show()
+                                } else {
+                                    android.widget.Toast.makeText(
+                                        app,
+                                        app.getString(R.string.toast_ingest_summary, result.imported, result.skipped),
+                                        android.widget.Toast.LENGTH_SHORT
+                                    ).show()
+                                }
+                                if (result.uris.isNotEmpty()) {
+                                    _events.emit(CryptoEvent.RequestDeletePermission(result.uris))
+                                }
+                            }
+                            VaultService.ACTION_ENCRYPT -> {
+                                android.widget.Toast.makeText(
+                                    app,
+                                    app.getString(R.string.toast_encrypt_volumes, result.volumes),
+                                    android.widget.Toast.LENGTH_SHORT
+                                ).show()
+                            }
                         }
                     }
                     is OperationResult.PasswordRequired -> {

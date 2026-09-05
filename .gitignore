@@ -1,15 +1,49 @@
-*.iml
-.gradle
-/local.properties
-/.idea/caches
-/.idea/libraries
-/.idea/modules.xml
-/.idea/workspace.xml
-/.idea/navEditor.xml
-/.idea/assetWizardSettings.xml
-.DS_Store
-/build
-/captures
-.externalNativeBuild
-.cxx
+# ===== Gradle =====
+.gradle/
+build/
+*/build/
+!src/**/build/
+!**/src/**/build/
+
+# ===== Android =====
 local.properties
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+*.ap_
+*.dex
+*.hprof
+*.keystore
+*.jks
+*.p12
+
+# ===== IDE: IntelliJ / Android Studio =====
+.idea/
+*.iml
+*.ipr
+*.iws
+out/
+
+# ===== Visual Studio (CMake 调试残留) =====
+.vs/
+
+# ===== AI 工具临时产物（不入库） =====
+.artifacts/
+
+# ===== 本地开发工具（便携版 gh 等，不入库） =====
+.tools/
+
+# ===== macOS / Windows =====
+.DS_Store
+Thumbs.db
+
+# ===== Kotlin =====
+.kotlin/
+
+# ===== 日志 =====
+*.log
+
+# ===== Room schema（入库，供迁移测试）=====
+!app/schemas/

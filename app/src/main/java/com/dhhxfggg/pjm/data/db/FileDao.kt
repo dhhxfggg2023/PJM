@@ -58,6 +58,13 @@ interface FileDao {
     suspend fun isDuplicate(name: String, size: Long): Boolean
 
     /**
+     * Finds an existing file with the same name and size (candidate for content comparison).
+     * Used to verify real duplicates via content hash before skipping ingestion.
+     */
+    @Query("SELECT * FROM files WHERE name = :name AND size = :size LIMIT 1")
+    suspend fun findDuplicateCandidate(name: String, size: Long): FileEntity?
+
+    /**
      * Deletes a specific file record by its path.
      */
     @Query("DELETE FROM files WHERE relativePath = :relativePath")
@@ -123,6 +130,27 @@ interface FileDao {
      */
     @Query("SELECT * FROM files WHERE category = :category AND relativePath NOT IN (:excludePaths) ORDER BY RANDOM() LIMIT :limit")
     suspend fun getRandomFilesByCategoryExcluding(category: String, excludePaths: List<String>, limit: Int): List<FileEntity>
+
+    /**
+     * 大库优化：基于主键游标的分页查询（按 id 顺序取页），
+     * 避免 ORDER BY RANDOM() 在全表排序（50GB/万级记录时极慢）。
+     * 用于发现页"已看完全部后"的翻页浏览。
+     */
+    @Query("SELECT * FROM files WHERE category = :category AND id > :afterId ORDER BY id LIMIT :limit")
+    suspend fun getFilesByCategoryPage(category: String, afterId: Long, limit: Int): List<FileEntity>
+
+    /**
+     * 获取分类内最大 id（用于分页游标起点判断）。
+     */
+    @Query("SELECT MAX(id) FROM files WHERE category = :category")
+    suspend fun getMaxIdByCategory(category: String): Long?
+
+    /**
+     * 大库优化：取分类内最近导入的一个文件作为封面（走 lastModified 索引，O(log n)），
+     * 替代 ORDER BY RANDOM()（全表排序，万级记录时卡顿）。
+     */
+    @Query("SELECT * FROM files WHERE category = :category ORDER BY id DESC LIMIT 1")
+    suspend fun getLatestFileByCategory(category: String): FileEntity?
 
     /**
      * Retrieves all relative paths for a category.

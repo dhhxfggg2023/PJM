@@ -1,7 +1,7 @@
 package com.dhhxfggg.pjm
 
 import android.app.Application
-import android.content.Context
+import androidx.core.content.edit
 import coil3.ImageLoader
 import coil3.SingletonImageLoader
 import coil3.PlatformContext
@@ -11,9 +11,17 @@ import coil3.memory.MemoryCache
 import coil3.request.crossfade
 import coil3.request.allowHardware
 import okio.Path.Companion.toPath
+import com.dhhxfggg.pjm.data.db.FileDao
 import com.dhhxfggg.pjm.domain.util.PjmLogger
+import com.dhhxfggg.pjm.domain.util.SettingsManager
+import com.dhhxfggg.pjm.domain.util.ThumbnailSyncManager
 import com.dhhxfggg.pjm.domain.util.VaultManager
+import com.dhhxfggg.pjm.domain.shizuku.ShizukuBridge
+import dagger.hilt.EntryPoint
+import dagger.hilt.InstallIn
+import dagger.hilt.android.EntryPointAccessors
 import dagger.hilt.android.HiltAndroidApp
+import dagger.hilt.components.SingletonComponent
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -31,7 +39,19 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
         val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         
         /** 是否开启 7z 兼容层支持 */
-        const val isSevenZipEnabled: Boolean = true
+        const val IS_SEVEN_ZIP_ENABLED: Boolean = true
+    }
+
+    /**
+     * 非组件（Application）获取 Hilt 单例的入口。
+     * 用于在冷启动阶段拉起缩略图后台同步。
+     */
+    @EntryPoint
+    @InstallIn(SingletonComponent::class)
+    interface MainAppEntryPoint {
+        fun thumbnailSyncManager(): ThumbnailSyncManager
+        fun fileDao(): FileDao
+        fun settingsManager(): SettingsManager
     }
 
     /**
@@ -55,25 +75,56 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
                 // 添加视频缩略图支持
                 add(VideoFrameDecoder.Factory())
             }
-            .allowHardware(true)
-            .crossfade(false) 
+            .allowHardware(enable = true)
+            .crossfade(enable = false) 
             .build()
     }
 
     override fun onCreate() {
         super.onCreate()
-        // 初始化日志系统
+        // 核心修复：显式初始化日志引擎，确保文件物理落盘
         PjmLogger.init(this)
-        PjmLogger.i("MainApplication", "PJM 应用引擎已启动，兼容层支持: $isSevenZipEnabled")
+
+        // 初始化 Shizuku 桥接（检测服务/授权状态，用于突破 Android/data 访问限制）
+        ShizukuBridge.init(this)
+
+        // 核心修复：冷启动后自动补齐缺失缩略图（半永久缓存，空闲时后台生成，不抢进度条）
+        try {
+            EntryPointAccessors.fromApplication(this, MainAppEntryPoint::class.java)
+                .thumbnailSyncManager()
+                .scheduleSync(initialDelayMs = 3000)
+        } catch (e: Exception) {
+            PjmLogger.w("MainApplication", "ThumbnailSyncManager 初始化失败: ${e.message}")
+        }
+
+        PjmLogger.i("MainApplication", "PJM 应用引擎已启动，兼容层支持: $IS_SEVEN_ZIP_ENABLED")
+
+        // 一次性命名迁移：把旧命名规则的加密容器统一为最新规范
+        // `前缀_yyyyMMdd_HHmmss.pjm.N`（如旧式 Export_<毫秒>.pjm.1、X.pjm 单卷缺数字）
+        // 使用版本化标志（v2），保证在旧迁移已置位的情况下本次也会执行一次；
+        // 迁移幂等、失败不写标志，下次启动自动重试，且不会阻塞启动。
+        applicationScope.launch(VaultManager.PjmDispatchers.Database) {
+            runCatching {
+                val entry = EntryPointAccessors.fromApplication(this@MainApplication, MainAppEntryPoint::class.java)
+                val settingsManager = entry.settingsManager()
+                if (!settingsManager.isPjmNamingMigrationDone()) {
+                    val migratedCount = VaultManager.migrateLegacyPjmNaming(this@MainApplication, entry.fileDao())
+                    if (migratedCount > 0) {
+                        PjmLogger.i("MainApplication", "PJM 命名迁移完成：$migratedCount 个旧命名文件已统一")
+                    }
+                    settingsManager.setPjmNamingMigrationDone(true)
+                }
+            }.onFailure { e -> PjmLogger.w("MainApplication", "PJM 命名迁移跳过: ${e.message}") }
+        }
 
         // 每日自动备份数据库
         applicationScope.launch(VaultManager.PjmDispatchers.Database) {
-            val prefs = getSharedPreferences("pjm_backup_prefs", Context.MODE_PRIVATE)
+            val prefs = getSharedPreferences("pjm_backup_prefs", MODE_PRIVATE)
             val lastBackup = prefs.getLong("last_backup_time", 0L)
             val currentTime = System.currentTimeMillis()
-            if (currentTime - lastBackup > 24 * 60 * 60 * 1000L) {
+            if ((currentTime - lastBackup) > 24 * 60 * 60 * 1000L) {
                 VaultManager.backupDatabase(this@MainApplication)
-                prefs.edit().putLong("last_backup_time", currentTime).apply()
+                prefs.edit { putLong("last_backup_time", currentTime) }
             }
         }
     }
