@@ -17,6 +17,9 @@
     <!-- Shizuku：以 shell/root 身份访问 Android/data -->
     <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
 
+    <!-- 检查更新：访问 GitHub Release API -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <application
         android:name=".MainApplication"
         android:allowBackup="true"

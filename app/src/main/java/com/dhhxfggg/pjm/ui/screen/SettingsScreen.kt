@@ -48,6 +48,7 @@ import com.dhhxfggg.pjm.domain.util.BiliBridge
 import com.dhhxfggg.pjm.domain.util.FileUtils
 import com.dhhxfggg.pjm.domain.util.PjmLogger
 import com.dhhxfggg.pjm.domain.util.ThumbnailCache
+import com.dhhxfggg.pjm.domain.util.UpdateChecker
 import com.dhhxfggg.pjm.domain.util.VaultManager
 import com.dhhxfggg.pjm.ui.component.PjmAeroDialog
 import com.dhhxfggg.pjm.ui.component.PjmDuplicateCompareDialog
@@ -188,6 +189,10 @@ fun SettingsScreen(
     var showFactoryResetConfirm by remember { mutableStateOf(false) }
     var showRandomShareDialog by remember { mutableStateOf(false) }
 
+    // 检查更新状态
+    var isCheckingUpdate by remember { mutableStateOf(false) }
+    var updateCheckResult by remember { mutableStateOf<UpdateChecker.CheckResult?>(null) }
+
     Scaffold(
         topBar = {
             CenterAlignedTopAppBar(
@@ -252,6 +257,16 @@ fun SettingsScreen(
                         settingsViewModel = settingsViewModel,
                         mainViewModel = mainViewModel,
                         onShowExportConfirm = { showExportConfirm = true },
+                        onCheckUpdate = {
+                            if (isCheckingUpdate) return@MaintenanceSettings
+                            isCheckingUpdate = true
+                            updateCheckResult = null
+                            scope.launch {
+                                val result = UpdateChecker.checkForUpdate(context)
+                                updateCheckResult = result
+                                isCheckingUpdate = false
+                            }
+                        },
                         onCheckIntegrity = {
                             scope.launch(VaultManager.PjmDispatchers.IO) {
                                 settingsViewModel.checkIntegrity { results -> integrityResults = results }
@@ -450,6 +465,62 @@ fun SettingsScreen(
                     singleLine = true,
                     keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number)
                 )
+            }
+        }
+    }
+
+    // 检查更新弹窗（检查中 / 结果展示）
+    if (isCheckingUpdate) {
+        PjmAeroDialog(
+            onDismissRequest = { },
+            title = "检查更新",
+            icon = { CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp) },
+            confirmButton = {},
+            dismissButton = {}
+        ) {
+            Text("正在连接更新服务器…", style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+
+    updateCheckResult?.let { result ->
+        PjmAeroDialog(
+            onDismissRequest = { updateCheckResult = null },
+            title = when (result) {
+                is UpdateChecker.CheckResult.UpdateAvailable -> "发现新版本"
+                is UpdateChecker.CheckResult.UpToDate -> "已是最新版本"
+                is UpdateChecker.CheckResult.Failed -> "检查失败"
+            },
+            confirmButton = {
+                if (result is UpdateChecker.CheckResult.UpdateAvailable) {
+                    Button(onClick = {
+                        updateCheckResult = null
+                        UpdateChecker.openReleasePage(context)
+                    }) { Text("前往下载") }
+                } else {
+                    Button(onClick = { updateCheckResult = null }) { Text(stringResource(R.string.action_dismiss)) }
+                }
+            },
+            dismissButton = { TextButton(onClick = { updateCheckResult = null }) { Text(stringResource(R.string.action_cancel)) } }
+        ) {
+            when (result) {
+                is UpdateChecker.CheckResult.UpdateAvailable -> {
+                    Column {
+                        Text("当前版本：v${result.currentVersion}", style = MaterialTheme.typography.bodyMedium)
+                        Text("最新版本：v${result.latestVersion}", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                        if (result.releaseNotes.isNotBlank()) {
+                            Spacer(Modifier.height(12.dp))
+                            Text("更新内容：", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+                            Spacer(Modifier.height(4.dp))
+                            Text(result.releaseNotes, style = MaterialTheme.typography.bodySmall, maxLines = 8, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
+                is UpdateChecker.CheckResult.UpToDate -> {
+                    Text("您已在使用最新版本 (v${result.currentVersion}) ✅", style = MaterialTheme.typography.bodyMedium)
+                }
+                is UpdateChecker.CheckResult.Failed -> {
+                    Text(result.message, style = MaterialTheme.typography.bodyMedium)
+                }
             }
         }
     }
@@ -770,6 +841,7 @@ private fun MaintenanceSettings(
     settingsViewModel: SettingsViewModel,
     mainViewModel: MainViewModel,
     onShowExportConfirm: () -> Unit,
+    onCheckUpdate: () -> Unit,
     onCheckIntegrity: () -> Unit,
     onExportLogs: () -> Unit,
     onClearCache: () -> Unit,
@@ -782,6 +854,9 @@ private fun MaintenanceSettings(
             SettingsButton(icon = Lucide.SquareCheck, title = stringResource(R.string.settings_title_clean_duplicates), description = stringResource(R.string.settings_desc_clean_duplicates), onClick = { settingsViewModel.scanForDuplicates() })
             SettingsButton(icon = Lucide.ShieldCheck, title = stringResource(R.string.settings_title_integrity_check), description = stringResource(R.string.settings_desc_integrity_check), onClick = onCheckIntegrity)
             SettingsButton(icon = Lucide.CloudUpload, title = "全库导出为 PJM 分卷", description = "打包所有私有资产为加密备份文件", onClick = onShowExportConfirm)
+        }
+        SettingsCategory(title = "软件更新") {
+            SettingsButton(icon = Lucide.Download, title = "检查更新", description = "检查 GitHub 上是否有新版本安装包", onClick = onCheckUpdate)
         }
         SettingsCategory(title = "随机分享") {
             SettingsButton(icon = Lucide.Shuffle, title = stringResource(R.string.settings_title_random_share), description = stringResource(R.string.settings_desc_random_share), onClick = onRandomShare)
