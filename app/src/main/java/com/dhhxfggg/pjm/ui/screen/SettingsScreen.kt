@@ -193,6 +193,11 @@ fun SettingsScreen(
     var isCheckingUpdate by remember { mutableStateOf(false) }
     var updateCheckResult by remember { mutableStateOf<UpdateChecker.CheckResult?>(null) }
 
+    // 应用内下载状态
+    var isDownloadingUpdate by remember { mutableStateOf(false) }
+    var downloadProgress by remember { mutableFloatStateOf(0f) }
+    var downloadError by remember { mutableStateOf<String?>(null) }
+
     Scaffold(
         topBar = {
             CenterAlignedTopAppBar(
@@ -493,20 +498,46 @@ fun SettingsScreen(
             confirmButton = {
                 if (result is UpdateChecker.CheckResult.UpdateAvailable) {
                     Button(onClick = {
+                        val apkUrl = result.apkUrl
                         updateCheckResult = null
-                        UpdateChecker.openReleasePage(context)
-                    }) { Text("前往下载") }
+                        // 应用内直接下载（不进浏览器）
+                        scope.launch {
+                            isDownloadingUpdate = true
+                            downloadProgress = 0f
+                            downloadError = null
+                            // Compose snapshot state 支持跨线程写入，进度直接在 IO 回调里更新
+                            val dlResult = UpdateChecker.downloadApk(context, apkUrl) { progress ->
+                                downloadProgress = progress
+                            }
+                            isDownloadingUpdate = false
+                            when (dlResult) {
+                                is UpdateChecker.DownloadResult.Success -> {
+                                    val ok = UpdateChecker.installApk(context, dlResult.apkFile)
+                                    if (!ok) {
+                                        downloadError = "下载完成，但无法自动拉起安装，请到系统设置中允许「安装未知应用」后重试。"
+                                    }
+                                }
+                                is UpdateChecker.DownloadResult.Error -> {
+                                    downloadError = dlResult.message
+                                }
+                            }
+                        }
+                    }) { Text("下载并安装") }
                 } else {
                     Button(onClick = { updateCheckResult = null }) { Text(stringResource(R.string.action_dismiss)) }
                 }
             },
-            dismissButton = { TextButton(onClick = { updateCheckResult = null }) { Text(stringResource(R.string.action_cancel)) } }
+            dismissButton = {
+                TextButton(onClick = { updateCheckResult = null }) { Text(stringResource(R.string.action_cancel)) }
+            }
         ) {
             when (result) {
                 is UpdateChecker.CheckResult.UpdateAvailable -> {
-                    Column {
+                    Column(Modifier.fillMaxWidth()) {
                         Text("当前版本：v${result.currentVersion}", style = MaterialTheme.typography.bodyMedium)
                         Text("最新版本：v${result.latestVersion}", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                        Spacer(Modifier.height(8.dp))
+                        Text("点击「下载并安装」将直接在本应用内下载安装包（约 4~5 MB），完成后自动拉起安装。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         if (result.releaseNotes.isNotBlank()) {
                             Spacer(Modifier.height(12.dp))
                             Text("更新内容：", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
@@ -522,6 +553,52 @@ fun SettingsScreen(
                     Text(result.message, style = MaterialTheme.typography.bodyMedium)
                 }
             }
+        }
+    }
+
+    // 应用内下载进度弹窗
+    if (isDownloadingUpdate) {
+        PjmAeroDialog(
+            onDismissRequest = { },
+            title = "正在下载更新",
+            confirmButton = {},
+            dismissButton = {}
+        ) {
+            Column(Modifier.fillMaxWidth()) {
+                LinearProgressIndicator(
+                    progress = { downloadProgress },
+                    modifier = Modifier.fillMaxWidth().height(6.dp),
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    "${(downloadProgress * 100).toInt()}%",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.align(Alignment.CenterHorizontally)
+                )
+                Spacer(Modifier.height(4.dp))
+                Text("下载完成后将自动拉起安装，请勿关闭本页面…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+
+    // 下载失败/安装引导弹窗
+    downloadError?.let { err ->
+        PjmAeroDialog(
+            onDismissRequest = { downloadError = null },
+            title = "下载未完成",
+            confirmButton = {
+                Button(onClick = {
+                    downloadError = null
+                    updateCheckResult = null
+                    UpdateChecker.openReleasePage(context)
+                }) { Text("前往浏览器下载") }
+            },
+            dismissButton = {
+                TextButton(onClick = { downloadError = null }) { Text(stringResource(R.string.action_cancel)) }
+            }
+        ) {
+            Text(err, style = MaterialTheme.typography.bodyMedium)
         }
     }
 
