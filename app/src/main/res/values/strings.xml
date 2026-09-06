@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">PJM</string>
-    
+
     <!-- Actions -->
     <string name="action_clear_cache">清空缓存</string>
     <string name="action_select_all">全选</string>
@@ -31,7 +31,7 @@
     <string name="shortcut_encrypt_long">立即开始加密文件</string>
     <string name="shortcut_cabinet">查看文件</string>
     <string name="shortcut_cabinet_long">打开文件柜查看已还原文件</string>
-    
+
     <!-- Status & Progress -->
     <string name="status_ready">就绪</string>
     <string name="status_processing">正在处理文件...</string>
@@ -357,4 +357,9 @@
     <string name="fast_seek_forward">快进 +%1$ds</string>
     <string name="fast_seek_backward">后退 %1$ds</string>
     <string name="label_file_name_prefix">名称：%1$s</string>
+
+    <!-- 顶部版本更新提示横幅 -->
+    <string name="update_banner_text">发现新版本 v%1$s，点击下载安装</string>
+    <string name="update_banner_downloading">正在下载新版本… %1$d%%</string>
+    <string name="update_banner_close">关闭</string>
 </resources>

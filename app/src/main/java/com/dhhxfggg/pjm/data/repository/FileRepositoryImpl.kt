@@ -16,6 +16,7 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.random.Random
@@ -42,6 +43,9 @@ class FileRepositoryImpl
         private val fileDao: FileDao,
         private val settingsManager: SettingsManager,
     ) : FileRepository {
+        // 上次随机选中的每个分类文件 id（用于封面刷新时避免连续两次相同）
+        private val lastRandomFileId = ConcurrentHashMap<String, Long>()
+
         override val allFiles: Flow<List<FileEntity>> =
             fileDao
                 .getAllFiles()
@@ -86,17 +90,25 @@ class FileRepositoryImpl
         override suspend fun exportVault(onProgress: (Float) -> Unit): Result<Int> = VaultManager.exportVaultToPjmModule(context, fileDao, onProgress)
 
         override suspend fun getRandomFileByCategory(category: String): FileEntity? {
-            // 核心修复（保留“随机封面彩蛋”+ 大库性能）：
-            // 原 ORDER BY RANDOM() 在万级记录时全表排序卡顿；
-            // 现改为：随机取主键下界 → 走 id 索引取 >= 下界的第一条（O(log n)），
-            // 随机下界越过最大 id（空洞/删除导致）时回绕到该分类第一条，保证总能返回。
-            val maxId = fileDao.getMaxIdByCategory(category) ?: return null
-            val first =
-                fileDao.getFilesByCategoryPage(category, afterId = -1L, limit = 1).firstOrNull()
-                    ?: return null
-            if (maxId <= first.id) return first
-            val randomLower = Random.nextLong(first.id, maxId + 1)
-            return fileDao.getFileAtOrAfterId(category, randomLower) ?: first
+            // 核心修复（所有分类封面都要能随机变）：
+            // 旧实现“随机 id 下界 + id>= 定位”在 id 存在大空洞的分类（如视频库经大量删除/穿插）
+            // 会频繁落空回退到首条 → 封面看起来不变。
+            // 现改为按【记录数】均匀随机：count → 随机 offset → 按 id 取第 offset 条。
+            // 并在记录数 > 1 时避开上次选中的同一条，保证点一下封面确实变化。
+            val count = fileDao.getCountByCategory(category)
+            if (count <= 0) return null
+            var offset = Random.nextInt(count)
+            val lastId = lastRandomFileId[category]
+            if (lastId != null && count > 1) {
+                // 先取随机 offset 对应记录；若恰好是上次那条则顺移一条
+                val candidate = fileDao.getFileByOffset(category, offset)
+                if (candidate != null && candidate.id == lastId) {
+                    offset = (offset + 1) % count
+                }
+            }
+            val picked = fileDao.getFileByOffset(category, offset) ?: return null
+            lastRandomFileId[category] = picked.id
+            return picked
         }
 
         override suspend fun getLatestFileByCategory(category: String): FileEntity? = fileDao.getLatestFileByCategory(category)

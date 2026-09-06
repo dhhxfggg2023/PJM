@@ -357,4 +357,9 @@
     <string name="fast_seek_forward">Forward +%1$ds</string>
     <string name="fast_seek_backward">Backward %1$ds</string>
     <string name="label_file_name_prefix">Name: %1$s</string>
+
+    <!-- Top update banner -->
+    <string name="update_banner_text">New version v%1$s available, tap to download</string>
+    <string name="update_banner_downloading">Downloading new version… %1$d%%</string>
+    <string name="update_banner_close">Dismiss</string>
 </resources>

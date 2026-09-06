@@ -49,6 +49,7 @@ import com.composables.icons.lucide.X
 import com.dhhxfggg.pjm.domain.util.*
 import com.dhhxfggg.pjm.ui.component.EnhancedPasswordInput
 import com.dhhxfggg.pjm.ui.component.PjmAeroDialog
+import com.dhhxfggg.pjm.ui.component.UpdateNoticeBanner
 import com.dhhxfggg.pjm.ui.navigation.AppNavHost
 import com.dhhxfggg.pjm.ui.navigation.Screen
 import com.dhhxfggg.pjm.ui.screen.PermissionScreen
@@ -195,6 +196,11 @@ class MainActivity : ComponentActivity() {
                                         )
                                     }
                                 }
+                            }
+
+                            // 顶部版本更新提示：仅在无任务进度时展示，避免与进度卡重叠
+                            if (opTasks.isEmpty()) {
+                                UpdateNoticeBanner(modifier = Modifier.align(Alignment.TopCenter))
                             }
 
                             // 网关与对话框组件 (UI 分离)

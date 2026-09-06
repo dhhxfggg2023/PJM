@@ -170,19 +170,15 @@ interface FileDao {
     ): List<FileEntity>
 
     /**
-     * 获取分类内最大 id（用于分页游标起点判断）。
+     * 取分类内第 [offset] 条（按 id 升序，0 起），配合随机 offset 实现【均匀随机】封面。
+     * 相比“随机 id 下界”方案，本方法不受全局自增 id 空洞影响——
+     * 视频等分类若大量删除/被其他分类穿插，id 区间存在大空洞，
+     * 随机下界常落空导致回退到首条（封面看起来“不变”）。
      */
-    @Query("SELECT MAX(id) FROM files WHERE category = :category")
-    suspend fun getMaxIdByCategory(category: String): Long?
-
-    /**
-     * 按主键定位：取分类内 id ≥ [afterId] 的第一条（走主键索引，O(log n)）。
-     * 供“随机封面”用：随机取一个 id 下界后此处定位，避免 ORDER BY RANDOM() 全表排序。
-     */
-    @Query("SELECT * FROM files WHERE category = :category AND id >= :afterId ORDER BY id LIMIT 1")
-    suspend fun getFileAtOrAfterId(
+    @Query("SELECT * FROM files WHERE category = :category ORDER BY id LIMIT 1 OFFSET :offset")
+    suspend fun getFileByOffset(
         category: String,
-        afterId: Long,
+        offset: Int,
     ): FileEntity?
 
     /**
