@@ -238,8 +238,9 @@ object UpdateChecker {
     /**
      * 逐段数字比较版本号 a 是否比 b 新。
      * 非数字段会被忽略（如 "1.8.7-beta" 按 1.8.7 处理）。
+     * internal：供 UpdateCheckerTest 做纯 JVM 单元测试。
      */
-    private fun isNewer(a: String, b: String): Boolean {
+    internal fun isNewer(a: String, b: String): Boolean {
         val pa = a.split(".").mapNotNull { it.toIntOrNull() }
         val pb = b.split(".").mapNotNull { it.toIntOrNull() }
         val maxLen = maxOf(pa.size, pb.size)

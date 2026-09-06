@@ -252,4 +252,59 @@
     <string name="chooser_title_share_content">Share Content</string>
     <string name="chooser_title_share_files">Share Files</string>
     <string name="chooser_title_share_logs">Share PJM Logs</string>
+
+    <!-- Settings Categories -->
+    <string name="settings_cat_adaptive">Adaptive Interface</string>
+    <string name="settings_cat_ingestion">Ingestion Policies</string>
+    <string name="settings_cat_bili">Bilibili Content</string>
+    <string name="settings_cat_maintenance">Maintenance Tools</string>
+    <string name="settings_cat_theme_colors">Colors &amp; Theme</string>
+    <string name="settings_cat_frosted_background">Frosted Background</string>
+    <string name="settings_cat_canvas_scale">Canvas Scale</string>
+    <string name="settings_cat_view_config">View Options</string>
+    <string name="settings_cat_auto_rules">Automation Rules</string>
+    <string name="settings_cat_split_policy">Volume Splitting</string>
+    <string name="settings_cat_privileged_access">Privileged Access (PC adb)</string>
+    <string name="settings_cat_data_access">Data Access</string>
+    <string name="settings_cat_post_process">Post-processing</string>
+    <string name="settings_cat_asset_maintenance">Asset Maintenance</string>
+    <string name="settings_cat_update">Updates</string>
+    <string name="settings_cat_random_share">Random Share</string>
+    <string name="settings_cat_diagnostics">Diagnostics</string>
+
+    <!-- Settings entries & descriptions -->
+    <string name="toggle_on">On</string>
+    <string name="toggle_off">Off</string>
+    <string name="settings_title_appearance">Appearance &amp; Personalization</string>
+    <string name="settings_desc_appearance_summary">Theme: %1$s, UI scale: %2$s</string>
+    <string name="settings_title_auto_ingest">Auto-ingestion Config</string>
+    <string name="settings_desc_auto_delete_grid">Auto-delete originals: %1$s, Grid: %2$d cols</string>
+    <string name="settings_title_bili_scan_strategy">Offline Video Scan Strategy</string>
+    <string name="settings_desc_bili_auto_delete_summary">Delete cache after import: %1$s</string>
+    <string name="settings_title_diag_maintenance">Diagnostics &amp; Maintenance</string>
+    <string name="settings_desc_diag_maintenance">Sync database, verify integrity and export logs</string>
+    <string name="settings_title_dynamic_color">Dynamic Color (Material You)</string>
+    <string name="settings_desc_dynamic_color">On: follow system wallpaper colors; Off: use PJM\'s signature palette</string>
+    <string name="toast_privileged_ready_all">Privileged access ready, can reach all app directories</string>
+    <string name="toast_privileged_not_running">Privileged service not running. Start it via &quot;Start via PC&quot; below</string>
+    <string name="settings_status_privileged_ready">Privileged access ready</string>
+    <string name="settings_status_privileged_not_running">Privileged service not running</string>
+    <string name="settings_desc_privileged_ready_detail">Running as shell, can access all app directories</string>
+    <string name="settings_desc_privileged_not_running_detail">Run the adb command via &quot;Start via PC&quot; below (one-time)</string>
+    <string name="settings_title_adb_start_service">Start service via PC</string>
+    <string name="settings_desc_adb_start_service">Connect phone to PC via USB and run an adb command to start PJM\'s built-in privileged service (no Shizuku needed)</string>
+    <string name="settings_title_adb_start_service_dialog">Start Privileged Service via PC</string>
+    <string name="settings_title_import_unmerged">Import Unmerged Videos</string>
+    <string name="settings_desc_import_unmerged">Pick a folder, detect and merge separated Bilibili m4s streams</string>
+    <string name="toast_auth_records_destroyed">All authorization records destroyed</string>
+    <string name="settings_title_export_pjm_volumes">Export vault to PJM volumes</string>
+    <string name="settings_desc_export_pjm_volumes">Pack all private assets into encrypted backup files</string>
+    <string name="settings_title_check_update">Check for Updates</string>
+    <string name="settings_desc_check_update">Check GitHub for a newer release</string>
+    <string name="settings_desc_clear_cache_only_tmp">Only clears temp cache, keeps thumbnails</string>
+    <string name="toast_copied_to_clipboard">Command copied to clipboard</string>
+    <string name="action_copy_command">Copy Command</string>
+    <string name="dialog_label_steps">Steps:</string>
+    <string name="dialog_msg_adb_steps">1. Connect your phone to the PC via USB and enable Developer options + USB debugging\n2. Run the command below in the PC terminal (it already includes your device serial)\n3. After the service starts, it can access all app directories as shell</string>
+    <string name="dialog_msg_adb_multi_device_hint">If adb reports multiple devices, run &quot;adb devices&quot; to find your serial and replace the -s argument.</string>
 </resources>

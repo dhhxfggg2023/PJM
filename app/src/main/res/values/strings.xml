@@ -252,4 +252,59 @@
     <string name="chooser_title_share_content">分享内容</string>
     <string name="chooser_title_share_files">分享文件</string>
     <string name="chooser_title_share_logs">分享 PJM 运行日志</string>
+
+    <!-- Settings 分组标题 -->
+    <string name="settings_cat_adaptive">界面自适应</string>
+    <string name="settings_cat_ingestion">通用入库策略</string>
+    <string name="settings_cat_bili">Bilibili 内容适配</string>
+    <string name="settings_cat_maintenance">高级维护工具</string>
+    <string name="settings_cat_theme_colors">色彩与主题</string>
+    <string name="settings_cat_frosted_background">磨砂透明背景</string>
+    <string name="settings_cat_canvas_scale">画布比例</string>
+    <string name="settings_cat_view_config">视图配置</string>
+    <string name="settings_cat_auto_rules">自动化规则</string>
+    <string name="settings_cat_split_policy">分卷策略</string>
+    <string name="settings_cat_privileged_access">特权访问（电脑 adb，免目录授权）</string>
+    <string name="settings_cat_data_access">数据穿透</string>
+    <string name="settings_cat_post_process">后置处理</string>
+    <string name="settings_cat_asset_maintenance">资产维护</string>
+    <string name="settings_cat_update">软件更新</string>
+    <string name="settings_cat_random_share">随机分享</string>
+    <string name="settings_cat_diagnostics">系统诊断</string>
+
+    <!-- Settings 条目与说明 -->
+    <string name="toggle_on">开启</string>
+    <string name="toggle_off">关闭</string>
+    <string name="settings_title_appearance">外观与个性化</string>
+    <string name="settings_desc_appearance_summary">当前主题: %1$s, UI 缩放: %2$s</string>
+    <string name="settings_title_auto_ingest">自动化入库配置</string>
+    <string name="settings_desc_auto_delete_grid">自动删除原件: %1$s, 网格: %2$d 列</string>
+    <string name="settings_title_bili_scan_strategy">离线视频扫描策略</string>
+    <string name="settings_desc_bili_auto_delete_summary">导入后清理缓存: %1$s</string>
+    <string name="settings_title_diag_maintenance">系统诊断与维护</string>
+    <string name="settings_desc_diag_maintenance">同步数据库、检查完整性及导出日志</string>
+    <string name="settings_title_dynamic_color">壁纸动态取色 (Material You)</string>
+    <string name="settings_desc_dynamic_color">开启：跟随系统壁纸配色；关闭：使用 PJM 专属海洋蓝莫兰迪配色</string>
+    <string name="toast_privileged_ready_all">特权访问已就绪，可直接访问所有应用目录</string>
+    <string name="toast_privileged_not_running">特权服务未运行，请通过下方「通过电脑启动服务」启动</string>
+    <string name="settings_status_privileged_ready">特权访问已就绪</string>
+    <string name="settings_status_privileged_not_running">特权服务未运行</string>
+    <string name="settings_desc_privileged_ready_detail">已以 shell 身份运行，可直接访问所有应用目录</string>
+    <string name="settings_desc_privileged_not_running_detail">通过下方「通过电脑启动服务」执行 adb 命令（一次性）</string>
+    <string name="settings_title_adb_start_service">通过电脑启动服务</string>
+    <string name="settings_desc_adb_start_service">USB 连电脑执行 adb 命令，启动 PJM 内置特权服务（无需装 Shizuku）</string>
+    <string name="settings_title_adb_start_service_dialog">通过电脑启动特权服务</string>
+    <string name="settings_title_import_unmerged">导入未合并视频</string>
+    <string name="settings_desc_import_unmerged">选择目录，识别 B站 分离的 m4s 音视频并合并导入</string>
+    <string name="toast_auth_records_destroyed">所有授权记录已物理销毁</string>
+    <string name="settings_title_export_pjm_volumes">全库导出为 PJM 分卷</string>
+    <string name="settings_desc_export_pjm_volumes">打包所有私有资产为加密备份文件</string>
+    <string name="settings_title_check_update">检查更新</string>
+    <string name="settings_desc_check_update">检查 GitHub 上是否有新版本安装包</string>
+    <string name="settings_desc_clear_cache_only_tmp">仅清临时缓存，保留缩略图</string>
+    <string name="toast_copied_to_clipboard">命令已复制到剪贴板</string>
+    <string name="action_copy_command">复制命令</string>
+    <string name="dialog_label_steps">步骤：</string>
+    <string name="dialog_msg_adb_steps">1. 手机 USB 连接电脑，开启开发者选项 + USB 调试\n2. 在电脑终端执行下面这条命令（已带你的设备序列号）\n3. 服务启动后即可以 shell 身份访问所有应用目录</string>
+    <string name="dialog_msg_adb_multi_device_hint">若 adb 提示多个设备，请先运行 adb devices 查看你手机的序列号，再手动替换命令中的 -s 参数。</string>
 </resources>
