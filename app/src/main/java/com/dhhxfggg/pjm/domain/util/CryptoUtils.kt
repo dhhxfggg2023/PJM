@@ -27,14 +27,15 @@ import java.util.zip.Deflater
  */
 object CryptoUtils {
     private const val TAG = "CryptoUtils"
-    
+
     /**
      * File Magic Number for PJM containers (PJM\x01).
      */
-    const val FILE_MAGIC = 0x504A4D01 
-    
+    const val FILE_MAGIC = 0x504A4D01
+
     private val BUFFER_SIZE get() = VaultManager.ADAPTIVE_BUFFER_SIZE
     private val XOR_KEY = "dhhxfggg_is_the_best_pjm_key_fixed".toByteArray(StandardCharsets.UTF_8)
+
     // 核心修复：mask 必须与 native 实现（keyLen-1）保持一致。
     // 此前 Kotlin fallback 用 31（假设 key 为 32 字节），但 key 实际 34 字节，
     // native 用 keyLen-1=33，导致跨设备（native 可用性不同）加解密错乱。
@@ -53,7 +54,13 @@ object CryptoUtils {
         }
     }
 
-    private external fun transformBytesNative(data: ByteArray, off: Int, len: Int, key: ByteArray, startPos: Long)
+    private external fun transformBytesNative(
+        data: ByteArray,
+        off: Int,
+        len: Int,
+        key: ByteArray,
+        startPos: Long,
+    )
 
     /**
      * Transforms bytes in-place using an XOR operation.
@@ -64,17 +71,22 @@ object CryptoUtils {
      * @param len The number of bytes to transform.
      * @param startIndex The global position in the data stream (for XOR key synchronization).
      */
-    private fun transformBytesInPlace(b: ByteArray, off: Int, len: Int, startIndex: Long) {
+    private fun transformBytesInPlace(
+        b: ByteArray,
+        off: Int,
+        len: Int,
+        startIndex: Long,
+    ) {
         if (isNativeAvailable) {
             try {
                 transformBytesNative(b, off, len, XOR_KEY, startIndex)
                 return
             } catch (e: Throwable) {
                 PjmLogger.e(TAG, "Native transformation failed, disabling JNI", e)
-                isNativeAvailable = false 
+                isNativeAvailable = false
             }
         }
-        
+
         // Kotlin Fallback implementation（mask 与 native 的 keyLen-1 一致）
         val mask = KEY_SIZE_MASK
         var currentPos = startIndex
@@ -99,89 +111,96 @@ object CryptoUtils {
         inputUris: List<Uri>,
         outputPath: String,
         onProgress: (Float) -> Unit = {},
-    ): Result<Unit> = withContext(VaultManager.PjmDispatchers.Crypto) {
-        runCatching {
-            val totalSize = inputUris.sumOf { FileUtils.getFileSize(context, it) }.coerceAtLeast(1L)
-            VaultManager.ensureDiskSpace(context, totalSize)
+    ): Result<Unit> =
+        withContext(VaultManager.PjmDispatchers.Crypto) {
+            runCatching {
+                val totalSize = inputUris.sumOf { FileUtils.getFileSize(context, it) }.coerceAtLeast(1L)
+                VaultManager.ensureDiskSpace(context, totalSize)
 
-            val finalFile = File(outputPath)
-            val tmpFile = File("$outputPath.tmp_${System.currentTimeMillis()}")
-            
-            try {
-                tmpFile.parentFile?.mkdirs()
-                FileOutputStream(tmpFile).use { fos ->
-                    var streamPos = 0L 
+                val finalFile = File(outputPath)
+                val tmpFile = File("$outputPath.tmp_${System.currentTimeMillis()}")
 
-                    val xorWrapper = object : FilterOutputStream(fos) {
-                        // 核心修复：单字节写入必须与批量写入走【同一个】 mask 计算路径（transformBytesInPlace）。
-                        // 此前单字节用 KEY_SIZE_MASK(31)，批量走 native(keyLen-1=33) 或 Kotlin(31)，
-                        // 而 ZipArchiveOutputStream 会混合调用 write(int) 与 write(byte[],off,len)，
-                        // 导致同一文件内不同字节用不同 mask 加密，解密端批量读取时部分字节解不开，
-                        // ZIP 数据损坏 → 解密失败。
-                        override fun write(b: Int) {
-                            val tmp = byteArrayOf((b and 0xFF).toByte())
-                            transformBytesInPlace(tmp, 0, 1, streamPos)
-                            out.write(tmp[0].toInt() and 0xFF)
-                            streamPos++
-                        }
-                        override fun write(b: ByteArray, off: Int, len: Int) {
-                            if (len <= 0) return
-                            val copy = b.copyOfRange(off, off + len) 
-                            try {
-                                transformBytesInPlace(copy, 0, len, streamPos)
-                                out.write(copy, 0, len)
-                                streamPos += len.toLong()
-                            } finally {
-                                Arrays.fill(copy, 0.toByte()) // Zero out sensitive data copy
-                            }
-                        }
-                    }
+                try {
+                    tmpFile.parentFile?.mkdirs()
+                    FileOutputStream(tmpFile).use { fos ->
+                        var streamPos = 0L
 
-                    val magicBuffer = ByteBuffer.allocate(4).putInt(FILE_MAGIC).array()
-                    xorWrapper.write(magicBuffer)
+                        val xorWrapper =
+                            object : FilterOutputStream(fos) {
+                                // 核心修复：单字节写入必须与批量写入走【同一个】 mask 计算路径（transformBytesInPlace）。
+                                // 此前单字节用 KEY_SIZE_MASK(31)，批量走 native(keyLen-1=33) 或 Kotlin(31)，
+                                // 而 ZipArchiveOutputStream 会混合调用 write(int) 与 write(byte[],off,len)，
+                                // 导致同一文件内不同字节用不同 mask 加密，解密端批量读取时部分字节解不开，
+                                // ZIP 数据损坏 → 解密失败。
+                                override fun write(b: Int) {
+                                    val tmp = byteArrayOf((b and 0xFF).toByte())
+                                    transformBytesInPlace(tmp, 0, 1, streamPos)
+                                    out.write(tmp[0].toInt() and 0xFF)
+                                    streamPos++
+                                }
 
-                    ZipArchiveOutputStream(BufferedOutputStream(xorWrapper as OutputStream, BUFFER_SIZE)).use { zos ->
-                        zos.setUseZip64(Zip64Mode.AsNeeded)
-                        zos.encoding = "UTF-8"
-                        val buffer = VaultManager.acquireBuffer()
-                        var processedBytes = 0L
-                        try {
-                            for (uri in inputUris) {
-                                val fileName = FileUtils.getFileName(context, uri)
-                                val entry = ZipArchiveEntry(fileName)
-                                zos.setLevel(if (FileUtils.shouldCompress(fileName)) Deflater.BEST_SPEED else Deflater.NO_COMPRESSION)
-                                zos.putArchiveEntry(entry)
-                                context.contentResolver.openInputStream(uri)?.use { fis ->
-                                    var len: Int
-                                    while (fis.read(buffer).also { len = it } > 0) {
-                                        zos.write(buffer, 0, len)
-                                        processedBytes += len
-                                        onProgress(processedBytes.toFloat() / totalSize)
+                                override fun write(
+                                    b: ByteArray,
+                                    off: Int,
+                                    len: Int,
+                                ) {
+                                    if (len <= 0) return
+                                    val copy = b.copyOfRange(off, off + len)
+                                    try {
+                                        transformBytesInPlace(copy, 0, len, streamPos)
+                                        out.write(copy, 0, len)
+                                        streamPos += len.toLong()
+                                    } finally {
+                                        Arrays.fill(copy, 0.toByte()) // Zero out sensitive data copy
                                     }
                                 }
-                                zos.closeArchiveEntry()
                             }
-                            zos.finish()
-                        } finally {
-                            VaultManager.releaseBuffer(buffer)
+
+                        val magicBuffer = ByteBuffer.allocate(4).putInt(FILE_MAGIC).array()
+                        xorWrapper.write(magicBuffer)
+
+                        ZipArchiveOutputStream(BufferedOutputStream(xorWrapper as OutputStream, BUFFER_SIZE)).use { zos ->
+                            zos.setUseZip64(Zip64Mode.AsNeeded)
+                            zos.encoding = "UTF-8"
+                            val buffer = VaultManager.acquireBuffer()
+                            var processedBytes = 0L
+                            try {
+                                for (uri in inputUris) {
+                                    val fileName = FileUtils.getFileName(context, uri)
+                                    val entry = ZipArchiveEntry(fileName)
+                                    zos.setLevel(if (FileUtils.shouldCompress(fileName)) Deflater.BEST_SPEED else Deflater.NO_COMPRESSION)
+                                    zos.putArchiveEntry(entry)
+                                    context.contentResolver.openInputStream(uri)?.use { fis ->
+                                        var len: Int
+                                        while (fis.read(buffer).also { len = it } > 0) {
+                                            zos.write(buffer, 0, len)
+                                            processedBytes += len
+                                            onProgress(processedBytes.toFloat() / totalSize)
+                                        }
+                                    }
+                                    zos.closeArchiveEntry()
+                                }
+                                zos.finish()
+                            } finally {
+                                VaultManager.releaseBuffer(buffer)
+                            }
+                            xorWrapper.flush()
+                            fos.fd.sync()
                         }
-                        xorWrapper.flush()
-                        fos.fd.sync() 
                     }
+
+                    if (finalFile.exists()) VaultManager.shredFile(finalFile)
+                    if (!tmpFile.renameTo(finalFile)) {
+                        throw IOException("Failed to finalize file: rename failed")
+                    }
+                    PjmLogger.i(TAG, "Successfully encrypted ${inputUris.size} files to $outputPath")
+                } catch (e: Exception) {
+                    VaultManager.shredFile(tmpFile)
+                    PjmLogger.e(TAG, "Encryption failed for $outputPath", e)
+                    throw e
                 }
-                
-                if (finalFile.exists()) VaultManager.shredFile(finalFile)
-                if (!tmpFile.renameTo(finalFile)) {
-                    throw IOException("Failed to finalize file: rename failed")
-                }
-                PjmLogger.i(TAG, "Successfully encrypted ${inputUris.size} files to $outputPath")
-            } catch (e: Exception) {
-                VaultManager.shredFile(tmpFile)
-                PjmLogger.e(TAG, "Encryption failed for $outputPath", e)
-                throw e
             }
         }
-    }
 
     /**
      * Decrypts PJM containers and provides entries via a callback.
@@ -193,7 +212,7 @@ object CryptoUtils {
     suspend fun decryptPjmToEntries(
         context: Context,
         uris: List<Uri>,
-        onEntry: suspend (String, InputStream) -> Unit
+        onEntry: suspend (String, InputStream) -> Unit,
     ) = withContext(VaultManager.PjmDispatchers.Crypto) {
         for (uri in uris) {
             try {
@@ -210,7 +229,7 @@ object CryptoUtils {
                         PjmLogger.e(TAG, "Invalid PJM magic: 0x${Integer.toHexString(magic)} at $uri")
                         return@use
                     }
-                    
+
                     // 核心修复：必须允许 stored entry + data descriptor。
                     // 加密端对已压缩格式(图片/视频等)使用 Deflater.NO_COMPRESSION(stored)，
                     // 且底层输出流不可 seekable，ZipArchiveOutputStream 会为 stored entry
@@ -234,20 +253,24 @@ object CryptoUtils {
      * 不依赖文件名 —— 分享场景（微信/QQ 等）的 content URI 经常拿不到正确文件名，
      * 文件名识别会失败，必须用内容确认。
      */
-    suspend fun isPjmUri(context: Context, uri: Uri): Boolean = withContext(kotlinx.coroutines.Dispatchers.IO) {
-        try {
-            context.contentResolver.openInputStream(uri)?.use { input ->
-                val header = ByteArray(4)
-                val read = input.read(header)
-                if (read < 4) return@use false
-                val tmp = header.copyOf()
-                transformBytesInPlace(tmp, 0, 4, 0L)
-                ByteBuffer.wrap(tmp).int == FILE_MAGIC
-            } ?: false
-        } catch (_: Exception) {
-            false
+    suspend fun isPjmUri(
+        context: Context,
+        uri: Uri,
+    ): Boolean =
+        withContext(kotlinx.coroutines.Dispatchers.IO) {
+            try {
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    val header = ByteArray(4)
+                    val read = input.read(header)
+                    if (read < 4) return@use false
+                    val tmp = header.copyOf()
+                    transformBytesInPlace(tmp, 0, 4, 0L)
+                    ByteBuffer.wrap(tmp).int == FILE_MAGIC
+                } ?: false
+            } catch (_: Exception) {
+                false
+            }
         }
-    }
 
     /**
      * Creates an XOR-transformed InputStream wrapper.
@@ -256,9 +279,13 @@ object CryptoUtils {
      * @param initialPos The initial position for XOR key sync.
      * @return A wrapping [InputStream] that decrypts/transforms on the fly.
      */
-    fun createXorStream(inputStream: InputStream, initialPos: Long = 0L): InputStream {
+    fun createXorStream(
+        inputStream: InputStream,
+        initialPos: Long = 0L,
+    ): InputStream {
         return object : FilterInputStream(inputStream) {
             private var pos = initialPos
+
             // 核心修复：单字节读取与批量读取必须走【同一个】 mask 计算路径（transformBytesInPlace），
             // 与加密端 write(int)/write(byte[],off,len) 保持严格对称，否则混合读写时部分字节解不开。
             override fun read(): Int {
@@ -269,7 +296,12 @@ object CryptoUtils {
                 pos++
                 return tmp[0].toInt() and 0xFF
             }
-            override fun read(b: ByteArray, off: Int, len: Int): Int {
+
+            override fun read(
+                b: ByteArray,
+                off: Int,
+                len: Int,
+            ): Int {
                 val n = super.read(b, off, len)
                 if (n > 0) {
                     transformBytesInPlace(b, off, n, pos)

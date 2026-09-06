@@ -11,7 +11,6 @@ import java.util.Locale
  * 支持从旧版命名（13 位毫秒时间戳 / 缺省数字后缀）迁移到该规范。
  */
 object VaultNaming {
-
     /** 旧版命名中的 13 位毫秒时间戳片段（如 Export_1767225600000） */
     private val LEGACY_MILLIS_NAME = Regex("^(.*)_(\\d{13})$")
 
@@ -22,8 +21,7 @@ object VaultNaming {
     fun readableTimestamp(): String = formatReadable(System.currentTimeMillis())
 
     /** 毫秒 → 可读命名时间戳（yyyyMMdd_HHmmss） */
-    fun formatReadable(millis: Long): String =
-        SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date(millis))
+    fun formatReadable(millis: Long): String = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date(millis))
 
     /**
      * 旧式容器名 → 规范名 `前缀_yyyyMMdd_HHmmss.pjm.N`。
@@ -45,13 +43,14 @@ object VaultNaming {
 
         // 主体尾部是 13 位毫秒时间戳 → 换算为可读时间
         val timeMatch = LEGACY_MILLIS_NAME.matchEntire(body)
-        val newBody = if (timeMatch != null) {
-            val prefix = timeMatch.groupValues[1]
-            val millis = timeMatch.groupValues[2].toLongOrNull()
-            if (millis == null) body else "${prefix}_${formatReadable(millis)}"
-        } else {
-            body
-        }
+        val newBody =
+            if (timeMatch != null) {
+                val prefix = timeMatch.groupValues[1]
+                val millis = timeMatch.groupValues[2].toLongOrNull()
+                if (millis == null) body else "${prefix}_${formatReadable(millis)}"
+            } else {
+                body
+            }
 
         // 缺省数字后缀的单卷 → 补全为 .pjm.1
         return if (volume == null) "$newBody.pjm.1" else "$newBody.pjm.$volume"

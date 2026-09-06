@@ -20,11 +20,12 @@ import com.dhhxfggg.pjm.domain.util.VaultManager
  * FileCard 与 SelectableFileCard 必须共用此函数，确保切换视图模式时
  * Coil 内存/磁盘缓存 key 一致、能互相命中。
  */
-internal fun thumbnailSizeFor(gridSpanCount: Int): Int = when (gridSpanCount) {
-    1, 2 -> 640
-    3, 4 -> 320
-    else -> 160
-}
+internal fun thumbnailSizeFor(gridSpanCount: Int): Int =
+    when (gridSpanCount) {
+        1, 2 -> 640
+        3, 4 -> 320
+        else -> 160
+    }
 
 /**
  * 文件缩略图层，由 [FileCard] 与 [SelectableFileCard] 共用。
@@ -49,38 +50,44 @@ internal fun FileThumbnail(
     if (!fileEntity.isImage && !FileUtils.isVideoFile(fileEntity.name)) return
 
     val context = LocalContext.current
-    val file = remember(fileEntity.relativePath) {
-        VaultManager.getFileFromEntity(context, fileEntity)
-    }
+    val file =
+        remember(fileEntity.relativePath) {
+            VaultManager.getFileFromEntity(context, fileEntity)
+        }
     if (!file.exists()) return
 
     // 视频优先加载半持久化缩略图 jpg（首次由 ViewModel 异步生成）
-    val diskThumb = remember(fileEntity.relativePath) {
-        if (FileUtils.isVideoFile(fileEntity.name)) {
-            ThumbnailCache.getThumbnailFile(context, fileEntity)
-        } else null
-    }
-    val fingerprint = remember(fileEntity.relativePath) {
-        FileUtils.getFileFingerprint(fileEntity)
-    }
-
-    val request = ImageRequest.Builder(context)
-        .size(size)
-        .crossfade(crossfade)
-        .apply {
-            if (diskThumb != null) {
-                // 持久化缩略图是小文件，直接加载；
-                // 不写 diskCacheKey，避免缩略图重建后命中旧缓存
-                data(diskThumb.absolutePath)
+    val diskThumb =
+        remember(fileEntity.relativePath) {
+            if (FileUtils.isVideoFile(fileEntity.name)) {
+                ThumbnailCache.getThumbnailFile(context, fileEntity)
             } else {
-                data(file.absolutePath)
-                diskCacheKey(fingerprint)
-                if (FileUtils.isVideoFile(fileEntity.name)) {
-                    decoderFactory(VideoFrameDecoder.Factory())
-                }
+                null
             }
         }
-        .build()
+    val fingerprint =
+        remember(fileEntity.relativePath) {
+            FileUtils.getFileFingerprint(fileEntity)
+        }
+
+    val request =
+        ImageRequest
+            .Builder(context)
+            .size(size)
+            .crossfade(crossfade)
+            .apply {
+                if (diskThumb != null) {
+                    // 持久化缩略图是小文件，直接加载；
+                    // 不写 diskCacheKey，避免缩略图重建后命中旧缓存
+                    data(diskThumb.absolutePath)
+                } else {
+                    data(file.absolutePath)
+                    diskCacheKey(fingerprint)
+                    if (FileUtils.isVideoFile(fileEntity.name)) {
+                        decoderFactory(VideoFrameDecoder.Factory())
+                    }
+                }
+            }.build()
 
     AsyncImage(
         model = request,

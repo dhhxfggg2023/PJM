@@ -22,7 +22,6 @@ import java.util.concurrent.atomic.AtomicBoolean
  * - 全局刷新 / 缓存清除 / 操作结果 三类信号。
  */
 object VaultTasks {
-
     // 多任务并发进度 id：不同任务可并行（各自进度条独立显示），同任务防连点
     const val TASK_DEFAULT = "default"
     const val TASK_DELETE = "delete"
@@ -73,7 +72,9 @@ object VaultTasks {
     fun isTaskCancelled(taskId: String): Boolean = cancelFlags[taskId]?.get() == true
 
     /** 清除任务的取消标志（任务重新开始时调用） */
-    private fun clearTaskCancel(taskId: String) { cancelFlags.remove(taskId) }
+    private fun clearTaskCancel(taskId: String) {
+        cancelFlags.remove(taskId)
+    }
 
     /**
      * 尝试开始一个任务。同 taskId 已有进行中任务 → false（防连点）；
@@ -105,28 +106,33 @@ object VaultTasks {
         taskId: String = "default",
         isActive: Boolean = true,
         isError: Boolean = false,
-        isIndeterminate: Boolean = false
+        isIndeterminate: Boolean = false,
     ) {
-        val task = OperationTask(
-            taskId = taskId,
-            progress = progress.coerceIn(0f, 1f),
-            message = message,
-            isActive = isActive,
-            isError = isError,
-            isIndeterminate = isIndeterminate
-        )
+        val task =
+            OperationTask(
+                taskId = taskId,
+                progress = progress.coerceIn(0f, 1f),
+                message = message,
+                isActive = isActive,
+                isError = isError,
+                isIndeterminate = isIndeterminate,
+            )
         _activeTasks.update { list ->
-            if (list.any { it.taskId == taskId }) list.map { if (it.taskId == taskId) task else it }
-            else list + task
+            if (list.any { it.taskId == taskId }) {
+                list.map { if (it.taskId == taskId) task else it }
+            } else {
+                list + task
+            }
         }
         val scope = MainApplication.applicationScope
         if (progress >= 1f || isError || !isActive) {
             autoClearJobs[taskId]?.cancel()
-            autoClearJobs[taskId] = scope.launch {
-                delay(2500)
-                endOperation(taskId)
-                autoClearJobs.remove(taskId)
-            }
+            autoClearJobs[taskId] =
+                scope.launch {
+                    delay(2500)
+                    endOperation(taskId)
+                    autoClearJobs.remove(taskId)
+                }
         } else {
             autoClearJobs.remove(taskId)?.cancel()
         }
@@ -138,7 +144,15 @@ object VaultTasks {
         _activeTasks.update { list -> list.filterNot { it.taskId == taskId } }
     }
 
-    fun triggerRefresh() { _refreshSignal.tryEmit(Unit) }
-    fun notifyCacheCleared() { _cacheClearedSignal.tryEmit(Unit) }
-    fun notifyResult(result: OperationResult) { _operationResults.tryEmit(result) }
+    fun triggerRefresh() {
+        _refreshSignal.tryEmit(Unit)
+    }
+
+    fun notifyCacheCleared() {
+        _cacheClearedSignal.tryEmit(Unit)
+    }
+
+    fun notifyResult(result: OperationResult) {
+        _operationResults.tryEmit(result)
+    }
 }

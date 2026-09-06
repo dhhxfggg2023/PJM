@@ -29,8 +29,12 @@ internal fun BiliScanResultDialog(
     PjmAeroDialog(
         onDismissRequest = onDismiss,
         title = stringResource(R.string.dialog_title_bili_detected),
-        confirmButton = { Button(onClick = { onConfirm(selectedItems.toList()) }, enabled = selectedItems.isNotEmpty()) { Text(stringResource(R.string.action_import_bili_now)) } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } }
+        confirmButton = {
+            Button(onClick = {
+                onConfirm(selectedItems.toList())
+            }, enabled = selectedItems.isNotEmpty()) { Text(stringResource(R.string.action_import_bili_now)) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } },
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
             Text(stringResource(R.string.dialog_msg_bili_found_count, items.size), style = MaterialTheme.typography.bodySmall)
@@ -39,12 +43,26 @@ internal fun BiliScanResultDialog(
                 items(items.size) { index ->
                     val item = items[index]
                     val isSelected = selectedItems.contains(item)
-                    Row(modifier = Modifier.fillMaxWidth().clickable { if (isSelected) selectedItems.remove(item) else selectedItems.add(item) }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    if (isSelected) selectedItems.remove(item) else selectedItems.add(item)
+                                }.padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         Checkbox(checked = isSelected, onCheckedChange = null)
                         Spacer(Modifier.width(8.dp))
                         Column {
                             Text(item.title, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            item.partName?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                            item.partName?.let {
+                                Text(
+                                    it,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
                         }
                     }
                 }
@@ -63,8 +81,12 @@ internal fun BiliMergedResultDialog(
     PjmAeroDialog(
         onDismissRequest = onDismiss,
         title = stringResource(R.string.dialog_title_bili_merged_detected),
-        confirmButton = { Button(onClick = { onConfirm(selectedItems.toList()) }, enabled = selectedItems.isNotEmpty()) { Text(stringResource(R.string.action_import_bili_merged_now)) } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } }
+        confirmButton = {
+            Button(onClick = {
+                onConfirm(selectedItems.toList())
+            }, enabled = selectedItems.isNotEmpty()) { Text(stringResource(R.string.action_import_bili_merged_now)) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } },
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
             Text(stringResource(R.string.dialog_msg_bili_merged_found_count, items.size), style = MaterialTheme.typography.bodySmall)
@@ -73,7 +95,15 @@ internal fun BiliMergedResultDialog(
                 items(items.size) { index ->
                     val item = items[index]
                     val isSelected = selectedItems.contains(item)
-                    Row(modifier = Modifier.fillMaxWidth().clickable { if (isSelected) selectedItems.remove(item) else selectedItems.add(item) }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    if (isSelected) selectedItems.remove(item) else selectedItems.add(item)
+                                }.padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         Checkbox(checked = isSelected, onCheckedChange = null)
                         Spacer(Modifier.width(8.dp))
                         Text(item.name, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -84,14 +114,30 @@ internal fun BiliMergedResultDialog(
     }
 }
 
-internal fun exportPjmLogs(context: Context, chooserTitle: String, errorMsg: String) {
+internal fun exportPjmLogs(
+    context: Context,
+    chooserTitle: String,
+    errorMsg: String,
+) {
     try {
         val logFile = PjmLogger.getLogFile()
         if (logFile != null && logFile.exists() && logFile.length() > 0) {
             val authority = "${context.packageName}.fileprovider"
             val uri = FileProvider.getUriForFile(context, authority, logFile)
-            val shareIntent = Intent(Intent.ACTION_SEND).apply { type = "text/plain"; putExtra(Intent.EXTRA_STREAM, uri); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+            val shareIntent =
+                Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
             context.startActivity(Intent.createChooser(shareIntent, chooserTitle).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) })
-        } else Toast.makeText(context, "日志文件尚未生成或为空", Toast.LENGTH_SHORT).show()
-    } catch (e: Exception) { PjmLogger.e("SettingsScreen", "Log export failed", e); Toast.makeText(context, "$errorMsg: ${e.message}", Toast.LENGTH_SHORT).show() }
+        } else {
+            Toast.makeText(context, context.getString(R.string.toast_log_not_generated), Toast.LENGTH_SHORT).show()
+        }
+    } catch (
+        e: Exception,
+    ) {
+        PjmLogger.e("SettingsScreen", "Log export failed", e)
+        Toast.makeText(context, "$errorMsg: ${e.message}", Toast.LENGTH_SHORT).show()
+    }
 }

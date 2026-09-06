@@ -26,70 +26,111 @@ import kotlin.math.abs
  *    也不占用 FileEntity.contentHash（那是 MD5，完整性校验要用）。
  */
 data class ImageFingerprint(
-    val dHash: String,   // 64 位二进制串（'0'/'1'）
-    val width: Int,      // 原始宽度（用于"保留分辨率最高"）
-    val height: Int      // 原始高度
+    val dHash: String, // 64 位二进制串（'0'/'1'）
+    val width: Int, // 原始宽度（用于"保留分辨率最高"）
+    val height: Int, // 原始高度
 )
 
 object ImageFingerprintCache {
-
     private const val DIR_NAME = "image_fingerprints"
+
     /** 指纹解码目标宽度（足够小，解码快；dHash64 内部还会缩到 9x8） */
     private const val FP_WIDTH = 64
+
     /** 像素验证解码宽度（64px 足够区分内容，比 128px 快 4 倍 —— 修复海量候选对时验证阶段卡 80%） */
     private const val VERIFY_WIDTH = 64
+
     /** 像素验证阈值：平均亮度差 ≤ 12（0-255），同图不同分辨率通常 < 6 */
     private const val PIXEL_THRESHOLD = 12f
+
     /** 宽高比容差：比例差异 ≤ 3% 视为一致（排除 4:3 vs 16:9） */
     private const val RATIO_TOLERANCE = 0.03f
+
     /** 32×32 灰度预筛阈值：平均亮度差 ≤ 15 才可能内容一致（同图<6，不同图>20） */
     private const val GRAY32_PRESCREEN_THRESHOLD = 15f
 
-    private fun fpDir(context: Context): File =
-        File(context.filesDir, DIR_NAME).apply { if (!exists()) mkdirs() }
+    private fun fpDir(context: Context): File = File(context.filesDir, DIR_NAME).apply { if (!exists()) mkdirs() }
 
-    private fun fpFile(context: Context, entity: FileEntity): File {
-        val hash = entity.relativePath.hashCode().toUInt().toString(16)
+    private fun fpFile(
+        context: Context,
+        entity: FileEntity,
+    ): File {
+        val hash =
+            entity.relativePath
+                .hashCode()
+                .toUInt()
+                .toString(16)
         return File(fpDir(context), "$hash.txt")
     }
 
     /** 32×32 灰度缓存文件名（基于同一哈希，扩展名 .g32 区分） */
-    private fun gray32File(context: Context, entity: FileEntity): File {
-        val hash = entity.relativePath.hashCode().toUInt().toString(16)
+    private fun gray32File(
+        context: Context,
+        entity: FileEntity,
+    ): File {
+        val hash =
+            entity.relativePath
+                .hashCode()
+                .toUInt()
+                .toString(16)
         return File(fpDir(context), "$hash.g32")
     }
 
-    fun hasFingerprint(context: Context, entity: FileEntity): Boolean =
-        fpFile(context, entity).exists()
+    fun hasFingerprint(
+        context: Context,
+        entity: FileEntity,
+    ): Boolean = fpFile(context, entity).exists()
 
-    fun getFingerprint(context: Context, entity: FileEntity): ImageFingerprint? {
+    fun getFingerprint(
+        context: Context,
+        entity: FileEntity,
+    ): ImageFingerprint? {
         val f = fpFile(context, entity)
         if (!f.exists()) return null
         return try {
             val parts = f.readText().split("|")
             if (parts.size >= 3) {
                 ImageFingerprint(parts[0], parts[1].toIntOrNull() ?: 0, parts[2].toIntOrNull() ?: 0)
-            } else null
+            } else {
+                null
+            }
         } catch (_: Exception) {
             null
         }
     }
 
-    fun saveFingerprint(context: Context, entity: FileEntity, fp: ImageFingerprint) {
+    fun saveFingerprint(
+        context: Context,
+        entity: FileEntity,
+        fp: ImageFingerprint,
+    ) {
         try {
             fpFile(context, entity).writeText("${fp.dHash}|${fp.width}|${fp.height}")
-        } catch (_: Exception) {}
+        } catch (_: Exception) {
+        }
     }
 
     /** 删除某实体的指纹 + 灰度缓存（源文件删除时调用） */
-    fun delete(context: Context, entity: FileEntity) {
-        try { fpFile(context, entity).delete() } catch (_: Exception) {}
-        try { gray32File(context, entity).delete() } catch (_: Exception) {}
+    fun delete(
+        context: Context,
+        entity: FileEntity,
+    ) {
+        try {
+            fpFile(context, entity).delete()
+        } catch (_: Exception) {
+        }
+        try {
+            gray32File(context, entity).delete()
+        } catch (_: Exception) {
+        }
     }
 
     /** 清空整个指纹 + 灰度缓存 */
     fun clearAll(context: Context) {
-        try { fpDir(context).listFiles()?.forEach { it.delete() } } catch (_: Exception) {}
+        try {
+            fpDir(context).listFiles()?.forEach { it.delete() }
+        } catch (_: Exception) {
+        }
     }
 
     /**
@@ -99,7 +140,10 @@ object ImageFingerprintCache {
      * 性能优化：一次读取图片头（bounds）即用于采样计算 + 返回原始分辨率，
      * 避免旧实现中 readBounds + decodeSampled 各读一次文件头的重复 I/O。
      */
-    fun computeFingerprint(context: Context, entity: FileEntity): ImageFingerprint? {
+    fun computeFingerprint(
+        context: Context,
+        entity: FileEntity,
+    ): ImageFingerprint? {
         val file = VaultManager.getFileFromEntity(context, entity)
         if (!file.exists() || !FileUtils.isImageFile(entity.name)) return null
         return try {
@@ -109,7 +153,10 @@ object ImageFingerprintCache {
                 ImageFingerprint(dHash, decoded.second.first, decoded.second.second)
             } finally {
                 // 核心修复：显式回收解码 Bitmap，降低 1.2 万张的 GC 压力（防 OOM）
-                try { decoded.first.recycle() } catch (_: Exception) {}
+                try {
+                    decoded.first.recycle()
+                } catch (_: Exception) {
+                }
             }
         } catch (_: Throwable) {
             // 核心修复：捕获 Throwable（含 OutOfMemoryError）—— 单张图失败跳过，绝不崩溃闪退
@@ -123,7 +170,11 @@ object ImageFingerprintCache {
      * 2. 各自等比缩到 ~128 宽，比较公共区域的平均亮度差 ≤ [PIXEL_THRESHOLD]。
      * 只有"比例一致 + 内容一致"才算同图不同分辨率。
      */
-    fun verifySameContent(context: Context, e1: FileEntity, e2: FileEntity): Boolean {
+    fun verifySameContent(
+        context: Context,
+        e1: FileEntity,
+        e2: FileEntity,
+    ): Boolean {
         return try {
             val f1 = VaultManager.getFileFromEntity(context, e1)
             val f2 = VaultManager.getFileFromEntity(context, e2)
@@ -141,8 +192,20 @@ object ImageFingerprintCache {
             var s2s: Bitmap? = null
             try {
                 // 等比缩到同一宽度（比例一致时高度也应一致，仅取整误差 1px）
-                s1s = Bitmap.createScaledBitmap(s1, VERIFY_WIDTH, (s1.height * VERIFY_WIDTH / s1.width.coerceAtLeast(1)).coerceAtLeast(1), true)
-                s2s = Bitmap.createScaledBitmap(s2, VERIFY_WIDTH, (s2.height * VERIFY_WIDTH / s2.width.coerceAtLeast(1)).coerceAtLeast(1), true)
+                s1s =
+                    Bitmap.createScaledBitmap(
+                        s1,
+                        VERIFY_WIDTH,
+                        (s1.height * VERIFY_WIDTH / s1.width.coerceAtLeast(1)).coerceAtLeast(1),
+                        true,
+                    )
+                s2s =
+                    Bitmap.createScaledBitmap(
+                        s2,
+                        VERIFY_WIDTH,
+                        (s2.height * VERIFY_WIDTH / s2.width.coerceAtLeast(1)).coerceAtLeast(1),
+                        true,
+                    )
                 val cmpW = minOf(s1s.width, s2s.width)
                 val cmpH = minOf(s1s.height, s2s.height)
 
@@ -162,10 +225,22 @@ object ImageFingerprintCache {
                 totalDiff.toFloat() / total <= PIXEL_THRESHOLD
             } finally {
                 // 核心修复：回收中间 Bitmap，降低 GC 压力（防 OOM）
-                try { s1s?.takeIf { it != s1 }?.recycle() } catch (_: Exception) {}
-                try { s2s?.takeIf { it != s2 }?.recycle() } catch (_: Exception) {}
-                try { s1.recycle() } catch (_: Exception) {}
-                try { s2.recycle() } catch (_: Exception) {}
+                try {
+                    s1s?.takeIf { it != s1 }?.recycle()
+                } catch (_: Exception) {
+                }
+                try {
+                    s2s?.takeIf { it != s2 }?.recycle()
+                } catch (_: Exception) {
+                }
+                try {
+                    s1.recycle()
+                } catch (_: Exception) {
+                }
+                try {
+                    s2.recycle()
+                } catch (_: Exception) {
+                }
             }
         } catch (_: Throwable) {
             // 核心修复：捕获 Throwable（含 OOM）—— 单对验证失败跳过，绝不崩溃
@@ -177,16 +252,30 @@ object ImageFingerprintCache {
      * 读取已落盘的 32×32 灰度（半永久缓存）。
      * @return 1024 字节灰度数组；未缓存/损坏返回 null
      */
-    fun getGray32(context: Context, entity: FileEntity): ByteArray? {
+    fun getGray32(
+        context: Context,
+        entity: FileEntity,
+    ): ByteArray? {
         val f = gray32File(context, entity)
         if (!f.exists() || f.length() != 1024L) return null
-        return try { f.readBytes() } catch (_: Throwable) { null }
+        return try {
+            f.readBytes()
+        } catch (_: Throwable) {
+            null
+        }
     }
 
     /** 将 32×32 灰度落盘（半永久，下次直接复用） */
-    fun saveGray32(context: Context, entity: FileEntity, gray: ByteArray) {
+    fun saveGray32(
+        context: Context,
+        entity: FileEntity,
+        gray: ByteArray,
+    ) {
         if (gray.size != 1024) return
-        try { gray32File(context, entity).writeBytes(gray) } catch (_: Throwable) {}
+        try {
+            gray32File(context, entity).writeBytes(gray)
+        } catch (_: Throwable) {
+        }
     }
 
     /**
@@ -198,7 +287,10 @@ object ImageFingerprintCache {
      *
      * @return 32×32=1024 字节灰度数组（0-255），失败返回 null
      */
-    fun getOrComputeGray32(context: Context, entity: FileEntity): ByteArray? {
+    fun getOrComputeGray32(
+        context: Context,
+        entity: FileEntity,
+    ): ByteArray? {
         getGray32(context, entity)?.let { return it }
         val file = VaultManager.getFileFromEntity(context, entity)
         if (!file.exists()) return null
@@ -211,17 +303,24 @@ object ImageFingerprintCache {
                     for (y in 0 until 32) {
                         for (x in 0 until 32) {
                             val p = scaled.getPixel(x, y)
-                            gray[y * 32 + x] = ((((p shr 16) and 0xFF) * 299 + ((p shr 8) and 0xFF) * 587 + (p and 0xFF) * 114) / 1000).toByte()
+                            gray[y * 32 + x] =
+                                ((((p shr 16) and 0xFF) * 299 + ((p shr 8) and 0xFF) * 587 + (p and 0xFF) * 114) / 1000).toByte()
                         }
                     }
                     // 落盘半永久缓存
                     saveGray32(context, entity, gray)
                     gray
                 } finally {
-                    try { if (scaled != decoded) scaled.recycle() } catch (_: Exception) {}
+                    try {
+                        if (scaled != decoded) scaled.recycle()
+                    } catch (_: Exception) {
+                    }
                 }
             } finally {
-                try { decoded.recycle() } catch (_: Exception) {}
+                try {
+                    decoded.recycle()
+                } catch (_: Exception) {
+                }
             }
         } catch (_: Throwable) {
             null
@@ -233,7 +332,10 @@ object ImageFingerprintCache {
      * 同图不同分辨率（含 JPEG 重压缩）灰度差通常 < 6；内容不同的图通常 > 20。
      * 阈值取 15 留有裕量，宁可多留候选（完整验证兜底）也不误杀。
      */
-    fun gray32Similar(a: ByteArray, b: ByteArray): Boolean {
+    fun gray32Similar(
+        a: ByteArray,
+        b: ByteArray,
+    ): Boolean {
         if (a.size != b.size) return false
         var diff = 0L
         for (i in a.indices) {
@@ -243,21 +345,23 @@ object ImageFingerprintCache {
     }
 
     /** 读取图片原始宽高（不解码像素） */
-    private fun readBounds(file: File): Pair<Int, Int>? {
-        return try {
+    private fun readBounds(file: File): Pair<Int, Int>? =
+        try {
             val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeFile(file.absolutePath, opts)
             if (opts.outWidth > 0 && opts.outHeight > 0) opts.outWidth to opts.outHeight else null
         } catch (_: Exception) {
             null
         }
-    }
 
     /**
      * 采样解码到目标宽度（2 的幂采样，避免全尺寸解码），并应用 EXIF 旋转。
      * @return (解码后的 Bitmap, 原始宽高) —— 一次读文件头同时用于采样与返回原始分辨率
      */
-    private fun decodeSampledWithBounds(file: File, targetWidth: Int): Pair<Bitmap, Pair<Int, Int>>? {
+    private fun decodeSampledWithBounds(
+        file: File,
+        targetWidth: Int,
+    ): Pair<Bitmap, Pair<Int, Int>>? {
         return try {
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeFile(file.absolutePath, bounds)
@@ -273,15 +377,19 @@ object ImageFingerprintCache {
     }
 
     /** 按 EXIF orientation 旋转（QQ 原图常带旋转标签，缩略图已应用，必须对齐） */
-    private fun applyExifRotation(bmp: Bitmap, path: String): Bitmap {
-        val orientation = try {
-            ExifInterface(path).getAttributeInt(
-                ExifInterface.TAG_ORIENTATION,
+    private fun applyExifRotation(
+        bmp: Bitmap,
+        path: String,
+    ): Bitmap {
+        val orientation =
+            try {
+                ExifInterface(path).getAttributeInt(
+                    ExifInterface.TAG_ORIENTATION,
+                    ExifInterface.ORIENTATION_NORMAL,
+                )
+            } catch (_: Exception) {
                 ExifInterface.ORIENTATION_NORMAL
-            )
-        } catch (_: Exception) {
-            ExifInterface.ORIENTATION_NORMAL
-        }
+            }
         return when (orientation) {
             ExifInterface.ORIENTATION_ROTATE_90 -> rotateBitmap(bmp, 90f)
             ExifInterface.ORIENTATION_ROTATE_180 -> rotateBitmap(bmp, 180f)
@@ -290,8 +398,11 @@ object ImageFingerprintCache {
         }
     }
 
-    private fun rotateBitmap(bmp: Bitmap, degrees: Float): Bitmap {
-        return try {
+    private fun rotateBitmap(
+        bmp: Bitmap,
+        degrees: Float,
+    ): Bitmap =
+        try {
             val matrix = Matrix().apply { postRotate(degrees) }
             val rotated = Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, matrix, true)
             if (rotated != bmp) bmp.recycle()
@@ -299,5 +410,4 @@ object ImageFingerprintCache {
         } catch (_: Exception) {
             bmp
         }
-    }
 }

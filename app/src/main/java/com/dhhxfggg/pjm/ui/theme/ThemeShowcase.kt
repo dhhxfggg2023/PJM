@@ -30,13 +30,14 @@ private fun ThemeShowcaseContent(dark: Boolean) {
     MaterialTheme(colorScheme = scheme, typography = pjmTypography(scheme.onBackground)) {
         Surface(
             modifier = Modifier.fillMaxSize(),
-            color = scheme.background
+            color = scheme.background,
         ) {
             Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(20.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp)
+                modifier =
+                    Modifier
+                        .fillMaxSize()
+                        .padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
                 // 大标题
                 Text("PJM 资源柜", style = MaterialTheme.typography.headlineMedium)
@@ -66,7 +67,7 @@ private fun ThemeShowcaseContent(dark: Boolean) {
                     FilterChip(
                         selected = chipSelected,
                         onClick = { chipSelected = !chipSelected },
-                        label = { Text("收藏") }
+                        label = { Text("收藏") },
                     )
                     Spacer(Modifier.width(10.dp))
                     TextButton(onClick = {}) { Text("取消", color = MaterialTheme.colorScheme.error) }
@@ -79,7 +80,7 @@ private fun ThemeShowcaseContent(dark: Boolean) {
                         Text("共 18,632 个项目 · 31.34 GB", style = MaterialTheme.typography.bodySmall)
                         LinearProgressIndicator(
                             progress = { 0.68f },
-                            modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp))
+                            modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)),
                         )
                     }
                 }
@@ -89,13 +90,16 @@ private fun ThemeShowcaseContent(dark: Boolean) {
 }
 
 @Composable
-private fun CategoryDot(label: String, color: Color) {
+private fun CategoryDot(
+    label: String,
+    color: Color,
+) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
             Modifier
                 .size(34.dp)
                 .clip(CircleShape)
-                .background(color.copy(alpha = 0.85f))
+                .background(color.copy(alpha = 0.85f)),
         )
         Spacer(Modifier.height(4.dp))
         Text(label, style = MaterialTheme.typography.labelSmall)

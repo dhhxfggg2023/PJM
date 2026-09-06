@@ -17,25 +17,27 @@ import kotlinx.coroutines.launch
 object ErrorHandler {
     private val _errors = MutableSharedFlow<UiText>()
     val errors: SharedFlow<UiText> = _errors.asSharedFlow()
-    
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
-    private val exceptionHandler = CoroutineExceptionHandler { _, throwable ->
-        handleError(throwable)
-    }
+    private val exceptionHandler =
+        CoroutineExceptionHandler { _, throwable ->
+            handleError(throwable)
+        }
 
     fun getExceptionHandler() = exceptionHandler
 
     fun handleError(error: Throwable) {
-        val uiText = when (error) {
-            is java.io.FileNotFoundException -> UiText.StringResource(R.string.error_read_failed)
-            is java.io.IOException -> UiText.StringResource(R.string.error_read_failed)
-            is SecurityException -> UiText.StringResource(R.string.error_read_failed)
-            is OutOfMemoryError -> UiText.StringResource(R.string.error_read_failed)
-            is IllegalArgumentException -> UiText.DynamicString(error.message ?: "Error")
-            else -> UiText.DynamicString(error.message ?: "Unknown Error")
-        }
-        
+        val uiText =
+            when (error) {
+                is java.io.FileNotFoundException -> UiText.StringResource(R.string.error_read_failed)
+                is java.io.IOException -> UiText.StringResource(R.string.error_read_failed)
+                is SecurityException -> UiText.StringResource(R.string.error_read_failed)
+                is OutOfMemoryError -> UiText.StringResource(R.string.error_read_failed)
+                is IllegalArgumentException -> UiText.DynamicString(error.message ?: "Error")
+                else -> UiText.DynamicString(error.message ?: "Unknown Error")
+            }
+
         PjmLogger.e("ErrorHandler", error.message ?: "Unknown error", error)
 
         scope.launch {
@@ -51,9 +53,7 @@ object ErrorHandler {
 }
 
 @Composable
-fun ErrorListener(
-    onError: (String) -> Unit
-) {
+fun ErrorListener(onError: (String) -> Unit) {
     val context = LocalContext.current
 
     LaunchedEffect(Unit) {

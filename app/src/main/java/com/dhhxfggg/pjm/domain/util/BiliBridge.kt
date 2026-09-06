@@ -51,104 +51,147 @@ object BiliBridge {
         return BILI_PKGS.filter { File(dataDir, it).exists() }.map { it to "Bilibili" }
     }
 
-    suspend fun scan(context: Context, rootUri: Uri, onProgress: (String) -> Unit = {}): List<BiliCacheItem> = withContext(VaultManager.PjmDispatchers.IO) {
-        val traceId = PjmLogger.generateTraceId()
-        val finalResults = mutableListOf<BiliCacheItem>()
-        
-        PjmLogger.i(TAG, "==== 启动全路径扫描 ====", traceId = traceId)
-        PjmLogger.i(TAG, "初始输入 Uri: $rootUri", traceId = traceId)
-        
-        val persistedPerms = context.contentResolver.persistedUriPermissions
-        PjmLogger.i(TAG, "当前持有的永久令牌总数: ${persistedPerms.size}", traceId = traceId)
-        persistedPerms.forEachIndexed { i, p -> PjmLogger.d(TAG, "Token #$i: ${p.uri}", traceId = traceId) }
+    suspend fun scan(
+        context: Context,
+        rootUri: Uri,
+        onProgress: (String) -> Unit = {},
+    ): List<BiliCacheItem> =
+        withContext(VaultManager.PjmDispatchers.IO) {
+            val traceId = PjmLogger.generateTraceId()
+            val finalResults = mutableListOf<BiliCacheItem>()
 
-        // 0. 优先特权路径（内置服务 或 Shizuku，shell/root 身份直接访问 Android/data）
-        if (ShizukuBridge.isAvailable() || ShizukuBridge.isEmbeddedAvailable(context)) {
-            PjmLogger.i(TAG, "目录访问服务可用，优先扫描", traceId = traceId)
+            PjmLogger.i(TAG, "==== 启动全路径扫描 ====", traceId = traceId)
+            PjmLogger.i(TAG, "初始输入 Uri: $rootUri", traceId = traceId)
+
+            val persistedPerms = context.contentResolver.persistedUriPermissions
+            PjmLogger.i(TAG, "当前持有的永久令牌总数: ${persistedPerms.size}", traceId = traceId)
+            persistedPerms.forEachIndexed { i, p -> PjmLogger.d(TAG, "Token #$i: ${p.uri}", traceId = traceId) }
+
+            // 0. 优先特权路径（内置服务 或 Shizuku，shell/root 身份直接访问 Android/data）
+            if (ShizukuBridge.isAvailable() || ShizukuBridge.isEmbeddedAvailable(context)) {
+                PjmLogger.i(TAG, "目录访问服务可用，优先扫描", traceId = traceId)
+                try {
+                    scanShizuku(context, finalResults, onProgress, traceId)
+                    // 核心新增：无论是否命中视频，顺手清理缓存目录中的空文件夹（下载失败/取消下载残留）
+                    cleanupEmptyBiliDirs(context, onProgress, traceId)
+                    if (finalResults.isNotEmpty()) {
+                        PjmLogger.i(TAG, "Shizuku 扫描命中 ${finalResults.size} 条", traceId = traceId)
+                        return@withContext finalResults.distinctBy { it.videoM4s.toString() + it.audioM4s.toString() }
+                    }
+                } catch (e: Exception) {
+                    PjmLogger.w(TAG, "Shizuku 扫描失败，回退 SAF: ${e.message}", traceId = traceId)
+                }
+            }
+
+            // 1. 尝试直接扫描输入路径
             try {
-                scanShizuku(context, finalResults, onProgress, traceId)
-                // 核心新增：无论是否命中视频，顺手清理缓存目录中的空文件夹（下载失败/取消下载残留）
-                cleanupEmptyBiliDirs(context, onProgress, traceId)
-                if (finalResults.isNotEmpty()) {
-                    PjmLogger.i(TAG, "Shizuku 扫描命中 ${finalResults.size} 条", traceId = traceId)
-                    return@withContext finalResults.distinctBy { it.videoM4s.toString() + it.audioM4s.toString() }
+                if (rootUri.scheme == "content") {
+                    // 核心修复：输入可能是 tree URI（ACTION_OPEN_DOCUMENT_TREE 返回）或 document URI（
+                    // buildDocumentUriUsingTree 产生），fromTreeUri 只认 tree，需双路兜底。
+                    val doc = DocumentFile.fromTreeUri(context, rootUri) ?: DocumentFile.fromSingleUri(context, rootUri)
+                    doc?.let { scanDocDir(context, it, finalResults, onProgress, traceId) }
+                } else {
+                    val rawPath = rootUri.path ?: ""
+                    val decodedPath =
+                        try {
+                            java.net.URLDecoder.decode(rawPath, "UTF-8")
+                        } catch (_: Exception) {
+                            rawPath
+                        }
+                    val cleanPath =
+                        decodedPath
+                            .replace(
+                                "/document/primary:",
+                                "/storage/emulated/0/",
+                            ).replace("primary:", "/storage/emulated/0/")
+                    val file = File(cleanPath)
+                    if (file.exists()) scanLocalDir(file, finalResults, onProgress, traceId)
                 }
             } catch (e: Exception) {
-                PjmLogger.w(TAG, "Shizuku 扫描失败，回退 SAF: ${e.message}", traceId = traceId)
+                PjmLogger.w(TAG, "直接路径扫描受阻: ${e.message}", traceId = traceId)
             }
-        }
 
-        // 1. 尝试直接扫描输入路径
-        try {
-            if (rootUri.scheme == "content") {
-                // 核心修复：输入可能是 tree URI（ACTION_OPEN_DOCUMENT_TREE 返回）或 document URI（
-                // buildDocumentUriUsingTree 产生），fromTreeUri 只认 tree，需双路兜底。
-                val doc = DocumentFile.fromTreeUri(context, rootUri) ?: DocumentFile.fromSingleUri(context, rootUri)
-                doc?.let { scanDocDir(context, it, finalResults, onProgress, traceId) }
-            } else {
-                val rawPath = rootUri.path ?: ""
-                val decodedPath = try { java.net.URLDecoder.decode(rawPath, "UTF-8") } catch (_: Exception) { rawPath }
-                val cleanPath = decodedPath.replace("/document/primary:", "/storage/emulated/0/").replace("primary:", "/storage/emulated/0/")
-                val file = File(cleanPath)
-                if (file.exists()) scanLocalDir(file, finalResults, onProgress, traceId)
-            }
-        } catch (e: Exception) { PjmLogger.w(TAG, "直接路径扫描受阻: ${e.message}", traceId = traceId) }
-
-        // 2. 核心修复：更鲁棒的令牌识别逻辑 (针对 Android 15 + 根授权穿透)
-        // 根授权 (tree/primary%3A 或 /tree/primary) 可穿透到任意 Android/data/<pkg>；
-        // 历史版本可能已授权具体包目录或 Android/data 目录，一并兼容。
-        val hasRootAuth = persistedPerms.any {
-            val u = it.uri.toString().lowercase()
-            u.contains("tree/primary%3a") || u.endsWith("/tree/primary") || u.contains("primary%3a") && u.contains("/tree/")
-        }
-        val authPkgs = BILI_PKGS.filter { pkg ->
-            hasRootAuth || persistedPerms.any {
-                val u = it.uri.toString().lowercase()
-                u.contains(pkg.lowercase()) || u.contains("primary%3aandroid%2fdata") || u.contains("android%2fdata")
-            }
-        }
-        
-        PjmLogger.i(TAG, "识别到潜在授权包名: $authPkgs", traceId = traceId)
-
-        authPkgs.forEach { pkg ->
-            // 优先匹配包专属授权，其次 Android/data 授权，最后根授权 (primary:)
-            val treeUri = persistedPerms.find { it.uri.toString().lowercase().contains(pkg.lowercase()) }?.uri
-                ?: persistedPerms.find { it.uri.toString().lowercase().contains("android%2fdata") }?.uri
-                ?: persistedPerms.find {
+            // 2. 核心修复：更鲁棒的令牌识别逻辑 (针对 Android 15 + 根授权穿透)
+            // 根授权 (tree/primary%3A 或 /tree/primary) 可穿透到任意 Android/data/<pkg>；
+            // 历史版本可能已授权具体包目录或 Android/data 目录，一并兼容。
+            val hasRootAuth =
+                persistedPerms.any {
                     val u = it.uri.toString().lowercase()
                     u.contains("tree/primary%3a") || u.endsWith("/tree/primary") || u.contains("primary%3a") && u.contains("/tree/")
-                }?.uri
-                ?: return@forEach
-            
-            // 核心修复：分层穿透，兼容根授权 (primary:) / Android/data 授权 / 包目录授权
-            listOf("download", "files/download").forEach { relPath ->
-                try {
-                    val dir = penetrate(context, treeUri, pkg, relPath) ?: return@forEach
-                    PjmLogger.i(TAG, "已访问: $pkg/$relPath", traceId = traceId)
-                    scanDocDir(context, dir, finalResults, onProgress, traceId)
-                } catch (_: Exception) {}
-            }
-        }
+                }
+            val authPkgs =
+                BILI_PKGS.filter { pkg ->
+                    hasRootAuth ||
+                        persistedPerms.any {
+                            val u = it.uri.toString().lowercase()
+                            u.contains(pkg.lowercase()) || u.contains("primary%3aandroid%2fdata") || u.contains("android%2fdata")
+                        }
+                }
 
-        // 3. 终极兜底：原生 IO 探测 (仅在拥有 MANAGE_EXTERNAL_STORAGE 且扫描结果为空时)
-        if (finalResults.isEmpty()) {
-            PjmLogger.w(TAG, "SAF 扫描未果，尝试原生 IO 穿透...", traceId = traceId)
-            BILI_PKGS.forEach { pkg ->
-                val path = "/storage/emulated/0/Android/data/$pkg/download"
-                val file = File(path)
-                if (file.exists()) scanLocalDir(file, finalResults, onProgress, traceId)
-            }
-        }
+            PjmLogger.i(TAG, "识别到潜在授权包名: $authPkgs", traceId = traceId)
 
-        PjmLogger.i(TAG, "扫描复盘结束. 有效视频条目: ${finalResults.size}", traceId = traceId)
-        finalResults.distinctBy { it.videoM4s.toString() + it.audioM4s.toString() }
-    }
+            authPkgs.forEach { pkg ->
+                // 优先匹配包专属授权，其次 Android/data 授权，最后根授权 (primary:)
+                val treeUri =
+                    persistedPerms
+                        .find {
+                            it.uri
+                                .toString()
+                                .lowercase()
+                                .contains(pkg.lowercase())
+                        }?.uri
+                        ?: persistedPerms
+                            .find {
+                                it.uri
+                                    .toString()
+                                    .lowercase()
+                                    .contains("android%2fdata")
+                            }?.uri
+                        ?: persistedPerms
+                            .find {
+                                val u = it.uri.toString().lowercase()
+                                u.contains("tree/primary%3a") ||
+                                    u.endsWith("/tree/primary") ||
+                                    u.contains("primary%3a") &&
+                                    u.contains("/tree/")
+                            }?.uri
+                        ?: return@forEach
+
+                // 核心修复：分层穿透，兼容根授权 (primary:) / Android/data 授权 / 包目录授权
+                listOf("download", "files/download").forEach { relPath ->
+                    try {
+                        val dir = penetrate(context, treeUri, pkg, relPath) ?: return@forEach
+                        PjmLogger.i(TAG, "已访问: $pkg/$relPath", traceId = traceId)
+                        scanDocDir(context, dir, finalResults, onProgress, traceId)
+                    } catch (_: Exception) {
+                    }
+                }
+            }
+
+            // 3. 终极兜底：原生 IO 探测 (仅在拥有 MANAGE_EXTERNAL_STORAGE 且扫描结果为空时)
+            if (finalResults.isEmpty()) {
+                PjmLogger.w(TAG, "SAF 扫描未果，尝试原生 IO 穿透...", traceId = traceId)
+                BILI_PKGS.forEach { pkg ->
+                    val path = "/storage/emulated/0/Android/data/$pkg/download"
+                    val file = File(path)
+                    if (file.exists()) scanLocalDir(file, finalResults, onProgress, traceId)
+                }
+            }
+
+            PjmLogger.i(TAG, "扫描复盘结束. 有效视频条目: ${finalResults.size}", traceId = traceId)
+            finalResults.distinctBy { it.videoM4s.toString() + it.audioM4s.toString() }
+        }
 
     /**
      * 目录访问服务扫描：以 shell/root 身份直接递归 Android/data/<pkg>/download。
      * 找到 entry.json 后解析标题，并收集同目录（含子目录）的 m4s 文件。
      */
-    private suspend fun scanShizuku(context: Context, result: MutableList<BiliCacheItem>, onProgress: (String) -> Unit, traceId: String) {
+    private suspend fun scanShizuku(
+        context: Context,
+        result: MutableList<BiliCacheItem>,
+        onProgress: (String) -> Unit,
+        traceId: String,
+    ) {
         BILI_PKGS.forEach { pkg ->
             val base = "/storage/emulated/0/Android/data/$pkg/download"
             if (!ShizukuBridge.exists(context, base)) return@forEach
@@ -168,32 +211,40 @@ object BiliBridge {
                     // 核心修复：标题二次 unescape + 净化，空值回退文件夹名
                     val folderName = entryPath.substringBeforeLast('/').substringAfterLast('/')
                     val title = sanitizeBiliTitle(json.optString("title", ""), folderName)
-                    val partName = json.optJSONObject("page_data")?.optString("part")?.let { sanitizeBiliTitle(it, "") }
-                        ?: json.optJSONObject("ep")?.optString("index_title")?.let { sanitizeBiliTitle(it, "") }
+                    val partName =
+                        json.optJSONObject("page_data")?.optString("part")?.let { sanitizeBiliTitle(it, "") }
+                            ?: json.optJSONObject("ep")?.optString("index_title")?.let { sanitizeBiliTitle(it, "") }
 
                     // 收集同目录树下的 m4s（取体积最大的两个作为视频/音频）
                     val folder = entryPath.substringBeforeLast('/')
-                    val m4sFiles = allFiles.filter { it.startsWith(folder) && (it.endsWith(".m4s") || it.endsWith("0.m4s") || it.endsWith("1.m4s")) }
-                        .mapNotNull { path ->
-                            val size = ShizukuBridge.listFiles(context, path.substringBeforeLast('/'))
-                                ?.find { it.name == path.substringAfterLast('/') }?.size ?: 0L
-                            path to size
-                        }
-                        .sortedByDescending { it.second }
+                    val m4sFiles =
+                        allFiles
+                            .filter {
+                                it.startsWith(folder) &&
+                                    (it.endsWith(".m4s") || it.endsWith("0.m4s") || it.endsWith("1.m4s"))
+                            }.mapNotNull { path ->
+                                val size =
+                                    ShizukuBridge
+                                        .listFiles(context, path.substringBeforeLast('/'))
+                                        ?.find { it.name == path.substringAfterLast('/') }
+                                        ?.size ?: 0L
+                                path to size
+                            }.sortedByDescending { it.second }
 
                     if (m4sFiles.size >= 2) {
                         val videoPath = m4sFiles[0].first
                         val audioPath = m4sFiles[1].first
-                        val item = BiliCacheItem(
-                            title = title,
-                            partName = partName,
-                            videoM4s = Uri.fromFile(File(videoPath)),
-                            audioM4s = Uri.fromFile(File(audioPath)),
-                            parentFolder = Uri.fromFile(File(folder)),
-                            shizukuVideoPath = videoPath,
-                            shizukuAudioPath = audioPath,
-                            shizukuParentPath = folder,
-                        )
+                        val item =
+                            BiliCacheItem(
+                                title = title,
+                                partName = partName,
+                                videoM4s = Uri.fromFile(File(videoPath)),
+                                audioM4s = Uri.fromFile(File(audioPath)),
+                                parentFolder = Uri.fromFile(File(folder)),
+                                shizukuVideoPath = videoPath,
+                                shizukuAudioPath = audioPath,
+                                shizukuParentPath = folder,
+                            )
                         result.add(item)
                         onProgress("发现: $title")
                     }
@@ -222,7 +273,11 @@ object BiliBridge {
      *
      * @return 清理的文件夹数量
      */
-    internal suspend fun cleanupEmptyBiliDirs(context: Context, onProgress: (String) -> Unit = {}, traceId: String? = null): Int {
+    internal suspend fun cleanupEmptyBiliDirs(
+        context: Context,
+        onProgress: (String) -> Unit = {},
+        traceId: String? = null,
+    ): Int {
         if (!(ShizukuBridge.isAvailable() || ShizukuBridge.isEmbeddedAvailable(context))) return 0
         var cleaned = 0
         BILI_PKGS.forEach { pkg ->
@@ -248,16 +303,35 @@ object BiliBridge {
      * @param label 日志/进度提示用的名称（如 "B站" / "已合并扫描"）
      * @return 清理的文件夹数量
      */
-    private suspend fun cleanupDirsWithoutMedia(context: Context, base: String, onProgress: (String) -> Unit, label: String): Int {
+    private suspend fun cleanupDirsWithoutMedia(
+        context: Context,
+        base: String,
+        onProgress: (String) -> Unit,
+        label: String,
+    ): Int {
         var cleaned = 0
         // 1) 收集 base 下所有子目录（不含 base 本身）
         val dirs = mutableListOf<String>()
-        suspend fun collect(d: String, depth: Int) {
+
+        suspend fun collect(
+            d: String,
+            depth: Int,
+        ) {
             if (depth > 8) return
-            val entries = try {
-                if (EmbeddedPrivilegedIo.isAvailable(context)) EmbeddedPrivilegedIo.listFiles(context, d)
-                else try { ShizukuBridge.listFiles(context, d) } catch (_: Exception) { null }
-            } catch (_: Exception) { null } ?: return
+            val entries =
+                try {
+                    if (EmbeddedPrivilegedIo.isAvailable(context)) {
+                        EmbeddedPrivilegedIo.listFiles(context, d)
+                    } else {
+                        try {
+                            ShizukuBridge.listFiles(context, d)
+                        } catch (_: Exception) {
+                            null
+                        }
+                    }
+                } catch (_: Exception) {
+                    null
+                } ?: return
             entries.filter { it.isDirectory }.forEach { sub ->
                 val full = "$d/${sub.name}"
                 dirs.add(full)
@@ -269,16 +343,33 @@ object BiliBridge {
 
         // 2) 收集 base 下所有音视频文件路径（walk 一次，供快速判断）
         val mediaFiles = mutableListOf<String>()
-        suspend fun walkMedia(d: String, depth: Int) {
+
+        suspend fun walkMedia(
+            d: String,
+            depth: Int,
+        ) {
             if (depth > 8) return
-            val entries = try {
-                if (EmbeddedPrivilegedIo.isAvailable(context)) EmbeddedPrivilegedIo.listFiles(context, d)
-                else try { ShizukuBridge.listFiles(context, d) } catch (_: Exception) { null }
-            } catch (_: Exception) { null } ?: return
+            val entries =
+                try {
+                    if (EmbeddedPrivilegedIo.isAvailable(context)) {
+                        EmbeddedPrivilegedIo.listFiles(context, d)
+                    } else {
+                        try {
+                            ShizukuBridge.listFiles(context, d)
+                        } catch (_: Exception) {
+                            null
+                        }
+                    }
+                } catch (_: Exception) {
+                    null
+                } ?: return
             entries.forEach { e ->
                 val full = "$d/${e.name}"
-                if (e.isDirectory) walkMedia(full, depth + 1)
-                else if (isMediaFileName(e.name)) mediaFiles.add(full)
+                if (e.isDirectory) {
+                    walkMedia(full, depth + 1)
+                } else if (isMediaFileName(e.name)) {
+                    mediaFiles.add(full)
+                }
             }
         }
         walkMedia(base, 0)
@@ -289,10 +380,20 @@ object BiliBridge {
             // 目录树内是否有音视频（含自身及所有后代）
             val hasMedia = mediaFiles.any { it.startsWith("$dir/") }
             if (hasMedia) return@forEach
-            val ok = try {
-                if (EmbeddedPrivilegedIo.isAvailable(context)) EmbeddedPrivilegedIo.deletePath(context, dir)
-                else try { ShizukuBridge.deletePath(context, dir) } catch (_: Exception) { false }
-            } catch (_: Exception) { false }
+            val ok =
+                try {
+                    if (EmbeddedPrivilegedIo.isAvailable(context)) {
+                        EmbeddedPrivilegedIo.deletePath(context, dir)
+                    } else {
+                        try {
+                            ShizukuBridge.deletePath(context, dir)
+                        } catch (_: Exception) {
+                            false
+                        }
+                    }
+                } catch (_: Exception) {
+                    false
+                }
             if (ok) {
                 cleaned++
                 PjmLogger.i(TAG, "已清理 $label 无音视频残留文件夹: $dir")
@@ -306,42 +407,69 @@ object BiliBridge {
      * 递归扫描目录（含子文件夹），收集所有已合并的视频文件。
      * 支持 SAF (content://) 与本地路径 (file://) 两种来源。
      */
-    suspend fun scanMergedVideos(context: Context, rootUri: Uri, onProgress: (String) -> Unit = {}): List<MergedVideoItem> = withContext(VaultManager.PjmDispatchers.IO) {
-        val results = mutableListOf<MergedVideoItem>()
-        try {
-            // 核心修复：特权服务可用时，用 shell 身份扫描（拿到真实路径，删除可靠）。
-            // 覆盖 SAF/File API 在 Android 14+ 看不到 Android/data 的限制。
-            val selectedPath = rootUri.path?.let { raw ->
-                val decoded = try { java.net.URLDecoder.decode(raw, "UTF-8") } catch (_: Exception) { raw }
-                decoded.replace("/document/primary:", "/storage/emulated/0/").replace("primary:", "/storage/emulated/0/")
-            }
-            if (selectedPath != null && selectedPath.startsWith("/storage/emulated/0/") && ShizukuBridge.isEmbeddedAvailable(context)) {
-                val base = File(selectedPath)
-                if (base.exists() || ShizukuBridge.exists(context, selectedPath)) {
-                    scanMergedShizukuDir(context, selectedPath, results, onProgress, maxDepth = 0)
-                    // 核心新增：已合并视频扫描同样顺手清理所选目录下不含音视频的残留文件夹
-                    cleanupDirsWithoutMedia(context, selectedPath, onProgress, "已合并扫描")
-                    if (results.isNotEmpty()) return@withContext results.distinctBy { it.uri.toString() }
+    suspend fun scanMergedVideos(
+        context: Context,
+        rootUri: Uri,
+        onProgress: (String) -> Unit = {},
+    ): List<MergedVideoItem> =
+        withContext(VaultManager.PjmDispatchers.IO) {
+            val results = mutableListOf<MergedVideoItem>()
+            try {
+                // 核心修复：特权服务可用时，用 shell 身份扫描（拿到真实路径，删除可靠）。
+                // 覆盖 SAF/File API 在 Android 14+ 看不到 Android/data 的限制。
+                val selectedPath =
+                    rootUri.path?.let { raw ->
+                        val decoded =
+                            try {
+                                java.net.URLDecoder.decode(raw, "UTF-8")
+                            } catch (_: Exception) {
+                                raw
+                            }
+                        decoded.replace("/document/primary:", "/storage/emulated/0/").replace("primary:", "/storage/emulated/0/")
+                    }
+                if (selectedPath != null && selectedPath.startsWith("/storage/emulated/0/") && ShizukuBridge.isEmbeddedAvailable(context)) {
+                    val base = File(selectedPath)
+                    if (base.exists() || ShizukuBridge.exists(context, selectedPath)) {
+                        scanMergedShizukuDir(context, selectedPath, results, onProgress, maxDepth = 0)
+                        // 核心新增：已合并视频扫描同样顺手清理所选目录下不含音视频的残留文件夹
+                        cleanupDirsWithoutMedia(context, selectedPath, onProgress, "已合并扫描")
+                        if (results.isNotEmpty()) return@withContext results.distinctBy { it.uri.toString() }
+                    }
                 }
-            }
 
-            if (rootUri.scheme == "content") {
-                DocumentFile.fromTreeUri(context, rootUri)?.let { scanMergedDocDir(context, it, results, onProgress) }
-            } else {
-                val rawPath = rootUri.path ?: ""
-                val decodedPath = try { java.net.URLDecoder.decode(rawPath, "UTF-8") } catch (_: Exception) { rawPath }
-                val cleanPath = decodedPath.replace("/document/primary:", "/storage/emulated/0/").replace("primary:", "/storage/emulated/0/")
-                val file = File(cleanPath)
-                if (file.exists()) scanMergedLocalDir(file, results, onProgress)
+                if (rootUri.scheme == "content") {
+                    DocumentFile.fromTreeUri(context, rootUri)?.let { scanMergedDocDir(context, it, results, onProgress) }
+                } else {
+                    val rawPath = rootUri.path ?: ""
+                    val decodedPath =
+                        try {
+                            java.net.URLDecoder.decode(rawPath, "UTF-8")
+                        } catch (_: Exception) {
+                            rawPath
+                        }
+                    val cleanPath =
+                        decodedPath
+                            .replace(
+                                "/document/primary:",
+                                "/storage/emulated/0/",
+                            ).replace("primary:", "/storage/emulated/0/")
+                    val file = File(cleanPath)
+                    if (file.exists()) scanMergedLocalDir(file, results, onProgress)
+                }
+            } catch (e: Exception) {
+                PjmLogger.w(TAG, "已合并视频扫描受阻: ${e.message}")
             }
-        } catch (e: Exception) {
-            PjmLogger.w(TAG, "已合并视频扫描受阻: ${e.message}")
+            results.distinctBy { it.uri.toString() }
         }
-        results.distinctBy { it.uri.toString() }
-    }
 
     /** 特权模式递归扫描已合并视频（shell 身份，可访问 Android/data） */
-    private suspend fun scanMergedShizukuDir(context: Context, path: String, result: MutableList<MergedVideoItem>, onProgress: (String) -> Unit, maxDepth: Int) {
+    private suspend fun scanMergedShizukuDir(
+        context: Context,
+        path: String,
+        result: MutableList<MergedVideoItem>,
+        onProgress: (String) -> Unit,
+        maxDepth: Int,
+    ) {
         if (maxDepth > 8) return
         val entries = ShizukuBridge.listFiles(context, path) ?: return
         entries.forEach { e ->
@@ -355,26 +483,45 @@ object BiliBridge {
         }
     }
 
-    private fun scanMergedDocDir(context: Context, dir: DocumentFile, result: MutableList<MergedVideoItem>, onProgress: (String) -> Unit) {
-        val documentId = try { android.provider.DocumentsContract.getDocumentId(dir.uri) } catch (_: Exception) { return }
+    private fun scanMergedDocDir(
+        context: Context,
+        dir: DocumentFile,
+        result: MutableList<MergedVideoItem>,
+        onProgress: (String) -> Unit,
+    ) {
+        val documentId =
+            try {
+                android.provider.DocumentsContract.getDocumentId(dir.uri)
+            } catch (_: Exception) {
+                return
+            }
         val childrenUri = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(dir.uri, documentId)
         val files = mutableListOf<DocumentFile>()
         try {
-            context.contentResolver.query(childrenUri, arrayOf(
-                android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-                android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME
-            ), null, null, null)?.use { cursor ->
-                while (cursor.moveToNext()) {
-                    val id = cursor.getString(0)
-                    val fileUri = android.provider.DocumentsContract.buildDocumentUriUsingTree(dir.uri, id)
-                    DocumentFile.fromSingleUri(context, fileUri)?.let { files.add(it) }
+            context.contentResolver
+                .query(
+                    childrenUri,
+                    arrayOf(
+                        android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                        android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                    ),
+                    null,
+                    null,
+                    null,
+                )?.use { cursor ->
+                    while (cursor.moveToNext()) {
+                        val id = cursor.getString(0)
+                        val fileUri = android.provider.DocumentsContract.buildDocumentUriUsingTree(dir.uri, id)
+                        DocumentFile.fromSingleUri(context, fileUri)?.let { files.add(it) }
+                    }
                 }
-            }
-        } catch (_: Exception) {}
+        } catch (_: Exception) {
+        }
 
         files.forEach { f ->
-            if (f.isDirectory) scanMergedDocDir(context, f, result, onProgress)
-            else {
+            if (f.isDirectory) {
+                scanMergedDocDir(context, f, result, onProgress)
+            } else {
                 val name = f.name ?: ""
                 if (FileUtils.isVideoFile(name)) {
                     result.add(MergedVideoItem(f.uri, name, dir.uri))
@@ -384,11 +531,16 @@ object BiliBridge {
         }
     }
 
-    private fun scanMergedLocalDir(dir: File, result: MutableList<MergedVideoItem>, onProgress: (String) -> Unit) {
+    private fun scanMergedLocalDir(
+        dir: File,
+        result: MutableList<MergedVideoItem>,
+        onProgress: (String) -> Unit,
+    ) {
         val files = dir.listFiles() ?: return
         files.forEach { f ->
-            if (f.isDirectory) scanMergedLocalDir(f, result, onProgress)
-            else if (FileUtils.isVideoFile(f.name)) {
+            if (f.isDirectory) {
+                scanMergedLocalDir(f, result, onProgress)
+            } else if (FileUtils.isVideoFile(f.name)) {
                 result.add(MergedVideoItem(Uri.fromFile(f), f.name, Uri.fromFile(dir)))
                 onProgress("发现: ${f.name}")
             }
@@ -400,20 +552,31 @@ object BiliBridge {
      * 兼容三种授权形态：根授权 (primary:) / Android/data 授权 / 具体包目录授权。
      * @return 目标目录的 [DocumentFile]，无法穿透时返回 null。
      */
-    private fun penetrate(context: Context, treeUri: Uri, pkg: String, relPath: String): DocumentFile? {
-        val treeDocId = try { android.provider.DocumentsContract.getTreeDocumentId(treeUri) } catch (_: Exception) { "" }
+    private fun penetrate(
+        context: Context,
+        treeUri: Uri,
+        pkg: String,
+        relPath: String,
+    ): DocumentFile? {
+        val treeDocId =
+            try {
+                android.provider.DocumentsContract.getTreeDocumentId(treeUri)
+            } catch (_: Exception) {
+                ""
+            }
         var dir: DocumentFile? = DocumentFile.fromTreeUri(context, treeUri) ?: return null
 
         // 按授权形态决定起始层级：
         // - 根授权 "primary:" → 需要依次进入 Android → data → <pkg>
         // - "primary:Android/data" → 需要进入 <pkg>
         // - "primary:Android/data/<pkg>" → 直接使用
-        val segments = when {
-            treeDocId == "primary:" || treeDocId.isEmpty() -> listOf("Android", "data", pkg)
-            treeDocId == "primary:Android/data" -> listOf(pkg)
-            treeDocId.startsWith("primary:Android/data/") -> emptyList()
-            else -> return null
-        }
+        val segments =
+            when {
+                treeDocId == "primary:" || treeDocId.isEmpty() -> listOf("Android", "data", pkg)
+                treeDocId == "primary:Android/data" -> listOf(pkg)
+                treeDocId.startsWith("primary:Android/data/") -> emptyList()
+                else -> return null
+            }
 
         for (seg in segments) {
             dir = dir?.findFile(seg) ?: return null
@@ -426,79 +589,162 @@ object BiliBridge {
         return dir?.takeIf { it.exists() && it.isDirectory }
     }
 
-    private fun scanDocDir(context: Context, dir: DocumentFile, result: MutableList<BiliCacheItem>, onProgress: (String) -> Unit, traceId: String) {
-        val documentId = try { android.provider.DocumentsContract.getDocumentId(dir.uri) } catch (_: Exception) { return }
+    private fun scanDocDir(
+        context: Context,
+        dir: DocumentFile,
+        result: MutableList<BiliCacheItem>,
+        onProgress: (String) -> Unit,
+        traceId: String,
+    ) {
+        val documentId =
+            try {
+                android.provider.DocumentsContract.getDocumentId(dir.uri)
+            } catch (_: Exception) {
+                return
+            }
         val childrenUri = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(dir.uri, documentId)
         val files = mutableListOf<DocumentFile>()
-        
+
         try {
-            context.contentResolver.query(childrenUri, arrayOf(android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID, android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME), null, null, null)?.use { cursor ->
-                while (cursor.moveToNext()) {
-                    val id = cursor.getString(0)
-                    val fileUri = android.provider.DocumentsContract.buildDocumentUriUsingTree(dir.uri, id)
-                    DocumentFile.fromSingleUri(context, fileUri)?.let { files.add(it) }
+            context.contentResolver
+                .query(
+                    childrenUri,
+                    arrayOf(
+                        android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                        android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                    ),
+                    null,
+                    null,
+                    null,
+                )?.use { cursor ->
+                    while (cursor.moveToNext()) {
+                        val id = cursor.getString(0)
+                        val fileUri = android.provider.DocumentsContract.buildDocumentUriUsingTree(dir.uri, id)
+                        DocumentFile.fromSingleUri(context, fileUri)?.let { files.add(it) }
+                    }
                 }
-            }
-        } catch (_: Exception) {}
+        } catch (_: Exception) {
+        }
 
         val entryFile = files.find { it.name == "entry.json" || it.uri.path?.endsWith("entry.json") == true }
         if (entryFile != null) {
-            parseDocEntry(context, entryFile, dir)?.let { result.add(it); onProgress("发现: ${it.title}") }
+            parseDocEntry(context, entryFile, dir)?.let {
+                result.add(it)
+                onProgress("发现: ${it.title}")
+            }
         } else {
             files.forEach { if (it.isDirectory) scanDocDir(context, it, result, onProgress, traceId) }
         }
     }
 
-    private fun parseDocEntry(context: Context, entryFile: DocumentFile, folder: DocumentFile): BiliCacheItem? {
-        val jsonStr = try { context.contentResolver.openInputStream(entryFile.uri)?.use { it.bufferedReader().readText() } } catch (_: Exception) { null } ?: return null
+    private fun parseDocEntry(
+        context: Context,
+        entryFile: DocumentFile,
+        folder: DocumentFile,
+    ): BiliCacheItem? {
+        val jsonStr =
+            try {
+                context.contentResolver.openInputStream(entryFile.uri)?.use { it.bufferedReader().readText() }
+            } catch (
+                _: Exception,
+            ) {
+                null
+            }
+                ?: return null
         val json = JSONObject(jsonStr)
         // 核心修复：B站 entry.json 的标题常为双重转义（字面 \uXXXX），直接 optString 会得到乱码，
         // 必须二次 unescape + 过滤非法文件名字符；空值时回退文件夹名。
         val title = sanitizeBiliTitle(json.optString("title", ""), folder.name ?: "Unknown")
-        val partName = json.optJSONObject("page_data")?.optString("part")?.let { sanitizeBiliTitle(it, "") }
-            ?: json.optJSONObject("ep")?.optString("index_title")?.let { sanitizeBiliTitle(it, "") }
-            
+        val partName =
+            json.optJSONObject("page_data")?.optString("part")?.let { sanitizeBiliTitle(it, "") }
+                ?: json.optJSONObject("ep")?.optString("index_title")?.let { sanitizeBiliTitle(it, "") }
+
         val mediaFiles = mutableListOf<Pair<Uri, Long>>()
+
         fun collectMedia(d: DocumentFile) {
-            val dId = try { android.provider.DocumentsContract.getDocumentId(d.uri) } catch (_: Exception) { return }
-            val cUri = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(d.uri, dId)
-            context.contentResolver.query(cUri, arrayOf(android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID, android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME, android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE, android.provider.DocumentsContract.Document.COLUMN_SIZE), null, null, null)?.use { cursor ->
-                while (cursor.moveToNext()) {
-                    val id = cursor.getString(0)
-                    val name = cursor.getString(1) ?: ""
-                    val mime = cursor.getString(2)
-                    val size = cursor.getLong(3)
-                    val uri = android.provider.DocumentsContract.buildDocumentUriUsingTree(d.uri, id)
-                    if (name.endsWith(".m4s") || name == "0.m4s" || name == "1.m4s") mediaFiles.add(uri to size)
-                    else if (mime == android.provider.DocumentsContract.Document.MIME_TYPE_DIR) DocumentFile.fromSingleUri(context, uri)?.let { collectMedia(it) }
+            val dId =
+                try {
+                    android.provider.DocumentsContract.getDocumentId(d.uri)
+                } catch (_: Exception) {
+                    return
                 }
-            }
+            val cUri = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(d.uri, dId)
+            context.contentResolver
+                .query(
+                    cUri,
+                    arrayOf(
+                        android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                        android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                        android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE,
+                        android.provider.DocumentsContract.Document.COLUMN_SIZE,
+                    ),
+                    null,
+                    null,
+                    null,
+                )?.use { cursor ->
+                    while (cursor.moveToNext()) {
+                        val id = cursor.getString(0)
+                        val name = cursor.getString(1) ?: ""
+                        val mime = cursor.getString(2)
+                        val size = cursor.getLong(3)
+                        val uri = android.provider.DocumentsContract.buildDocumentUriUsingTree(d.uri, id)
+                        if (name.endsWith(".m4s") || name == "0.m4s" || name == "1.m4s") {
+                            mediaFiles.add(uri to size)
+                        } else if (mime ==
+                            android.provider.DocumentsContract.Document.MIME_TYPE_DIR
+                        ) {
+                            DocumentFile.fromSingleUri(context, uri)?.let { collectMedia(it) }
+                        }
+                    }
+                }
         }
-        
+
         collectMedia(folder)
         if (mediaFiles.size < 2) return null
         val sorted = mediaFiles.sortedByDescending { it.second }
         return BiliCacheItem(title, partName, sorted[0].first, sorted[1].first, folder.uri)
     }
 
-    private fun scanLocalDir(dir: File, result: MutableList<BiliCacheItem>, onProgress: (String) -> Unit, traceId: String) {
+    private fun scanLocalDir(
+        dir: File,
+        result: MutableList<BiliCacheItem>,
+        onProgress: (String) -> Unit,
+        traceId: String,
+    ) {
         val files = dir.listFiles() ?: return
         val entryFile = files.find { it.name == "entry.json" }
         if (entryFile != null) {
-            parseLocalEntry(entryFile, dir)?.let { result.add(it); onProgress("发现: ${it.title}") }
+            parseLocalEntry(entryFile, dir)?.let {
+                result.add(it)
+                onProgress("发现: ${it.title}")
+            }
         } else {
             files.forEach { if (it.isDirectory) scanLocalDir(it, result, onProgress, traceId) }
         }
     }
 
-    private fun parseLocalEntry(entryFile: File, folder: File): BiliCacheItem? {
-        val jsonStr = try { entryFile.readText() } catch (_: Exception) { return null }
+    private fun parseLocalEntry(
+        entryFile: File,
+        folder: File,
+    ): BiliCacheItem? {
+        val jsonStr =
+            try {
+                entryFile.readText()
+            } catch (_: Exception) {
+                return null
+            }
         val json = JSONObject(jsonStr)
         // 核心修复：标题二次 unescape + 净化，空值回退文件夹名
         val title = sanitizeBiliTitle(json.optString("title", ""), folder.name ?: "Unknown")
-        val partName = json.optJSONObject("page_data")?.optString("part")?.let { sanitizeBiliTitle(it, "") }
-            ?: json.optJSONObject("ep")?.optString("index_title")?.let { sanitizeBiliTitle(it, "") }
-        val mediaFiles = folder.walkTopDown().filter { it.isFile && (it.name.endsWith(".m4s") || it.name == "0.m4s" || it.name == "1.m4s") }.toList()
+        val partName =
+            json.optJSONObject("page_data")?.optString("part")?.let { sanitizeBiliTitle(it, "") }
+                ?: json.optJSONObject("ep")?.optString("index_title")?.let { sanitizeBiliTitle(it, "") }
+        val mediaFiles =
+            folder
+                .walkTopDown()
+                .filter {
+                    it.isFile && (it.name.endsWith(".m4s") || it.name == "0.m4s" || it.name == "1.m4s")
+                }.toList()
         if (mediaFiles.size < 2) return null
         val sorted = mediaFiles.sortedByDescending { it.length() }
         return BiliCacheItem(title, partName, Uri.fromFile(sorted[0]), Uri.fromFile(sorted[1]), Uri.fromFile(folder))
@@ -511,7 +757,10 @@ object BiliBridge {
      * 2. 过滤非法文件名字符（/ \ : * ? " < > |）与控制字符。
      * 3. 空值回退 fallback（文件夹名），截断 100 字符。
      */
-    private fun sanitizeBiliTitle(title: String, fallback: String): String {
+    private fun sanitizeBiliTitle(
+        title: String,
+        fallback: String,
+    ): String {
         var t = title.trim()
         if (t.contains("\\u")) {
             try {
@@ -520,71 +769,100 @@ object BiliBridge {
                 while (i < t.length) {
                     if (t[i] == '\\' && i + 1 < t.length && t[i + 1] == 'u' && i + 6 <= t.length) {
                         val code = t.substring(i + 2, i + 6).toIntOrNull(16)
-                        if (code != null) { sb.append(code.toChar()); i += 6; continue }
+                        if (code != null) {
+                            sb.append(code.toChar())
+                            i += 6
+                            continue
+                        }
                     }
-                    sb.append(t[i]); i++
+                    sb.append(t[i])
+                    i++
                 }
                 t = sb.toString().trim()
-            } catch (_: Exception) {}
+            } catch (_: Exception) {
+            }
         }
         t = t.replace(Regex("[\\\\/:*?\"<>|\\u0000-\\u001F]"), "").trim()
         if (t.isEmpty()) t = fallback
         return t.take(100)
     }
 
-    suspend fun merge(context: Context, item: BiliCacheItem, outputFile: File): PjmResult<Unit> = withContext(VaultManager.PjmDispatchers.IO) {
-        try {
-            val cacheDir = context.cacheDir
-            val vTmp = File(cacheDir, "bili_v_${System.nanoTime()}.m4v")
-            val aTmp = File(cacheDir, "bili_a_${System.nanoTime()}.m4a")
+    suspend fun merge(
+        context: Context,
+        item: BiliCacheItem,
+        outputFile: File,
+    ): PjmResult<Unit> =
+        withContext(VaultManager.PjmDispatchers.IO) {
             try {
-                // 特权模式：先把 m4s 从 Android/data 复制到本地临时文件（主进程可读），再走既有流程
-                val vLocal = if (item.shizukuVideoPath != null) {
-                    ShizukuBridge.copyToCache(context, item.shizukuVideoPath)
-                } else null
-                val aLocal = if (item.shizukuAudioPath != null) {
-                    ShizukuBridge.copyToCache(context, item.shizukuAudioPath)
-                } else null
-
-                // 核心修复：有特权路径但复制失败时，不要回退到 file:// 打开 ——
-                // Android 15 对 file:// 访问 Android/data 必然 EACCES，回退会误报"权限拒绝"。
-                // 直接抛异常给出明确原因，避免 merge 静默失败/进度卡住。
-                if (item.shizukuVideoPath != null && vLocal == null) {
-                    throw IOException("复制视频流失败（特权服务未就绪或超时）: ${item.shizukuVideoPath}")
-                }
-                if (item.shizukuAudioPath != null && aLocal == null) {
-                    throw IOException("复制音频流失败（特权服务未就绪或超时）: ${item.shizukuAudioPath}")
-                }
-
-                sniffAndStrip(
-                    context,
-                    if (vLocal != null) Uri.fromFile(vLocal) else item.videoM4s,
-                    vTmp
-                )
-                sniffAndStrip(
-                    context,
-                    if (aLocal != null) Uri.fromFile(aLocal) else item.audioM4s,
-                    aTmp
-                )
-                vLocal?.delete()
-                aLocal?.delete()
-
-                mux(vTmp, aTmp, outputFile)
-                if (outputFile.exists() && outputFile.length() > 0) PjmResult.Success(Unit)
-                else PjmResult.Failure("合并结果为空")
-            } finally {
-                vTmp.delete(); aTmp.delete()
-                // 核心优化：清理共享 tmp 目录残留（copyToShared 产物）
+                val cacheDir = context.cacheDir
+                val vTmp = File(cacheDir, "bili_v_${System.nanoTime()}.m4v")
+                val aTmp = File(cacheDir, "bili_a_${System.nanoTime()}.m4a")
                 try {
-                    context.getExternalFilesDir(null)?.let { ext ->
-                        File(ext, "tmp").listFiles()?.forEach { it.delete() }
-                    }
-                } catch (_: Exception) {}
-            }
-        } catch (e: Exception) { PjmLogger.e(TAG, "合并致命失败: ${item.title}", e); PjmResult.Failure("合并失败: ${e.message}") }
-    }
+                    // 特权模式：先把 m4s 从 Android/data 复制到本地临时文件（主进程可读），再走既有流程
+                    val vLocal =
+                        if (item.shizukuVideoPath != null) {
+                            ShizukuBridge.copyToCache(context, item.shizukuVideoPath)
+                        } else {
+                            null
+                        }
+                    val aLocal =
+                        if (item.shizukuAudioPath != null) {
+                            ShizukuBridge.copyToCache(context, item.shizukuAudioPath)
+                        } else {
+                            null
+                        }
 
-    private fun sniffAndStrip(context: Context, srcUri: Uri, destFile: File) {
+                    // 核心修复：有特权路径但复制失败时，不要回退到 file:// 打开 ——
+                    // Android 15 对 file:// 访问 Android/data 必然 EACCES，回退会误报"权限拒绝"。
+                    // 直接抛异常给出明确原因，避免 merge 静默失败/进度卡住。
+                    if (item.shizukuVideoPath != null && vLocal == null) {
+                        throw IOException("复制视频流失败（特权服务未就绪或超时）: ${item.shizukuVideoPath}")
+                    }
+                    if (item.shizukuAudioPath != null && aLocal == null) {
+                        throw IOException("复制音频流失败（特权服务未就绪或超时）: ${item.shizukuAudioPath}")
+                    }
+
+                    sniffAndStrip(
+                        context,
+                        if (vLocal != null) Uri.fromFile(vLocal) else item.videoM4s,
+                        vTmp,
+                    )
+                    sniffAndStrip(
+                        context,
+                        if (aLocal != null) Uri.fromFile(aLocal) else item.audioM4s,
+                        aTmp,
+                    )
+                    vLocal?.delete()
+                    aLocal?.delete()
+
+                    mux(vTmp, aTmp, outputFile)
+                    if (outputFile.exists() && outputFile.length() > 0) {
+                        PjmResult.Success(Unit)
+                    } else {
+                        PjmResult.Failure("合并结果为空")
+                    }
+                } finally {
+                    vTmp.delete()
+                    aTmp.delete()
+                    // 核心优化：清理共享 tmp 目录残留（copyToShared 产物）
+                    try {
+                        context.getExternalFilesDir(null)?.let { ext ->
+                            File(ext, "tmp").listFiles()?.forEach { it.delete() }
+                        }
+                    } catch (_: Exception) {
+                    }
+                }
+            } catch (e: Exception) {
+                PjmLogger.e(TAG, "合并致命失败: ${item.title}", e)
+                PjmResult.Failure("合并失败: ${e.message}")
+            }
+        }
+
+    private fun sniffAndStrip(
+        context: Context,
+        srcUri: Uri,
+        destFile: File,
+    ) {
         val input = context.contentResolver.openInputStream(srcUri) ?: throw IOException("读取流失败: $srcUri")
         input.use { inputStream ->
             FileOutputStream(destFile).use { outputStream ->
@@ -592,20 +870,21 @@ object BiliBridge {
                 try {
                     val firstRead = inputStream.read(buffer)
                     if (firstRead <= 0) return
-                    
+
                     // --- 核心修复：精准 MP4 Box 头部定位 (关键：保留 Size 4字节) ---
                     val boxTypes = listOf("ftyp", "moov", "mdat", "free", "skip", "styp", "sidx")
                     var boxIndex = -1
                     for (i in 0 until (firstRead - 4)) {
                         val potentialBox = String(buffer, i, 4, Charsets.US_ASCII)
                         if (potentialBox in boxTypes) {
-                            boxIndex = i; break
+                            boxIndex = i
+                            break
                         }
                     }
-                    
+
                     // 修正后的跳过逻辑：如果找到了 ftyp 等标志位，应该保留它前面的 4 字节 Size 数据
                     val start = if (boxIndex >= 4) boxIndex - 4 else (if (firstRead > 9 && buffer[0] == 0.toByte()) 9 else 0)
-                    
+
                     val hexHead = buffer.take(16).joinToString(" ") { "%02X".format(it) }
                     PjmLogger.d(TAG, "Header Strip: Found Box at $boxIndex, Final Skip=$start. Head: $hexHead")
 
@@ -613,13 +892,22 @@ object BiliBridge {
                     var bytes: Int
                     while (inputStream.read(buffer).also { bytes = it } != -1) outputStream.write(buffer, 0, bytes)
                     outputStream.flush()
-                    try { outputStream.fd.sync() } catch (_: Exception) {}
-                } finally { VaultManager.releaseBuffer(buffer) }
+                    try {
+                        outputStream.fd.sync()
+                    } catch (_: Exception) {
+                    }
+                } finally {
+                    VaultManager.releaseBuffer(buffer)
+                }
             }
         }
     }
 
-    private fun mux(videoFile: File, audioFile: File, outputFile: File) {
+    private fun mux(
+        videoFile: File,
+        audioFile: File,
+        outputFile: File,
+    ) {
         val videoExtractor = MediaExtractor().apply { setDataSource(videoFile.absolutePath) }
         val audioExtractor = MediaExtractor().apply { setDataSource(audioFile.absolutePath) }
         var muxer: MediaMuxer? = null
@@ -636,10 +924,21 @@ object BiliBridge {
             writeTrack(videoExtractor, vTrack, muxer, vIdx, buffer, info)
             writeTrack(audioExtractor, aTrack, muxer, aIdx, buffer, info)
             muxer.stop()
-        } finally { videoExtractor.release(); audioExtractor.release(); muxer?.release() }
+        } finally {
+            videoExtractor.release()
+            audioExtractor.release()
+            muxer?.release()
+        }
     }
 
-    private fun writeTrack(ex: MediaExtractor, track: Int, mx: MediaMuxer, mxIdx: Int, buf: ByteBuffer, info: MediaCodec.BufferInfo) {
+    private fun writeTrack(
+        ex: MediaExtractor,
+        track: Int,
+        mx: MediaMuxer,
+        mxIdx: Int,
+        buf: ByteBuffer,
+        info: MediaCodec.BufferInfo,
+    ) {
         ex.selectTrack(track)
         while (true) {
             info.offset = 0
@@ -653,7 +952,10 @@ object BiliBridge {
         }
     }
 
-    private fun findTrack(ex: MediaExtractor, prefix: String): Int {
+    private fun findTrack(
+        ex: MediaExtractor,
+        prefix: String,
+    ): Int {
         for (i in 0 until ex.trackCount) {
             val mime = ex.getTrackFormat(i).getString(MediaFormat.KEY_MIME) ?: ""
             if (mime.startsWith(prefix, ignoreCase = true)) return i

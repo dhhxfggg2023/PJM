@@ -1,5 +1,6 @@
 package com.dhhxfggg.pjm.ui.component
 
+import android.graphics.BitmapFactory
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -13,7 +14,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import android.graphics.BitmapFactory
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -72,34 +72,38 @@ fun PjmDeleteConfirmDialog(
             Button(
                 onClick = { onConfirm(selected.toList()) },
                 enabled = selected.isNotEmpty(),
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
             ) {
                 Text(confirmText ?: stringResource(R.string.action_delete_selected, selected.size))
             }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } }
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } },
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
             // 已选统计 + 全选/取消全选
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
                     text = stringResource(R.string.label_selected_count_total, selected.size, candidates.size),
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.weight(1f),
                 )
                 TextButton(onClick = {
-                    if (isAllSelected) selected.clear()
-                    else { selected.clear(); selected.addAll(candidates) }
+                    if (isAllSelected) {
+                        selected.clear()
+                    } else {
+                        selected.clear()
+                        selected.addAll(candidates)
+                    }
                 }) {
                     Icon(
                         if (isAllSelected) Lucide.SquareCheck else Lucide.Square,
                         null,
-                        modifier = Modifier.size(16.dp)
+                        modifier = Modifier.size(16.dp),
                     )
                     Spacer(Modifier.width(4.dp))
                     Text(if (isAllSelected) stringResource(R.string.action_deselect_all) else stringResource(R.string.action_select_all))
@@ -111,7 +115,7 @@ fun PjmDeleteConfirmDialog(
                     text = message,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(bottom = 8.dp)
+                    modifier = Modifier.padding(bottom = 8.dp),
                 )
             }
 
@@ -119,19 +123,23 @@ fun PjmDeleteConfirmDialog(
 
             // 可勾选文件列表
             LazyColumn(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 360.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 360.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 items(candidates, key = { it.relativePath }) { entity ->
                     DeletableFileRow(
                         entity = entity,
                         isChecked = selected.contains(entity),
                         onToggle = {
-                            if (selected.contains(entity)) selected.remove(entity)
-                            else selected.add(entity)
-                        }
+                            if (selected.contains(entity)) {
+                                selected.remove(entity)
+                            } else {
+                                selected.add(entity)
+                            }
+                        },
                     )
                 }
             }
@@ -143,7 +151,7 @@ fun PjmDeleteConfirmDialog(
             Text(
                 text = stringResource(R.string.label_reclaimable_space, FileUtils.formatFileSize(size)),
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }
@@ -161,86 +169,118 @@ private fun DeletableFileRow(
 ) {
     val context = LocalContext.current
     val file = remember(entity.relativePath) { VaultManager.getFileFromEntity(context, entity) }
-    val cachedThumb = remember(entity.relativePath) {
-        if (FileUtils.isVideoFile(entity.name)) ThumbnailCache.getThumbnailFile(context, entity) else null
-    }
+    val cachedThumb =
+        remember(entity.relativePath) {
+            if (FileUtils.isVideoFile(entity.name)) ThumbnailCache.getThumbnailFile(context, entity) else null
+        }
     // 图片显示分辨率（原图 vs 缩略图直观可辨；只读图片头，成本极低）
-    val resolution = remember(entity.relativePath) {
-        if (entity.isImage && file.exists()) {
-            try {
-                val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                BitmapFactory.decodeFile(file.absolutePath, opts)
-                if (opts.outWidth > 0 && opts.outHeight > 0) "${opts.outWidth}×${opts.outHeight}" else null
-            } catch (_: Exception) { null }
-        } else null
-    }
+    val resolution =
+        remember(entity.relativePath) {
+            if (entity.isImage && file.exists()) {
+                try {
+                    val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    BitmapFactory.decodeFile(file.absolutePath, opts)
+                    if (opts.outWidth > 0 && opts.outHeight > 0) "${opts.outWidth}×${opts.outHeight}" else null
+                } catch (_: Exception) {
+                    null
+                }
+            } else {
+                null
+            }
+        }
 
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
-            .clickable(onClick = onToggle)
-            .padding(horizontal = 10.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+                .clickable(onClick = onToggle)
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         // 缩略图 48dp
         Box(
-            modifier = Modifier
-                .size(48.dp)
-                .clip(MaterialTheme.shapes.medium)
-                .background(MaterialTheme.colorScheme.surfaceVariant)
+            modifier =
+                Modifier
+                    .size(48.dp)
+                    .clip(MaterialTheme.shapes.medium)
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
         ) {
             when {
-                entity.isImage && file.exists() -> AsyncImage(
-                    model = ImageRequest.Builder(context).data(file.absolutePath).size(96, 96).crossfade(true).build(),
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
-                )
-                FileUtils.isVideoFile(entity.name) && cachedThumb != null -> AsyncImage(
-                    model = ImageRequest.Builder(context).data(cachedThumb.absolutePath).size(96, 96).crossfade(true).build(),
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
-                )
-                FileUtils.isVideoFile(entity.name) && file.exists() -> AsyncImage(
-                    model = ImageRequest.Builder(context)
-                        .data(file.absolutePath)
-                        .decoderFactory(VideoFrameDecoder.Factory())
-                        .size(96, 96)
-                        .build(),
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
-                )
-                else -> Icon(
-                    Lucide.File,
-                    null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(12.dp)
-                )
+                entity.isImage && file.exists() ->
+                    AsyncImage(
+                        model =
+                            ImageRequest
+                                .Builder(context)
+                                .data(file.absolutePath)
+                                .size(96, 96)
+                                .crossfade(true)
+                                .build(),
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                FileUtils.isVideoFile(entity.name) && cachedThumb != null ->
+                    AsyncImage(
+                        model =
+                            ImageRequest
+                                .Builder(context)
+                                .data(cachedThumb.absolutePath)
+                                .size(96, 96)
+                                .crossfade(true)
+                                .build(),
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                FileUtils.isVideoFile(entity.name) && file.exists() ->
+                    AsyncImage(
+                        model =
+                            ImageRequest
+                                .Builder(context)
+                                .data(file.absolutePath)
+                                .decoderFactory(VideoFrameDecoder.Factory())
+                                .size(96, 96)
+                                .build(),
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                else ->
+                    Icon(
+                        Lucide.File,
+                        null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(12.dp),
+                    )
             }
         }
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
             // 文件名统一为规范化显示名（PJM_入库时间.ext），与文件柜/媒体详情一致；pjm 容器显示其规范原名
-            Text(FileUtils.normalizedDisplayName(entity), style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                FileUtils.normalizedDisplayName(entity),
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
             Text(
                 buildString {
                     append(FileUtils.formatFileSize(entity.size))
                     if (resolution != null) append("  ·  $resolution")
                 },
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         Checkbox(
             checked = isChecked,
             onCheckedChange = { onToggle() },
-            colors = CheckboxDefaults.colors(
-                checkedColor = MaterialTheme.colorScheme.error
-            )
+            colors =
+                CheckboxDefaults.colors(
+                    checkedColor = MaterialTheme.colorScheme.error,
+                ),
         )
     }
 }

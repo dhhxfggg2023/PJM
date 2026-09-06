@@ -23,7 +23,7 @@ import com.dhhxfggg.pjm.data.model.FileEntity
 @Database(
     entities = [FileEntity::class],
     version = 9,
-    exportSchema = true
+    exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun fileDao(): FileDao

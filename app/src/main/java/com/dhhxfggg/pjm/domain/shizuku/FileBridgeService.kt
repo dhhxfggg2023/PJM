@@ -1,12 +1,10 @@
 package com.dhhxfggg.pjm.domain.shizuku
 
-import android.os.RemoteException
 import android.util.Log
 import com.dhhxfggg.pjm.IFileBridgeService
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
-import java.io.IOException
 
 /**
  * Shizuku UserService 文件桥接实现。
@@ -19,9 +17,9 @@ import java.io.IOException
  * 等 Context 能力不可用，这里只做纯文件 I/O。
  */
 class FileBridgeService : IFileBridgeService.Stub() {
-
     companion object {
         private const val TAG = "FileBridgeService"
+
         // Shizuku 官方保留的销毁事务码（AIDL 中 transaction id 16777114 + 1）
         private const val DESTROY_TRANSACTION = android.os.IBinder.LAST_CALL_TRANSACTION + 1
     }
@@ -30,19 +28,26 @@ class FileBridgeService : IFileBridgeService.Stub() {
         return try {
             val dir = File(path)
             if (!dir.exists() || !dir.isDirectory) return emptyArray()
-            dir.listFiles()?.mapNotNull { f ->
-                try {
-                    val type = if (f.isDirectory) "D" else "F"
-                    "$type|${f.name}|${f.length()}"
-                } catch (_: Exception) { null }
-            }?.toTypedArray() ?: emptyArray()
+            dir
+                .listFiles()
+                ?.mapNotNull { f ->
+                    try {
+                        val type = if (f.isDirectory) "D" else "F"
+                        "$type|${f.name}|${f.length()}"
+                    } catch (_: Exception) {
+                        null
+                    }
+                }?.toTypedArray() ?: emptyArray()
         } catch (e: Exception) {
             Log.e(TAG, "listFiles failed: $path", e)
             emptyArray()
         }
     }
 
-    override fun copyFile(srcPath: String, destPath: String): Long {
+    override fun copyFile(
+        srcPath: String,
+        destPath: String,
+    ): Long {
         var copied = 0L
         try {
             val src = File(srcPath)
@@ -64,7 +69,10 @@ class FileBridgeService : IFileBridgeService.Stub() {
         } catch (e: Exception) {
             Log.e(TAG, "copyFile failed: $srcPath -> $destPath", e)
             // 清理半成品
-            try { File(destPath).delete() } catch (_: Exception) {}
+            try {
+                File(destPath).delete()
+            } catch (_: Exception) {
+            }
             return -1
         }
     }
@@ -84,9 +92,12 @@ class FileBridgeService : IFileBridgeService.Stub() {
         }
     }
 
-    override fun exists(path: String): Boolean {
-        return try { File(path).exists() } catch (_: Exception) { false }
-    }
+    override fun exists(path: String): Boolean =
+        try {
+            File(path).exists()
+        } catch (_: Exception) {
+            false
+        }
 
     override fun readTextFile(path: String): String? {
         return try {

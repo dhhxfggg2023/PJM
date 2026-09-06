@@ -18,7 +18,6 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.io.File
 import java.io.FileOutputStream
-import kotlin.math.abs
 
 /**
  * 图片感知查重核心算法测试。
@@ -30,7 +29,6 @@ import kotlin.math.abs
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class ImageFingerprintTest {
-
     private lateinit var context: Context
 
     @Before
@@ -38,8 +36,8 @@ class ImageFingerprintTest {
         context = ApplicationProvider.getApplicationContext()
     }
 
-    private fun makeEntity(name: String): FileEntity {
-        return FileEntity(
+    private fun makeEntity(name: String): FileEntity =
+        FileEntity(
             relativePath = "test/$name",
             name = name,
             size = 0L,
@@ -47,11 +45,15 @@ class ImageFingerprintTest {
             lastModified = System.currentTimeMillis(),
             isImage = true,
             extension = "jpg",
-            contentHash = null
+            contentHash = null,
         )
-    }
 
-    private fun writeImage(entity: FileEntity, bitmap: Bitmap, useJpeg: Boolean = false, quality: Int = 85) {
+    private fun writeImage(
+        entity: FileEntity,
+        bitmap: Bitmap,
+        useJpeg: Boolean = false,
+        quality: Int = 85,
+    ) {
         // 与 VaultManager.getFileFromEntity 的解析一致：filesDir/pjm_vault/<relativePath>
         val dir = File(File(context.filesDir, "pjm_vault"), "test").apply { mkdirs() }
         val f = File(dir, entity.name)
@@ -71,7 +73,11 @@ class ImageFingerprintTest {
      * 因此 800x600 与 200x150 在归一化坐标下内容完全一致（这正是"原图/缩略图"的本质），
      * 而不同 hue 产生不同灰度图案（可区分）。
      */
-    private fun makeTestImage(width: Int, height: Int, hue: Int): Bitmap {
+    private fun makeTestImage(
+        width: Int,
+        height: Int,
+        hue: Int,
+    ): Bitmap {
         val bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         for (y in 0 until height) {
             for (x in 0 until width) {

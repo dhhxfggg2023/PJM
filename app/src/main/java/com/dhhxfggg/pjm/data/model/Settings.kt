@@ -12,19 +12,22 @@ object Settings {
 
     /** 是否启用自定义背景 */
     const val KEY_CUSTOM_BACKGROUND_ENABLED = "custom_background_enabled"
+
     /** 自定义背景的 URI */
     const val KEY_CUSTOM_BACKGROUND_URI = "custom_background_uri"
+
     /** 背景不透明度 (0.0 - 1.0) */
     const val KEY_BACKGROUND_OPACITY = "background_opacity"
-    
+
     /** 全局 UI 缩放系数 (1.0 为默认) */
     const val KEY_GLOBAL_UI_SCALE = "global_ui_scale"
 
     /** 自定义字体 URI */
     const val KEY_CUSTOM_FONT_URI = "custom_font_uri"
-    
+
     /** 文件查看模式 (grid, list) */
-    const val KEY_FILE_VIEW_MODE = "file_view_mode" 
+    const val KEY_FILE_VIEW_MODE = "file_view_mode"
+
     /** 网格布局列数 */
     const val KEY_GRID_SPAN_COUNT = "grid_span_count"
 
@@ -64,6 +67,6 @@ object Settings {
         val isMigrationDone: Boolean = false,
         val biliRootUri: String? = null,
         val biliAutoDelete: Boolean = false,
-        val biliMergedAutoDelete: Boolean = false
+        val biliMergedAutoDelete: Boolean = false,
     )
 }

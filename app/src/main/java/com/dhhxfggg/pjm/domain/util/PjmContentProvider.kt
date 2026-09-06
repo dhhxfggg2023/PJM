@@ -16,13 +16,16 @@ import java.io.FileNotFoundException
  * 直接提供私有目录下的文件访问，无需拷贝到缓存目录。
  */
 class PjmContentProvider : ContentProvider() {
-
     companion object {
         private const val AUTHORITY_SUFFIX = ".pjm_provider"
-        
-        fun getUriForFile(context: android.content.Context, file: File): Uri {
+
+        fun getUriForFile(
+            context: android.content.Context,
+            file: File,
+        ): Uri {
             val authority = "${context.packageName}$AUTHORITY_SUFFIX"
-            return Uri.Builder()
+            return Uri
+                .Builder()
                 .scheme("content")
                 .authority(authority)
                 .path(file.absolutePath)
@@ -37,7 +40,7 @@ class PjmContentProvider : ContentProvider() {
         projection: Array<out String>?,
         selection: String?,
         selectionArgs: Array<out String>?,
-        sortOrder: String?
+        sortOrder: String?,
     ): Cursor {
         val file = File(uri.path ?: throw FileNotFoundException())
         val columns = projection ?: arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE)
@@ -59,13 +62,30 @@ class PjmContentProvider : ContentProvider() {
         return MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension) ?: "application/octet-stream"
     }
 
-    override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor? {
+    override fun openFile(
+        uri: Uri,
+        mode: String,
+    ): ParcelFileDescriptor? {
         val file = File(uri.path ?: throw FileNotFoundException())
         if (!file.exists()) throw FileNotFoundException(file.absolutePath)
         return ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
     }
 
-    override fun insert(uri: Uri, values: ContentValues?): Uri? = null
-    override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?): Int = 0
-    override fun update(uri: Uri, values: ContentValues?, selection: String?, selectionArgs: Array<out String>?): Int = 0
+    override fun insert(
+        uri: Uri,
+        values: ContentValues?,
+    ): Uri? = null
+
+    override fun delete(
+        uri: Uri,
+        selection: String?,
+        selectionArgs: Array<out String>?,
+    ): Int = 0
+
+    override fun update(
+        uri: Uri,
+        values: ContentValues?,
+        selection: String?,
+        selectionArgs: Array<out String>?,
+    ): Int = 0
 }

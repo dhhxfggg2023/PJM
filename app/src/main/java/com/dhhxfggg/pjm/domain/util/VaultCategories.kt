@@ -6,7 +6,6 @@ package com.dhhxfggg.pjm.domain.util
  * 分类键存于 FileEntity.category 与磁盘目录名；UI 显示名/图标由各 Screen 负责映射。
  */
 object VaultCategories {
-
     const val CAT_PJM = "pjm"
     const val CAT_BILI_VIDEOS = "bili_videos"
     const val CAT_IMAGES = "images"

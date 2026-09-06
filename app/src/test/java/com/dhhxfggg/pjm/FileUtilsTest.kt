@@ -12,12 +12,11 @@ import org.junit.Test
  * 只覆盖不触碰 Android/磁盘状态的文件名/分类/格式化逻辑，离线可跑。
  */
 class FileUtilsTest {
-
     // ---------- getFileExtension ----------
     @Test
     fun extension_commonCases() {
         assertEquals("jpg", FileUtils.getFileExtension("photo.jpg"))
-        assertEquals("mp4", FileUtils.getFileExtension("clip.MP4"))      // 统一小写
+        assertEquals("mp4", FileUtils.getFileExtension("clip.MP4")) // 统一小写
         assertEquals("", FileUtils.getFileExtension("noext"))
         assertEquals("", FileUtils.getFileExtension("trailing."))
     }
@@ -102,48 +101,51 @@ class FileUtilsTest {
     // ---------- getFileFingerprint ----------
     @Test
     fun fingerprint_stableFormat() {
-        val e = FileEntity(
-            relativePath = "images/x.jpg",
-            name = "x.jpg",
-            size = 1234L,
-            category = "images",
-            lastModified = 5678L,
-            isImage = true,
-            extension = "jpg",
-            contentHash = null
-        )
+        val e =
+            FileEntity(
+                relativePath = "images/x.jpg",
+                name = "x.jpg",
+                size = 1234L,
+                category = "images",
+                lastModified = 5678L,
+                isImage = true,
+                extension = "jpg",
+                contentHash = null,
+            )
         assertEquals("jpg_1234_5678", FileUtils.getFileFingerprint(e))
     }
 
     // ---------- normalizedDisplayName ----------
     @Test
     fun normalizedDisplayName_pjmKeepsOriginal() {
-        val e = FileEntity(
-            relativePath = "pjm/Export_20260715_183000.pjm.1",
-            name = "Export_20260715_183000.pjm.1",
-            size = 1,
-            category = "pjm",
-            lastModified = 0,
-            isImage = false,
-            extension = "pjm",
-            contentHash = null
-        )
+        val e =
+            FileEntity(
+                relativePath = "pjm/Export_20260715_183000.pjm.1",
+                name = "Export_20260715_183000.pjm.1",
+                size = 1,
+                category = "pjm",
+                lastModified = 0,
+                isImage = false,
+                extension = "pjm",
+                contentHash = null,
+            )
         // pjm 容器保持原样
         assertEquals("Export_20260715_183000.pjm.1", FileUtils.normalizedDisplayName(e))
     }
 
     @Test
     fun normalizedDisplayName_regularFileGetsPjmPrefix() {
-        val e = FileEntity(
-            relativePath = "images/photo.jpg",
-            name = "photo.jpg",
-            size = 1,
-            category = "images",
-            lastModified = 1784981057941L, // 2026-07-25（示例）
-            isImage = true,
-            extension = "jpg",
-            contentHash = null
-        )
+        val e =
+            FileEntity(
+                relativePath = "images/photo.jpg",
+                name = "photo.jpg",
+                size = 1,
+                category = "images",
+                lastModified = 1784981057941L, // 2026-07-25（示例）
+                isImage = true,
+                extension = "jpg",
+                contentHash = null,
+            )
         val name = FileUtils.normalizedDisplayName(e)
         // 时间部分格式化为 yyyyMMdd_HHmmss，前缀 PJM_
         assertTrue("should start with PJM_: $name", name.startsWith("PJM_"))

@@ -31,14 +31,14 @@ interface IconPack {
     val home: ImageVector
     val discovery: ImageVector
     val settings: ImageVector
-    
+
     val catPjm: ImageVector
     val catBiliVideos: ImageVector
     val catImages: ImageVector
     val catVideos: ImageVector
     val catAudios: ImageVector
     val catOthers: ImageVector
-    
+
     val actionShare: ImageVector
     val actionDelete: ImageVector
 
@@ -58,14 +58,14 @@ object KawaiiCleanIconPack : IconPack {
     override val home = Icons.Rounded.Home
     override val discovery = Icons.Rounded.Explore
     override val settings = Icons.Rounded.Settings
-    
+
     override val catPjm = Icons.Rounded.Lock
     override val catBiliVideos = Icons.Rounded.Tv
     override val catImages = Icons.Rounded.PhotoLibrary
     override val catVideos = Icons.Rounded.PlayCircleFilled
     override val catAudios = Icons.Rounded.LibraryMusic
     override val catOthers = Icons.Rounded.Folder
-    
+
     override val actionShare = Icons.Rounded.Share
     override val actionDelete = Icons.Rounded.Delete
 
@@ -79,6 +79,4 @@ object KawaiiCleanIconPack : IconPack {
 }
 
 @Composable
-fun rememberIconPack(): IconPack {
-    return KawaiiCleanIconPack
-}
+fun rememberIconPack(): IconPack = KawaiiCleanIconPack

@@ -1,0 +1,22 @@
+# PJM 代码风格基线（EditorConfig + ktlint）
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+indent_style = space
+indent_size = 4
+trim_trailing_whitespace = true
+
+[*.{kt,kts}]
+# —— 与既有代码库风格冲突的规则豁免（存量豁免；新代码请遵守剩余规则）——
+# Compose 组件惯例 PascalCase（SettingsCategory/SettingsButton 等）；存量代码普遍如此
+ktlint_standard_function-naming = disabled
+# 存量代码普遍使用通配导入（AI 遗留风格），暂不全量展开
+ktlint_standard_no-wildcard-imports = disabled
+# 允许 140 列内的长行
+ktlint_standard_max-line-length = disabled
+# Backing property（_xxx + stateIn 暴露）为既有 ViewModel 写法
+ktlint_standard_backing-property-naming = disabled
+ktlint_standard_property-naming = disabled

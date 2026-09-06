@@ -63,29 +63,42 @@ class BiliSettingsController(
             // 核心修复：扫描遍历是【不确定时长】操作，用无限循环进度条（isIndeterminate），
             VaultManager.updateProgress(0f, statusSearching, taskId = VaultManager.TASK_BILI_SCAN, isActive = true, isIndeterminate = true)
 
-            val items = try {
-                BiliBridge.scan(app, rootUri) { status ->
-                    VaultManager.updateProgress(0f, status, taskId = VaultManager.TASK_BILI_SCAN, isActive = true, isIndeterminate = true)
+            val items =
+                try {
+                    BiliBridge.scan(app, rootUri) { status ->
+                        VaultManager.updateProgress(
+                            0f,
+                            status,
+                            taskId = VaultManager.TASK_BILI_SCAN,
+                            isActive = true,
+                            isIndeterminate = true,
+                        )
+                    }
+                } catch (e: Exception) {
+                    PjmLogger.e("BiliController", "Bili scan failed", e)
+                    emptyList()
                 }
-            } catch (e: Exception) {
-                PjmLogger.e("BiliController", "Bili scan failed", e)
-                emptyList()
-            }
 
             if (items.isEmpty()) {
-                Toast.makeText(app, "未在选定目录识别到有效的 B站 视频碎片", Toast.LENGTH_LONG).show()
+                Toast.makeText(app, app.getString(R.string.toast_bili_no_cache_found), Toast.LENGTH_LONG).show()
             }
 
             _biliItems.value = if (items.isNotEmpty()) items else null
             _isScanningBili.value = false
-            VaultManager.updateProgress(1f, if (items.isNotEmpty()) app.getString(R.string.status_all_tasks_complete) else statusSearching, taskId = VaultManager.TASK_BILI_SCAN)
+            VaultManager.updateProgress(
+                1f,
+                if (items.isNotEmpty()) app.getString(R.string.status_all_tasks_complete) else statusSearching,
+                taskId = VaultManager.TASK_BILI_SCAN,
+            )
             delay(800)
             VaultManager.clearProgress(VaultManager.TASK_BILI_SCAN)
             VaultManager.endOperation(VaultManager.TASK_BILI_SCAN)
         }
     }
 
-    fun clearBiliState() { _biliItems.value = null }
+    fun clearBiliState() {
+        _biliItems.value = null
+    }
 
     fun scanBiliMerged(rootUri: Uri) {
         scope.launch {
@@ -95,16 +108,21 @@ class BiliSettingsController(
             }
             try {
                 _isScanningBiliMerged.value = true
-                VaultManager.updateProgress(0f, app.getString(R.string.status_searching_bili_merged), taskId = VaultManager.TASK_BILI_SCAN_MERGED)
+                VaultManager.updateProgress(
+                    0f,
+                    app.getString(R.string.status_searching_bili_merged),
+                    taskId = VaultManager.TASK_BILI_SCAN_MERGED,
+                )
 
-                val items = try {
-                    BiliBridge.scanMergedVideos(app, rootUri) { status ->
-                        VaultManager.updateProgress(0f, status, taskId = VaultManager.TASK_BILI_SCAN_MERGED)
+                val items =
+                    try {
+                        BiliBridge.scanMergedVideos(app, rootUri) { status ->
+                            VaultManager.updateProgress(0f, status, taskId = VaultManager.TASK_BILI_SCAN_MERGED)
+                        }
+                    } catch (e: Exception) {
+                        PjmLogger.e("BiliController", "Bili merged scan failed", e)
+                        emptyList()
                     }
-                } catch (e: Exception) {
-                    PjmLogger.e("BiliController", "Bili merged scan failed", e)
-                    emptyList()
-                }
 
                 if (items.isEmpty()) {
                     Toast.makeText(app, app.getString(R.string.toast_bili_merged_empty), Toast.LENGTH_LONG).show()
@@ -119,7 +137,9 @@ class BiliSettingsController(
         }
     }
 
-    fun clearBiliMergedState() { _biliMergedVideos.value = null }
+    fun clearBiliMergedState() {
+        _biliMergedVideos.value = null
+    }
 
     fun importBiliMergedVideos(items: List<BiliBridge.MergedVideoItem>) {
         _biliMergedVideos.value = null
@@ -144,21 +164,31 @@ class BiliSettingsController(
 
                 items.forEachIndexed { index, item ->
                     val progress = (index + 1).toFloat() / total
-                    VaultManager.updateProgress(progress, app.getString(R.string.status_processing_bili_batch, index + 1, total, item.name), taskId = VaultManager.TASK_BILI_IMPORT_MERGED)
+                    VaultManager.updateProgress(
+                        progress,
+                        app.getString(R.string.status_processing_bili_batch, index + 1, total, item.name),
+                        taskId = VaultManager.TASK_BILI_IMPORT_MERGED,
+                    )
 
-                    val input = try { app.contentResolver.openInputStream(item.uri) } catch (e: Exception) { null }
-                    if (input != null) {
-                        VaultManager.digestFileToEntity(
-                            context = app,
-                            fileName = item.name,
-                            inputStream = input,
-                            expectedSize = FileUtils.getFileSize(app, item.uri),
-                            overrideCategory = VaultManager.CAT_BILI_VIDEOS
-                        ).onSuccess { entity ->
-                            fileDao.upsert(entity)
-                            ThumbnailCache.generateVideoThumbnail(app, entity)
-                            importedOk.add(item)
+                    val input =
+                        try {
+                            app.contentResolver.openInputStream(item.uri)
+                        } catch (e: Exception) {
+                            null
                         }
+                    if (input != null) {
+                        VaultManager
+                            .digestFileToEntity(
+                                context = app,
+                                fileName = item.name,
+                                inputStream = input,
+                                expectedSize = FileUtils.getFileSize(app, item.uri),
+                                overrideCategory = VaultManager.CAT_BILI_VIDEOS,
+                            ).onSuccess { entity ->
+                                fileDao.upsert(entity)
+                                ThumbnailCache.generateVideoThumbnail(app, entity)
+                                importedOk.add(item)
+                            }
                     }
                 }
 
@@ -173,7 +203,11 @@ class BiliSettingsController(
                 }
             }
             BiliBridge.cleanupEmptyBiliDirs(app)
-            VaultManager.updateProgress(1f, app.getString(R.string.status_all_tasks_complete), taskId = VaultManager.TASK_BILI_IMPORT_MERGED)
+            VaultManager.updateProgress(
+                1f,
+                app.getString(R.string.status_all_tasks_complete),
+                taskId = VaultManager.TASK_BILI_IMPORT_MERGED,
+            )
             delay(1000.milliseconds)
             VaultManager.clearProgress(VaultManager.TASK_BILI_IMPORT_MERGED)
             VaultManager.endOperation(VaultManager.TASK_BILI_IMPORT_MERGED)
@@ -185,7 +219,10 @@ class BiliSettingsController(
      * 核心修复：删除已合并视频所在的整个 B站 源文件夹，并清理空的父目录。
      * 优先特权模式（shell 身份递归删除），其次 file:// 路径，最后 SAF 删除父目录文档。
      */
-    private suspend fun deleteMergedSourceFolder(context: Context, item: BiliBridge.MergedVideoItem) {
+    private suspend fun deleteMergedSourceFolder(
+        context: Context,
+        item: BiliBridge.MergedVideoItem,
+    ) {
         try {
             if (item.shizukuPath != null) {
                 val folder = item.shizukuPath.substringBeforeLast('/')
@@ -201,8 +238,9 @@ class BiliSettingsController(
                 }
                 PjmLogger.e("BiliController", "Shizuku merged folder delete failed: $folder")
             }
-            val folderPath = item.parentFolder?.takeIf { it.scheme == "file" }?.path
-                ?: item.uri.path?.substringBeforeLast('/')
+            val folderPath =
+                item.parentFolder?.takeIf { it.scheme == "file" }?.path
+                    ?: item.uri.path?.substringBeforeLast('/')
             if (folderPath != null) {
                 val dir = File(folderPath)
                 if (dir.exists() && dir.deleteRecursively()) {
@@ -212,10 +250,13 @@ class BiliSettingsController(
                 }
             }
             if (item.parentFolder != null) {
-                val ok = try {
-                    DocumentsContract.deleteDocument(context.contentResolver, item.parentFolder)
-                    true
-                } catch (_: Exception) { false }
+                val ok =
+                    try {
+                        DocumentsContract.deleteDocument(context.contentResolver, item.parentFolder)
+                        true
+                    } catch (_: Exception) {
+                        false
+                    }
                 if (ok) {
                     PjmLogger.i("BiliController", "SAF cleaned merged source folder: ${item.parentFolder}")
                     return
@@ -229,7 +270,10 @@ class BiliSettingsController(
     }
 
     /** 仅删除单个已合并视频文件（不删除文件夹，用于部分导入成功的保守回退） */
-    private suspend fun deleteMergedSourceFile(context: Context, item: BiliBridge.MergedVideoItem) {
+    private suspend fun deleteMergedSourceFile(
+        context: Context,
+        item: BiliBridge.MergedVideoItem,
+    ) {
         try {
             if (item.shizukuPath != null) {
                 var deleted = ShizukuBridge.deletePath(context, item.shizukuPath)
@@ -237,16 +281,20 @@ class BiliSettingsController(
                     PjmLogger.w("BiliController", "Merged delete retry: ${item.name}")
                     deleted = ShizukuBridge.deletePath(context, item.shizukuPath)
                 }
-                if (deleted) { PjmLogger.i("BiliController", "Shizuku cleaned merged source: ${item.name}"); return }
+                if (deleted) {
+                    PjmLogger.i("BiliController", "Shizuku cleaned merged source: ${item.name}")
+                    return
+                }
             }
             if (item.uri.scheme == "file") {
                 File(item.uri.path ?: "").delete()
                 PjmLogger.i("BiliController", "File cleaned merged source: ${item.name}")
                 return
             }
-            val deleted = item.parentFolder?.let { parent ->
-                DocumentFile.fromTreeUri(context, parent)?.findFile(item.name)?.delete() ?: false
-            } ?: false
+            val deleted =
+                item.parentFolder?.let { parent ->
+                    DocumentFile.fromTreeUri(context, parent)?.findFile(item.name)?.delete() ?: false
+                } ?: false
             if (!deleted) DocumentFile.fromSingleUri(context, item.uri)?.delete()
             PjmLogger.i("BiliController", "Successfully cleaned merged video source: ${item.name}")
         } catch (e: Exception) {
@@ -268,60 +316,74 @@ class BiliSettingsController(
 
                 items.forEachIndexed { index, item ->
                     val progress = (index + 1).toFloat() / total
-                    VaultManager.updateProgress(progress, app.getString(R.string.status_processing_bili_batch, index + 1, total, item.title), taskId = VaultManager.TASK_BILI_IMPORT)
+                    VaultManager.updateProgress(
+                        progress,
+                        app.getString(R.string.status_processing_bili_batch, index + 1, total, item.title),
+                        taskId = VaultManager.TASK_BILI_IMPORT,
+                    )
 
                     val tempMp4 = File(app.cacheDir, "bili_merge_${System.nanoTime()}.mp4")
 
-                    BiliBridge.merge(app, item, tempMp4).onSuccess {
-                        if (tempMp4.exists() && tempMp4.length() > 0) {
-                            VaultManager.digestFileToEntity(
-                                context = app,
-                                fileName = "${item.title}.mp4",
-                                inputStream = tempMp4.inputStream(),
-                                expectedSize = tempMp4.length(),
-                                overrideCategory = VaultManager.CAT_BILI_VIDEOS
-                            ).onSuccess { entity ->
-                                fileDao.upsert(entity)
-                                ThumbnailCache.generateVideoThumbnail(app, entity)
+                    BiliBridge
+                        .merge(app, item, tempMp4)
+                        .onSuccess {
+                            if (tempMp4.exists() && tempMp4.length() > 0) {
+                                VaultManager
+                                    .digestFileToEntity(
+                                        context = app,
+                                        fileName = "${item.title}.mp4",
+                                        inputStream = tempMp4.inputStream(),
+                                        expectedSize = tempMp4.length(),
+                                        overrideCategory = VaultManager.CAT_BILI_VIDEOS,
+                                    ).onSuccess { entity ->
+                                        fileDao.upsert(entity)
+                                        ThumbnailCache.generateVideoThumbnail(app, entity)
 
-                                if (biliAutoDelete) {
-                                    try {
-                                        if (item.shizukuParentPath != null) {
-                                            var deleted = ShizukuBridge.deletePath(app, item.shizukuParentPath)
-                                            if (!deleted) {
-                                                PjmLogger.w("BiliController", "Delete retry: ${item.title}")
-                                                deleted = ShizukuBridge.deletePath(app, item.shizukuParentPath)
-                                            }
-                                            if (deleted) PjmLogger.i("BiliController", "Shizuku cleaned Bili source folder: ${item.title}")
-                                            else {
-                                                PjmLogger.e("BiliController", "Delete still failed: ${item.title}")
-                                                listOfNotNull(item.shizukuVideoPath, item.shizukuAudioPath).forEach { p ->
-                                                    try { ShizukuBridge.deletePath(app, p) } catch (_: Exception) {}
+                                        if (biliAutoDelete) {
+                                            try {
+                                                if (item.shizukuParentPath != null) {
+                                                    var deleted = ShizukuBridge.deletePath(app, item.shizukuParentPath)
+                                                    if (!deleted) {
+                                                        PjmLogger.w("BiliController", "Delete retry: ${item.title}")
+                                                        deleted = ShizukuBridge.deletePath(app, item.shizukuParentPath)
+                                                    }
+                                                    if (deleted) {
+                                                        PjmLogger.i("BiliController", "Shizuku cleaned Bili source folder: ${item.title}")
+                                                    } else {
+                                                        PjmLogger.e("BiliController", "Delete still failed: ${item.title}")
+                                                        listOfNotNull(item.shizukuVideoPath, item.shizukuAudioPath).forEach { p ->
+                                                            try {
+                                                                ShizukuBridge.deletePath(app, p)
+                                                            } catch (_: Exception) {
+                                                            }
+                                                        }
+                                                    }
+                                                    cleanupEmptyBiliParents(app, item.shizukuParentPath)
+                                                } else if (item.parentFolder.scheme == "file") {
+                                                    val folderPath = item.parentFolder.path ?: ""
+                                                    File(folderPath).deleteRecursively()
+                                                    cleanupEmptyBiliParents(app, folderPath)
+                                                } else {
+                                                    val ok =
+                                                        try {
+                                                            DocumentsContract.deleteDocument(app.contentResolver, item.parentFolder)
+                                                            true
+                                                        } catch (_: Exception) {
+                                                            false
+                                                        }
+                                                    if (!ok) PjmLogger.e("BiliController", "SAF delete Bili folder failed: ${item.title}")
                                                 }
+                                            } catch (e: Exception) {
+                                                PjmLogger.e("BiliController", "Failed to clean Bili folder", e)
                                             }
-                                            cleanupEmptyBiliParents(app, item.shizukuParentPath)
-                                        } else if (item.parentFolder.scheme == "file") {
-                                            val folderPath = item.parentFolder.path ?: ""
-                                            File(folderPath).deleteRecursively()
-                                            cleanupEmptyBiliParents(app, folderPath)
-                                        } else {
-                                            val ok = try {
-                                                DocumentsContract.deleteDocument(app.contentResolver, item.parentFolder)
-                                                true
-                                            } catch (_: Exception) { false }
-                                            if (!ok) PjmLogger.e("BiliController", "SAF delete Bili folder failed: ${item.title}")
                                         }
-                                    } catch (e: Exception) {
-                                        PjmLogger.e("BiliController", "Failed to clean Bili folder", e)
                                     }
-                                }
                             }
+                            tempMp4.delete()
+                        }.onFailure { fail ->
+                            PjmLogger.e("BiliController", "Merge fail: ${fail.message}")
+                            tempMp4.delete()
                         }
-                        tempMp4.delete()
-                    }.onFailure { fail ->
-                        PjmLogger.e("BiliController", "Merge fail: ${fail.message}")
-                        tempMp4.delete()
-                    }
                 }
             }
             BiliBridge.cleanupEmptyBiliDirs(app)
@@ -337,37 +399,47 @@ class BiliSettingsController(
      * 删除 B站 视频文件夹后，向上清理空的父目录（download），最多上溯到 Android/data/<pkg> 为止。
      * 只走内置特权服务或 File API；一切异常捕获，列表失败视为"非空"（安全优先）。
      */
-    private suspend fun cleanupEmptyBiliParents(context: Context, deletedVideoDir: String) {
+    private suspend fun cleanupEmptyBiliParents(
+        context: Context,
+        deletedVideoDir: String,
+    ) {
         try {
             val pkgRoot = deletedVideoDir.substringBefore("/download", missingDelimiterValue = deletedVideoDir)
             var dir = deletedVideoDir.substringBeforeLast('/')
             delay(300)
             repeat(3) {
                 if (!dir.startsWith(pkgRoot) || dir.length <= pkgRoot.length) return
-                val isEmpty = try {
-                    if (EmbeddedPrivilegedIo.isAvailable(context)) {
-                        var r = EmbeddedPrivilegedIo.listFiles(context, dir)
-                        if (r == null) {
-                            delay(500); r = EmbeddedPrivilegedIo.listFiles(context, dir) }
-                        r?.isEmpty() == true
-                    } else {
-                        File(dir).listFiles()?.isEmpty() == true
+                val isEmpty =
+                    try {
+                        if (EmbeddedPrivilegedIo.isAvailable(context)) {
+                            var r = EmbeddedPrivilegedIo.listFiles(context, dir)
+                            if (r == null) {
+                                delay(500)
+                                r = EmbeddedPrivilegedIo.listFiles(context, dir)
+                            }
+                            r?.isEmpty() == true
+                        } else {
+                            File(dir).listFiles()?.isEmpty() == true
+                        }
+                    } catch (_: Exception) {
+                        false
                     }
-                } catch (_: Exception) {
-                    false
-                }
                 if (!isEmpty) return
-                val ok = try {
-                    if (EmbeddedPrivilegedIo.isAvailable(context)) {
-                        EmbeddedPrivilegedIo.deletePath(context, dir)
-                    } else {
-                        File(dir).delete()
+                val ok =
+                    try {
+                        if (EmbeddedPrivilegedIo.isAvailable(context)) {
+                            EmbeddedPrivilegedIo.deletePath(context, dir)
+                        } else {
+                            File(dir).delete()
+                        }
+                    } catch (_: Exception) {
+                        false
                     }
-                } catch (_: Exception) {
-                    false
+                if (ok) {
+                    PjmLogger.i("BiliController", "Cleaned empty Bili parent dir: $dir")
+                } else {
+                    return
                 }
-                if (ok) PjmLogger.i("BiliController", "Cleaned empty Bili parent dir: $dir")
-                else return
                 dir = dir.substringBeforeLast('/')
             }
         } catch (e: Exception) {

@@ -17,7 +17,6 @@ import java.util.ArrayDeque
  * 同一时刻仅当前激活项使用播放器（其余显示缩略图），池内实例数 = 激活上限。
  */
 object DiscoveryPlayerPool {
-
     private const val POOL_SIZE = 2
 
     private val pool = ArrayDeque<ExoPlayer>()
@@ -28,17 +27,19 @@ object DiscoveryPlayerPool {
      */
     @Synchronized
     fun acquire(context: Context): ExoPlayer {
-        val player = pool.pollFirst()
-            ?: ExoPlayer.Builder(context).build().apply {
-                repeatMode = Player.REPEAT_MODE_ONE
-                setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setUsage(C.USAGE_MEDIA)
-                        .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
-                        .build(),
-                    true
-                )
-            }
+        val player =
+            pool.pollFirst()
+                ?: ExoPlayer.Builder(context).build().apply {
+                    repeatMode = Player.REPEAT_MODE_ONE
+                    setAudioAttributes(
+                        AudioAttributes
+                            .Builder()
+                            .setUsage(C.USAGE_MEDIA)
+                            .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                            .build(),
+                        true,
+                    )
+                }
         inUse.add(player)
         return player
     }
@@ -53,11 +54,15 @@ object DiscoveryPlayerPool {
             player.stop()
             player.clearMediaItems()
             player.seekTo(0)
-        } catch (_: Exception) {}
+        } catch (_: Exception) {
+        }
         if (pool.size < POOL_SIZE) {
             pool.addLast(player)
         } else {
-            try { player.release() } catch (_: Exception) {}
+            try {
+                player.release()
+            } catch (_: Exception) {
+            }
         }
     }
 

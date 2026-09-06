@@ -13,7 +13,6 @@ import org.junit.Test
  * 不写死具体字符串，保证任何时区/机器下稳定。
  */
 class VaultNamingTest {
-
     // 固定毫秒样本（任意值，仅用于自洽断言）
     private val sampleMillis = 1767225600000L
 
@@ -26,7 +25,7 @@ class VaultNamingTest {
         assertEquals("_", readable[8].toString())
         assertNull("应全为数字（除第 9 位下划线）", readable.filterIndexed { i, c -> i != 8 && !c.isDigit() }.takeIf { it.isNotEmpty() })
 
-        val converted = VaultNaming.legacyToCanonicalName("Export_${sampleMillis}.pjm.1")
+        val converted = VaultNaming.legacyToCanonicalName("Export_$sampleMillis.pjm.1")
         assertEquals("Export_$readable.pjm.1", converted)
     }
 
@@ -54,7 +53,7 @@ class VaultNamingTest {
         val readable = VaultNaming.formatReadable(sampleMillis)
         assertEquals(
             "Export_$readable.pjm.1",
-            VaultNaming.legacyToCanonicalName("Export_${sampleMillis}.pjm")
+            VaultNaming.legacyToCanonicalName("Export_$sampleMillis.pjm"),
         )
     }
 

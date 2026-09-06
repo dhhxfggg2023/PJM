@@ -8,6 +8,7 @@ plugins {
     alias(libs.plugins.ksp) apply false
     alias(libs.plugins.hilt.android) apply false
     alias(libs.plugins.kotlin.compose) apply false
+    alias(libs.plugins.ktlint) apply false
 }
 
 // 确保包含 Google 和 Maven Central 仓库

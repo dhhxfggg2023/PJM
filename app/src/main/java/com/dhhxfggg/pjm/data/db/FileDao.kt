@@ -13,7 +13,6 @@ import kotlinx.coroutines.flow.Flow
  */
 @Dao
 interface FileDao {
-
     /**
      * Retrieves all files within a specific category, ordered by modification date descending.
      * @param category The folder/category name to filter by.
@@ -55,14 +54,20 @@ interface FileDao {
      * Used for smart duplicate detection.
      */
     @Query("SELECT EXISTS(SELECT 1 FROM files WHERE name = :name AND size = :size)")
-    suspend fun isDuplicate(name: String, size: Long): Boolean
+    suspend fun isDuplicate(
+        name: String,
+        size: Long,
+    ): Boolean
 
     /**
      * Finds an existing file with the same name and size (candidate for content comparison).
      * Used to verify real duplicates via content hash before skipping ingestion.
      */
     @Query("SELECT * FROM files WHERE name = :name AND size = :size LIMIT 1")
-    suspend fun findDuplicateCandidate(name: String, size: Long): FileEntity?
+    suspend fun findDuplicateCandidate(
+        name: String,
+        size: Long,
+    ): FileEntity?
 
     /**
      * Deletes a specific file record by its path.
@@ -93,13 +98,27 @@ interface FileDao {
      * Provides a map of categories to their respective file counts.
      */
     @Query("SELECT category, COUNT(*) as count FROM files GROUP BY category")
-    fun getCategoryCountsFlow(): Flow<Map<@MapColumn(columnName = "category") String, @MapColumn(columnName = "count") Int>>
+    fun getCategoryCountsFlow(): Flow<
+        Map<
+            @MapColumn(columnName = "category")
+            String,
+            @MapColumn(columnName = "count")
+            Int,
+        >,
+    >
 
     /**
      * Provides a map of categories to their total storage size in bytes.
      */
     @Query("SELECT category, SUM(size) as totalSize FROM files GROUP BY category")
-    fun getCategorySizesFlow(): Flow<Map<@MapColumn(columnName = "category") String, @MapColumn(columnName = "totalSize") Long>>
+    fun getCategorySizesFlow(): Flow<
+        Map<
+            @MapColumn(columnName = "category")
+            String,
+            @MapColumn(columnName = "totalSize")
+            Long,
+        >,
+    >
 
     /**
      * Synchronous count for a specific category.
@@ -123,13 +142,20 @@ interface FileDao {
      * Retrieves a set of random files from a category.
      */
     @Query("SELECT * FROM files WHERE category = :category ORDER BY RANDOM() LIMIT :limit")
-    suspend fun getRandomFilesByCategory(category: String, limit: Int): List<FileEntity>
+    suspend fun getRandomFilesByCategory(
+        category: String,
+        limit: Int,
+    ): List<FileEntity>
 
     /**
      * Retrieves random files while excluding specific paths.
      */
     @Query("SELECT * FROM files WHERE category = :category AND relativePath NOT IN (:excludePaths) ORDER BY RANDOM() LIMIT :limit")
-    suspend fun getRandomFilesByCategoryExcluding(category: String, excludePaths: List<String>, limit: Int): List<FileEntity>
+    suspend fun getRandomFilesByCategoryExcluding(
+        category: String,
+        excludePaths: List<String>,
+        limit: Int,
+    ): List<FileEntity>
 
     /**
      * 大库优化：基于主键游标的分页查询（按 id 顺序取页），
@@ -137,13 +163,27 @@ interface FileDao {
      * 用于发现页"已看完全部后"的翻页浏览。
      */
     @Query("SELECT * FROM files WHERE category = :category AND id > :afterId ORDER BY id LIMIT :limit")
-    suspend fun getFilesByCategoryPage(category: String, afterId: Long, limit: Int): List<FileEntity>
+    suspend fun getFilesByCategoryPage(
+        category: String,
+        afterId: Long,
+        limit: Int,
+    ): List<FileEntity>
 
     /**
      * 获取分类内最大 id（用于分页游标起点判断）。
      */
     @Query("SELECT MAX(id) FROM files WHERE category = :category")
     suspend fun getMaxIdByCategory(category: String): Long?
+
+    /**
+     * 按主键定位：取分类内 id ≥ [afterId] 的第一条（走主键索引，O(log n)）。
+     * 供“随机封面”用：随机取一个 id 下界后此处定位，避免 ORDER BY RANDOM() 全表排序。
+     */
+    @Query("SELECT * FROM files WHERE category = :category AND id >= :afterId ORDER BY id LIMIT 1")
+    suspend fun getFileAtOrAfterId(
+        category: String,
+        afterId: Long,
+    ): FileEntity?
 
     /**
      * 大库优化：取分类内最近导入的一个文件作为封面（走 lastModified 索引，O(log n)），

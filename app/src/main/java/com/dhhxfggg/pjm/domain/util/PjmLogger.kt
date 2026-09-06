@@ -1,7 +1,6 @@
 package com.dhhxfggg.pjm.domain.util
 
 import android.content.Context
-import android.os.Environment
 import android.util.Log
 import java.io.File
 import java.io.FileOutputStream
@@ -24,11 +23,11 @@ object PjmLogger {
     private const val LOG_TAG = "PjmLogger"
     private var businessLogFile: File? = null
     private var errorLogFile: File? = null
-    
-    private val logDateFormatter = object : ThreadLocal<SimpleDateFormat>() {
-        override fun initialValue(): SimpleDateFormat = 
-            SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
-    }
+
+    private val logDateFormatter =
+        object : ThreadLocal<SimpleDateFormat>() {
+            override fun initialValue(): SimpleDateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
+        }
 
     /**
      * Initializes the diagnostic engine.
@@ -37,7 +36,7 @@ object PjmLogger {
         val logDir = File(context.filesDir, "logs").apply { if (!exists()) mkdirs() }
         businessLogFile = File(logDir, "pjm_business.log")
         errorLogFile = File(logDir, "pjm_error.log")
-        
+
         i(LOG_TAG, "==================== DIAGNOSTIC ENGINE INITIALIZED ====================")
         i(LOG_TAG, "Model: ${android.os.Build.MODEL}, OS: ${android.os.Build.VERSION.RELEASE}, API: ${android.os.Build.VERSION.SDK_INT}")
     }
@@ -45,14 +44,25 @@ object PjmLogger {
     /**
      * Generates a new Trace ID for a specific task workflow.
      */
-    fun generateTraceId(): String = UUID.randomUUID().toString().substring(0, 8).uppercase()
+    fun generateTraceId(): String =
+        UUID
+            .randomUUID()
+            .toString()
+            .substring(0, 8)
+            .uppercase()
 
     @Synchronized
-    private fun log(level: String, tag: String, msg: String, tr: Throwable? = null, traceId: String? = null) {
+    private fun log(
+        level: String,
+        tag: String,
+        msg: String,
+        tr: Throwable? = null,
+        traceId: String? = null,
+    ) {
         val timestamp = logDateFormatter.get()?.format(Date()) ?: "UNKNOWN"
         val threadName = Thread.currentThread().name
         val tId = if (traceId != null) " [$traceId]" else ""
-        
+
         val fullMsg = if (tr != null) "$msg\n${getStackTrace(tr)}" else msg
         val logLine = "[$timestamp] [$level] [$threadName]$tId $tag: $fullMsg\n"
 
@@ -75,7 +85,11 @@ object PjmLogger {
         }
     }
 
-    private fun writeToDisk(file: File?, content: String, isCritical: Boolean) {
+    private fun writeToDisk(
+        file: File?,
+        content: String,
+        isCritical: Boolean,
+    ) {
         val target = file ?: return
         try {
             // Rotation: Move to .old if too large (10MB limit for business, 20MB for error)
@@ -103,16 +117,42 @@ object PjmLogger {
         return "Memory: ${usedMem}MB / ${maxMem}MB"
     }
 
-    fun d(tag: String, msg: String, traceId: String? = null) = log("D", tag, msg, traceId = traceId)
-    fun i(tag: String, msg: String, traceId: String? = null) = log("I", tag, msg, traceId = traceId)
-    fun w(tag: String, msg: String, tr: Throwable? = null, traceId: String? = null) = log("W", tag, msg, tr, traceId)
-    fun e(tag: String, msg: String, tr: Throwable? = null, traceId: String? = null) = log("E", tag, msg, tr, traceId)
+    fun d(
+        tag: String,
+        msg: String,
+        traceId: String? = null,
+    ) = log("D", tag, msg, traceId = traceId)
+
+    fun i(
+        tag: String,
+        msg: String,
+        traceId: String? = null,
+    ) = log("I", tag, msg, traceId = traceId)
+
+    fun w(
+        tag: String,
+        msg: String,
+        tr: Throwable? = null,
+        traceId: String? = null,
+    ) = log("W", tag, msg, tr, traceId)
+
+    fun e(
+        tag: String,
+        msg: String,
+        tr: Throwable? = null,
+        traceId: String? = null,
+    ) = log("E", tag, msg, tr, traceId)
 
     /**
      * Enhanced Error Logger with code support.
      */
-    fun e(tag: String, code: Int, msg: String, tr: Throwable? = null, traceId: String? = null) = 
-        log("E", tag, "[Code $code] $msg", tr, traceId)
+    fun e(
+        tag: String,
+        code: Int,
+        msg: String,
+        tr: Throwable? = null,
+        traceId: String? = null,
+    ) = log("E", tag, "[Code $code] $msg", tr, traceId)
 
     private fun getStackTrace(tr: Throwable): String {
         val sw = StringWriter()
@@ -122,6 +162,7 @@ object PjmLogger {
     }
 
     fun getLogFile(): File? = businessLogFile
+
     fun getErrorLogFile(): File? = errorLogFile
 
     fun clear() {

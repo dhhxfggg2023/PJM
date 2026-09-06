@@ -51,13 +51,16 @@ fun PjmDuplicateCompareDialog(
     onConfirm: (List<FileEntity>) -> Unit,
 ) {
     // 勾选状态：默认勾选各组推荐删除的文件
-    val selected = remember(groups) {
-        mutableStateListOf<FileEntity>().apply {
-            groups.forEach { g -> g.recommendedDelete.forEach { path ->
-                g.members.firstOrNull { it.relativePath == path }?.let { add(it) }
-            } }
+    val selected =
+        remember(groups) {
+            mutableStateListOf<FileEntity>().apply {
+                groups.forEach { g ->
+                    g.recommendedDelete.forEach { path ->
+                        g.members.firstOrNull { it.relativePath == path }?.let { add(it) }
+                    }
+                }
+            }
         }
-    }
     val allMembers = remember(groups) { groups.flatMap { it.members } }
     val isAllSelected = selected.size == allMembers.size && allMembers.isNotEmpty()
 
@@ -69,29 +72,33 @@ fun PjmDuplicateCompareDialog(
             Button(
                 onClick = { onConfirm(selected.toList()) },
                 enabled = selected.isNotEmpty(),
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
             ) {
                 Text(stringResource(R.string.action_delete_selected, selected.size))
             }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } }
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } },
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
             // 已选统计 + 全选/取消全选
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
                     text = stringResource(R.string.label_selected_count_total, selected.size, allMembers.size),
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.weight(1f),
                 )
                 TextButton(onClick = {
-                    if (isAllSelected) selected.clear()
-                    else { selected.clear(); selected.addAll(allMembers) }
+                    if (isAllSelected) {
+                        selected.clear()
+                    } else {
+                        selected.clear()
+                        selected.addAll(allMembers)
+                    }
                 }) {
                     Text(if (isAllSelected) stringResource(R.string.action_deselect_all) else stringResource(R.string.action_select_all))
                 }
@@ -101,24 +108,25 @@ fun PjmDuplicateCompareDialog(
                 text = stringResource(R.string.msg_duplicates_cleanup_info),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(bottom = 8.dp)
+                modifier = Modifier.padding(bottom = 8.dp),
             )
 
             Spacer(Modifier.height(4.dp))
 
             // 分组列表：每组标题 + 每行两张对比图
             LazyColumn(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 420.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 420.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 groups.forEachIndexed { groupIndex, group ->
                     item(key = "header_$groupIndex") {
                         GroupHeader(
                             index = groupIndex + 1,
                             count = group.members.size,
-                            group = group
+                            group = group,
                         )
                     }
                     // 每行两张：chunked(2)
@@ -126,7 +134,7 @@ fun PjmDuplicateCompareDialog(
                         item(key = "group_${groupIndex}_row_$rowIndex") {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
                             ) {
                                 rowItems.forEach { entity ->
                                     Box(modifier = Modifier.weight(1f)) {
@@ -135,9 +143,12 @@ fun PjmDuplicateCompareDialog(
                                             isChecked = selected.contains(entity),
                                             isRecommendedDelete = entity.relativePath in group.recommendedDelete,
                                             onToggle = {
-                                                if (selected.contains(entity)) selected.remove(entity)
-                                                else selected.add(entity)
-                                            }
+                                                if (selected.contains(entity)) {
+                                                    selected.remove(entity)
+                                                } else {
+                                                    selected.add(entity)
+                                                }
+                                            },
                                         )
                                     }
                                 }
@@ -156,7 +167,7 @@ fun PjmDuplicateCompareDialog(
             Text(
                 text = stringResource(R.string.label_reclaimable_space, FileUtils.formatFileSize(totalSize)),
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }
@@ -164,17 +175,21 @@ fun PjmDuplicateCompareDialog(
 
 /** 组标题：第 N 组 · M 张 · 推荐保留项说明 */
 @Composable
-private fun GroupHeader(index: Int, count: Int, group: DuplicateGroup) {
+private fun GroupHeader(
+    index: Int,
+    count: Int,
+    group: DuplicateGroup,
+) {
     val keepName = group.members.firstOrNull()?.name ?: ""
     Row(
         modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
-        verticalAlignment = Alignment.CenterVertically
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
             text = stringResource(R.string.label_duplicate_group, index, count),
             style = MaterialTheme.typography.labelLarge,
             fontWeight = FontWeight.Black,
-            color = MaterialTheme.colorScheme.primary
+            color = MaterialTheme.colorScheme.primary,
         )
         Spacer(Modifier.width(8.dp))
         Text(
@@ -182,7 +197,7 @@ private fun GroupHeader(index: Int, count: Int, group: DuplicateGroup) {
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
-            overflow = TextOverflow.Ellipsis
+            overflow = TextOverflow.Ellipsis,
         )
     }
     HorizontalDivider(modifier = Modifier.padding(top = 4.dp))
@@ -202,39 +217,52 @@ private fun CompareImageCard(
     val context = LocalContext.current
     val file = remember(entity.relativePath) { VaultManager.getFileFromEntity(context, entity) }
     // 分辨率（只读图片头，成本极低）
-    val resolution = remember(entity.relativePath) {
-        if (file.exists()) {
-            try {
-                val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                BitmapFactory.decodeFile(file.absolutePath, opts)
-                if (opts.outWidth > 0 && opts.outHeight > 0) "${opts.outWidth}×${opts.outHeight}" else null
-            } catch (_: Exception) { null }
-        } else null
-    }
+    val resolution =
+        remember(entity.relativePath) {
+            if (file.exists()) {
+                try {
+                    val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    BitmapFactory.decodeFile(file.absolutePath, opts)
+                    if (opts.outWidth > 0 && opts.outHeight > 0) "${opts.outWidth}×${opts.outHeight}" else null
+                } catch (_: Exception) {
+                    null
+                }
+            } else {
+                null
+            }
+        }
 
     Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
-            .clickable(onClick = onToggle)
-            .padding(8.dp)
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+                .clickable(onClick = onToggle)
+                .padding(8.dp),
     ) {
         // 大缩略图（固定高度，等比裁剪，便于并排对比）
         Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(120.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant),
-            contentAlignment = Alignment.Center
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .height(120.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center,
         ) {
             if (file.exists()) {
                 AsyncImage(
-                    model = ImageRequest.Builder(context).data(file.absolutePath).size(320, 240).crossfade(true).build(),
+                    model =
+                        ImageRequest
+                            .Builder(context)
+                            .data(file.absolutePath)
+                            .size(320, 240)
+                            .crossfade(true)
+                            .build(),
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier.fillMaxSize(),
                 )
             } else {
                 Icon(Lucide.Brush, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -248,7 +276,7 @@ private fun CompareImageCard(
             entity.name,
             style = MaterialTheme.typography.bodySmall,
             maxLines = 1,
-            overflow = TextOverflow.Ellipsis
+            overflow = TextOverflow.Ellipsis,
         )
 
         // 元信息行：分辨率 · 大小
@@ -261,7 +289,7 @@ private fun CompareImageCard(
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
-            overflow = TextOverflow.Ellipsis
+            overflow = TextOverflow.Ellipsis,
         )
 
         Spacer(Modifier.height(4.dp))
@@ -271,17 +299,27 @@ private fun CompareImageCard(
             Checkbox(
                 checked = isChecked,
                 onCheckedChange = { onToggle() },
-                colors = CheckboxDefaults.colors(checkedColor = MaterialTheme.colorScheme.error)
+                colors = CheckboxDefaults.colors(checkedColor = MaterialTheme.colorScheme.error),
             )
             Spacer(Modifier.width(4.dp))
             Text(
-                text = if (isChecked) stringResource(R.string.action_delete_mark)
-                       else if (!isRecommendedDelete) stringResource(R.string.label_recommended_keep_short)
-                       else stringResource(R.string.action_keep),
+                text =
+                    if (isChecked) {
+                        stringResource(R.string.action_delete_mark)
+                    } else if (!isRecommendedDelete) {
+                        stringResource(R.string.label_recommended_keep_short)
+                    } else {
+                        stringResource(R.string.action_keep)
+                    },
                 style = MaterialTheme.typography.labelSmall,
-                color = if (isChecked) MaterialTheme.colorScheme.error
-                        else if (!isRecommendedDelete) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.onSurfaceVariant
+                color =
+                    if (isChecked) {
+                        MaterialTheme.colorScheme.error
+                    } else if (!isRecommendedDelete) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
             )
             Spacer(Modifier.weight(1f))
             // 右侧空白（保持卡片内文字对齐）

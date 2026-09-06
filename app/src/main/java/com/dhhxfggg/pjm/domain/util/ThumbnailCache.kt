@@ -19,40 +19,52 @@ import java.io.FileOutputStream
  * 目录：filesDir/thumbnails/<relativePath 哈希>.jpg
  */
 object ThumbnailCache {
-
     private const val DIR_NAME = "thumbnails"
     private const val MAX_WIDTH = 640
     private const val JPEG_QUALITY = 72
 
     /** 缩略图目录（公开给后台同步管理器做孤儿清理） */
-    fun thumbDir(context: Context): File =
-        File(context.filesDir, DIR_NAME).apply { if (!exists()) mkdirs() }
+    fun thumbDir(context: Context): File = File(context.filesDir, DIR_NAME).apply { if (!exists()) mkdirs() }
 
     /** 缩略图文件名（基于 relativePath 稳定哈希，源文件路径不变则文件名不变；公开给后台同步管理器） */
     fun thumbName(entity: FileEntity): String {
-        val hash = entity.relativePath.hashCode().toUInt().toString(16)
+        val hash =
+            entity.relativePath
+                .hashCode()
+                .toUInt()
+                .toString(16)
         return "$hash.jpg"
     }
 
     /** 缩略图文件对象（不保证存在） */
-    fun thumbFile(context: Context, entity: FileEntity): File =
-        File(thumbDir(context), thumbName(entity))
+    fun thumbFile(
+        context: Context,
+        entity: FileEntity,
+    ): File = File(thumbDir(context), thumbName(entity))
 
     /** 缩略图是否已缓存 */
-    fun hasThumbnail(context: Context, entity: FileEntity): Boolean {
+    fun hasThumbnail(
+        context: Context,
+        entity: FileEntity,
+    ): Boolean {
         val f = thumbFile(context, entity)
         return f.exists() && f.length() > 0
     }
 
     /** 返回缓存的缩略图文件（存在时），否则 null */
-    fun getThumbnailFile(context: Context, entity: FileEntity): File? =
-        if (hasThumbnail(context, entity)) thumbFile(context, entity) else null
+    fun getThumbnailFile(
+        context: Context,
+        entity: FileEntity,
+    ): File? = if (hasThumbnail(context, entity)) thumbFile(context, entity) else null
 
     /**
      * 用 MediaMetadataRetriever 从视频取一帧生成缩略图并写盘。
      * @return 生成的缩略图文件；失败返回 null
      */
-    fun generateVideoThumbnail(context: Context, entity: FileEntity): File? {
+    fun generateVideoThumbnail(
+        context: Context,
+        entity: FileEntity,
+    ): File? {
         val source = VaultManager.getFileFromEntity(context, entity)
         if (!source.exists() || !FileUtils.isVideoFile(entity.name)) return null
 
@@ -63,9 +75,10 @@ object ThumbnailCache {
         return try {
             retriever.setDataSource(source.absolutePath)
             // 取 1 秒处关键帧（首帧常为黑屏），回退任意帧
-            val frame = retriever.getFrameAtTime(1_000_000L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
-                ?: retriever.frameAtTime
-                ?: return null
+            val frame =
+                retriever.getFrameAtTime(1_000_000L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                    ?: retriever.frameAtTime
+                    ?: return null
 
             val scaled = scaleDown(frame, MAX_WIDTH)
             FileOutputStream(output).use { fos ->
@@ -77,7 +90,10 @@ object ThumbnailCache {
             output.delete()
             null
         } finally {
-            try { retriever.release() } catch (_: Exception) {}
+            try {
+                retriever.release()
+            } catch (_: Exception) {
+            }
         }
     }
 
@@ -86,7 +102,10 @@ object ThumbnailCache {
      * 与视频缩略图互补 —— 图片不再每次浏览都全尺寸解码。
      * @return 生成的缩略图文件；失败返回 null
      */
-    fun generateImageThumbnail(context: Context, entity: FileEntity): File? {
+    fun generateImageThumbnail(
+        context: Context,
+        entity: FileEntity,
+    ): File? {
         val source = VaultManager.getFileFromEntity(context, entity)
         if (!source.exists() || !FileUtils.isImageFile(entity.name)) return null
 
@@ -114,7 +133,11 @@ object ThumbnailCache {
     }
 
     /** 把现成 Bitmap 写为缩略图文件（用于预生成） */
-    fun writeThumbnail(context: Context, entity: FileEntity, bitmap: Bitmap): File? {
+    fun writeThumbnail(
+        context: Context,
+        entity: FileEntity,
+        bitmap: Bitmap,
+    ): File? {
         val output = thumbFile(context, entity)
         return try {
             val scaled = scaleDown(bitmap, MAX_WIDTH)
@@ -130,17 +153,29 @@ object ThumbnailCache {
     }
 
     /** 删除某实体的缩略图（源文件删除时调用） */
-    fun delete(context: Context, entity: FileEntity) {
-        try { thumbFile(context, entity).delete() } catch (_: Exception) {}
+    fun delete(
+        context: Context,
+        entity: FileEntity,
+    ) {
+        try {
+            thumbFile(context, entity).delete()
+        } catch (_: Exception) {
+        }
     }
 
     /** 清空整个缩略图缓存 */
     fun clearAll(context: Context) {
-        try { thumbDir(context).listFiles()?.forEach { it.delete() } } catch (_: Exception) {}
+        try {
+            thumbDir(context).listFiles()?.forEach { it.delete() }
+        } catch (_: Exception) {
+        }
     }
 
     /** 按最长边等比缩放 */
-    private fun scaleDown(bmp: Bitmap, maxWidth: Int): Bitmap {
+    private fun scaleDown(
+        bmp: Bitmap,
+        maxWidth: Int,
+    ): Bitmap {
         if (bmp.width <= maxWidth) return bmp
         val ratio = maxWidth.toFloat() / bmp.width
         return Bitmap.createScaledBitmap(bmp, maxWidth, (bmp.height * ratio).toInt().coerceAtLeast(1), true)

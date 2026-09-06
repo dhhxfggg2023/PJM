@@ -13,8 +13,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.currentBackStackEntryAsState
 import com.dhhxfggg.pjm.R
-import com.dhhxfggg.pjm.ui.theme.IconPack
 import com.dhhxfggg.pjm.ui.navigation.Screen
+import com.dhhxfggg.pjm.ui.theme.IconPack
 
 /**
  * A bottom navigation bar component for switching between main app screens.
@@ -23,44 +23,48 @@ import com.dhhxfggg.pjm.ui.navigation.Screen
  * @param iconPack The icon pack to use for rendering icons.
  */
 @Composable
-fun BottomNavBar(navController: NavHostController, iconPack: IconPack) {
+fun BottomNavBar(
+    navController: NavHostController,
+    iconPack: IconPack,
+) {
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
     val haptic = LocalHapticFeedback.current
 
-    val onNavigate = remember(navController) {
-        { route: String ->
-            if (currentRoute != route) {
-                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                navController.navigate(route) {
-                    popUpTo(navController.graph.startDestinationId) { 
-                        saveState = true 
+    val onNavigate =
+        remember(navController) {
+            { route: String ->
+                if (currentRoute != route) {
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    navController.navigate(route) {
+                        popUpTo(navController.graph.startDestinationId) {
+                            saveState = true
+                        }
+                        launchSingleTop = true
+                        restoreState = true
                     }
-                    launchSingleTop = true
-                    restoreState = true
                 }
             }
         }
-    }
 
     NavigationBar {
         NavigationBarItem(
             selected = currentRoute == Screen.Main.route,
             onClick = { onNavigate(Screen.Main.route) },
             icon = { Icon(iconPack.home, contentDescription = stringResource(R.string.nav_home)) },
-            label = { Text(stringResource(R.string.nav_home)) }
+            label = { Text(stringResource(R.string.nav_home)) },
         )
         NavigationBarItem(
             selected = currentRoute == Screen.Discovery.route,
             onClick = { onNavigate(Screen.Discovery.route) },
             icon = { Icon(iconPack.discovery, contentDescription = stringResource(R.string.nav_discovery)) },
-            label = { Text(stringResource(R.string.nav_discovery)) }
+            label = { Text(stringResource(R.string.nav_discovery)) },
         )
         NavigationBarItem(
             selected = currentRoute == Screen.Settings.route,
             onClick = { onNavigate(Screen.Settings.route) },
             icon = { Icon(iconPack.settings, contentDescription = stringResource(R.string.nav_settings)) },
-            label = { Text(stringResource(R.string.nav_settings)) }
+            label = { Text(stringResource(R.string.nav_settings)) },
         )
     }
 }

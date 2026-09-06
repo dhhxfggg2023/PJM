@@ -25,37 +25,67 @@ import java.util.Locale
  */
 object FileUtils {
     private const val TAG = "FileUtils"
-    
-    private val ALREADY_COMPRESSED = setOf(
-        "jpg", "jpeg", "png", "gif", "webp", "heic", "heif",
-        "mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "3gp",
-        "mp3", "aac", "ogg", "flac", "m4a", "wav", "opus",
-        "zip", "rar", "7z", "pjm", "tar", "gz", "bz2", "xz", "iso",
-    )
+
+    private val ALREADY_COMPRESSED =
+        setOf(
+            "jpg",
+            "jpeg",
+            "png",
+            "gif",
+            "webp",
+            "heic",
+            "heif",
+            "mp4",
+            "mkv",
+            "avi",
+            "mov",
+            "wmv",
+            "flv",
+            "webm",
+            "m4v",
+            "3gp",
+            "mp3",
+            "aac",
+            "ogg",
+            "flac",
+            "m4a",
+            "wav",
+            "opus",
+            "zip",
+            "rar",
+            "7z",
+            "pjm",
+            "tar",
+            "gz",
+            "bz2",
+            "xz",
+            "iso",
+        )
 
     private val IMAGE_EXT = setOf("jpg", "jpeg", "png", "gif", "bmp", "webp", "heic", "heif", "ico", "tiff", "svg")
     private val VIDEO_EXT = setOf("mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "3gp", "ts", "rmvb")
     private val AUDIO_EXT = setOf("mp3", "aac", "ogg", "flac", "m4a", "wav", "opus", "amr", "wma", "mid")
 
-    private val cachedDateFormat = object : ThreadLocal<SimpleDateFormat>() {
-        override fun initialValue(): SimpleDateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US)
-    }
+    private val cachedDateFormat =
+        object : ThreadLocal<SimpleDateFormat>() {
+            override fun initialValue(): SimpleDateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US)
+        }
 
-    private val compactTsFormat = object : ThreadLocal<SimpleDateFormat>() {
-        override fun initialValue(): SimpleDateFormat = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
-    }
+    private val compactTsFormat =
+        object : ThreadLocal<SimpleDateFormat>() {
+            override fun initialValue(): SimpleDateFormat = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
+        }
 
     /** 规范命名分享目录（缓存目录下，可被系统自动回收；存放与原文件同内容的硬链接/副本） */
     private const val NAMED_SHARE_DIR = "pjm_named_share"
+
     /** 硬链接不可用时，超过该体积的文件不再复制（避免大文件分享卡顿），退回原始命名 */
     private const val MAX_COPY_FALLBACK_BYTES = 256L * 1024 * 1024
 
     /**
      * Generates a unique fingerprint for a file entity based on its metadata.
      */
-    fun getFileFingerprint(entity: FileEntity): String {
-        return "${entity.extension}_${entity.size}_${entity.lastModified}"
-    }
+    fun getFileFingerprint(entity: FileEntity): String = "${entity.extension}_${entity.size}_${entity.lastModified}"
 
     /**
      * 规范化显示名（用于列表/详情/导出/分享的文件名，磁盘物理文件不变）。
@@ -75,7 +105,10 @@ object FileUtils {
      * 优先硬链接（同文件系统、零拷贝、瞬间完成），失败则对小文件复制兜底；
      * 磁盘原文件始终不被改动。大文件复制兜底不可用时退回原文件（原始命名）。
      */
-    fun obtainNamedShareFile(context: Context, entity: FileEntity): File {
+    fun obtainNamedShareFile(
+        context: Context,
+        entity: FileEntity,
+    ): File {
         val src = VaultManager.getFileFromEntity(context, entity)
         if (!src.exists()) return src
         val displayName = normalizedDisplayName(entity)
@@ -106,7 +139,10 @@ object FileUtils {
         return src
     }
 
-    private fun uniqueNamedFile(dir: File, displayName: String): File {
+    private fun uniqueNamedFile(
+        dir: File,
+        displayName: String,
+    ): File {
         val candidate = File(dir, displayName)
         if (!candidate.exists()) return candidate
         val dot = displayName.lastIndexOf('.')
@@ -130,8 +166,11 @@ object FileUtils {
      *
      * @return File size in bytes, or 0 if retrieval fails.
      */
-    fun getFileSize(context: Context, uri: Uri): Long {
-        return try {
+    fun getFileSize(
+        context: Context,
+        uri: Uri,
+    ): Long =
+        try {
             if (uri.scheme == "content") {
                 context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
                     if (cursor.moveToFirst()) cursor.getLong(0) else 0L
@@ -143,20 +182,22 @@ object FileUtils {
             PjmLogger.w(TAG, "Failed to get file size for $uri", e)
             0L
         }
-    }
 
     /**
      * Resolves the display name of a file from its Uri.
      */
-    fun getFileName(context: Context, uri: Uri): String {
+    fun getFileName(
+        context: Context,
+        uri: Uri,
+    ): String {
         var result: String? = null
         if (uri.scheme == "content") {
             try {
                 context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
                     if (cursor.moveToFirst()) result = cursor.getString(0)
                 }
-            } catch (e: Exception) { 
-                PjmLogger.e(TAG, "Filename query failed for $uri", e) 
+            } catch (e: Exception) {
+                PjmLogger.e(TAG, "Filename query failed for $uri", e)
             }
         }
         if (result == null) {
@@ -180,10 +221,15 @@ object FileUtils {
     }
 
     fun isPjmFile(fileName: String): Boolean = getFileExtension(fileName) == "pjm"
+
     fun shouldCompress(fileName: String): Boolean = getFileExtension(fileName) !in ALREADY_COMPRESSED
+
     fun isImageFile(fileName: String): Boolean = getFileExtension(fileName) in IMAGE_EXT
+
     fun isVideoFile(fileName: String): Boolean = getFileExtension(fileName) in VIDEO_EXT
+
     fun isAudioFile(fileName: String): Boolean = (getFileExtension(fileName) in AUDIO_EXT)
+
     fun isArchiveFile(fileName: String): Boolean = getFileExtension(fileName) in setOf("zip", "rar", "7z", "tar", "gz", "bz2", "xz")
 
     /**
@@ -203,12 +249,13 @@ object FileUtils {
     /**
      * Formats byte size into a human-readable string (GB, MB, KB, B).
      */
-    fun formatFileSize(bytes: Long): String = when {
-        bytes >= 1_000_000_000 -> "%.2f GB".format(Locale.US, bytes / 1_000_000_000.0)
-        bytes >= 1_000_000 -> "%.2f MB".format(Locale.US, bytes / 1_000_000.0)
-        bytes >= 1_000 -> "%.2f KB".format(Locale.US, bytes / 1_000.0)
-        else -> "$bytes B"
-    }
+    fun formatFileSize(bytes: Long): String =
+        when {
+            bytes >= 1_000_000_000 -> "%.2f GB".format(Locale.US, bytes / 1_000_000_000.0)
+            bytes >= 1_000_000 -> "%.2f MB".format(Locale.US, bytes / 1_000_000.0)
+            bytes >= 1_000 -> "%.2f KB".format(Locale.US, bytes / 1_000.0)
+            else -> "$bytes B"
+        }
 
     /**
      * Formats a timestamp into a standard date/time string.
@@ -218,7 +265,10 @@ object FileUtils {
     /**
      * Triggers a system intent to open a file with an external application.
      */
-    fun openFileWithSystemApp(context: Context, file: File) {
+    fun openFileWithSystemApp(
+        context: Context,
+        file: File,
+    ) {
         if (!file.exists()) {
             Toast.makeText(context, "File no longer exists", Toast.LENGTH_SHORT).show()
             return
@@ -227,17 +277,18 @@ object FileUtils {
             val extension = getFileExtension(file.name)
             val authority = "${context.packageName}.fileprovider"
             val uri = FileProvider.getUriForFile(context, authority, file)
-            
-            val intent = Intent(Intent.ACTION_VIEW).apply {
-                val mimeType = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension) ?: "application/octet-stream"
-                if (extension == "apk") {
-                    setDataAndType(uri, "application/vnd.android.package-archive")
-                } else {
-                    setDataAndType(uri, mimeType)
+
+            val intent =
+                Intent(Intent.ACTION_VIEW).apply {
+                    val mimeType = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension) ?: "application/octet-stream"
+                    if (extension == "apk") {
+                        setDataAndType(uri, "application/vnd.android.package-archive")
+                    } else {
+                        setDataAndType(uri, mimeType)
+                    }
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 }
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
             context.startActivity(intent)
         } catch (e: Exception) {
             PjmLogger.e(TAG, "Failed to open file: ${file.absolutePath}", e)
@@ -249,13 +300,16 @@ object FileUtils {
      * Creates a MediaStore delete request for the given Uris (Android 11+).
      * Includes intelligent URI conversion for cross-provider compatibility.
      */
-    fun createDeleteRequest(context: Context, uris: List<Uri>): IntentSender? {
+    fun createDeleteRequest(
+        context: Context,
+        uris: List<Uri>,
+    ): IntentSender? {
         if (uris.isEmpty()) return null
-        
+
         val mediaStoreUris = mutableListOf<Uri>()
         uris.forEach { uri ->
             if (uri.scheme != "content") return@forEach
-            
+
             if (uri.authority == MediaStore.AUTHORITY || uri.authority?.contains("media") == true) {
                 mediaStoreUris.add(uri)
             } else {
@@ -274,46 +328,57 @@ object FileUtils {
                 }
             }
         }
-        
+
         if (mediaStoreUris.isEmpty()) {
             PjmLogger.w(TAG, "No compatible MediaStore URIs found for auto-deletion.")
             return null
         }
-        
+
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             try {
                 // 使用去重后的 URI 列表
                 MediaStore.createDeleteRequest(context.contentResolver, mediaStoreUris.distinct()).intentSender
-            } catch (e: Exception) { 
+            } catch (e: Exception) {
                 PjmLogger.e(TAG, "System MediaStore delete request failed", e)
-                null 
+                null
             }
-        } else null
+        } else {
+            null
+        }
     }
 
-    private fun getPathFromUri(context: Context, uri: Uri): String? {
+    private fun getPathFromUri(
+        context: Context,
+        uri: Uri,
+    ): String? {
         if (uri.scheme == "file") return uri.path
         return try {
             context.contentResolver.query(uri, arrayOf("_data"), null, null, null)?.use { cursor ->
                 if (cursor.moveToFirst()) cursor.getString(0) else null
             }
-        } catch (_: Exception) { null }
+        } catch (_: Exception) {
+            null
+        }
     }
 
-    private fun getMediaUriFromPath(context: Context, path: String): Uri? {
+    private fun getMediaUriFromPath(
+        context: Context,
+        path: String,
+    ): Uri? {
         val file = File(path)
         val projection = arrayOf(MediaStore.MediaColumns._ID)
         val selection = "${MediaStore.MediaColumns.DATA} = ?"
         val args = arrayOf(file.absolutePath)
-        
+
         // 分别尝试图片、视频和音频集合，因为 "external" 集合在某些版本上查询 _data 受限
-        val collections = listOf(
-            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-            MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
-            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
-            MediaStore.Files.getContentUri("external")
-        )
-        
+        val collections =
+            listOf(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+                MediaStore.Files.getContentUri("external"),
+            )
+
         for (collection in collections) {
             try {
                 context.contentResolver.query(collection, projection, selection, args, null)?.use { cursor ->
@@ -322,7 +387,8 @@ object FileUtils {
                         return Uri.withAppendedPath(collection, id.toString())
                     }
                 }
-            } catch (_: Exception) {}
+            } catch (_: Exception) {
+            }
         }
         return null
     }
@@ -330,30 +396,35 @@ object FileUtils {
     /**
      * Exports a file to a public directory (Pictures/Movies) via MediaStore.
      */
-    fun exportToPublicDirectory(context: Context, file: File, fileName: String): Boolean {
+    fun exportToPublicDirectory(
+        context: Context,
+        file: File,
+        fileName: String,
+    ): Boolean {
         if (!file.exists()) return false
         val extension = getFileExtension(fileName)
         val isImage = isImageFile(fileName)
         val isVideo = isVideoFile(fileName)
         if (!isImage && !isVideo) return false
 
-        val contentValues = ContentValues().apply {
-            put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
-            put(MediaStore.MediaColumns.MIME_TYPE, MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension))
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                val relativePath = if (isImage) Environment.DIRECTORY_PICTURES + "/PJM" else Environment.DIRECTORY_MOVIES + "/PJM"
-                put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
-                put(MediaStore.MediaColumns.IS_PENDING, 1)
+        val contentValues =
+            ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+                put(MediaStore.MediaColumns.MIME_TYPE, MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension))
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    val relativePath = if (isImage) Environment.DIRECTORY_PICTURES + "/PJM" else Environment.DIRECTORY_MOVIES + "/PJM"
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
+                    put(MediaStore.MediaColumns.IS_PENDING, 1)
+                }
             }
-        }
 
         val collection = if (isImage) MediaStore.Images.Media.EXTERNAL_CONTENT_URI else MediaStore.Video.Media.EXTERNAL_CONTENT_URI
         val uri = context.contentResolver.insert(collection, contentValues) ?: return false
 
         return try {
             context.contentResolver.openOutputStream(uri)?.use { output ->
-                file.inputStream().use { input -> 
-                    input.copyTo(output, VaultManager.ADAPTIVE_BUFFER_SIZE) 
+                file.inputStream().use { input ->
+                    input.copyTo(output, VaultManager.ADAPTIVE_BUFFER_SIZE)
                 }
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {

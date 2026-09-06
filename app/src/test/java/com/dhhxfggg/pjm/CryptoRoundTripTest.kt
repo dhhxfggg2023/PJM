@@ -34,7 +34,6 @@ import java.io.File
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class CryptoRoundTripTest {
-
     private lateinit var context: Context
     private lateinit var db: AppDatabase
 
@@ -62,7 +61,7 @@ class CryptoRoundTripTest {
         CryptoUtils.createXorStream(ByteArrayInputStream(data), 0).use { it.copyTo(encrypted) }
         assertFalse(
             "Encrypted bytes must differ from plaintext",
-            data.contentEquals(encrypted.toByteArray())
+            data.contentEquals(encrypted.toByteArray()),
         )
 
         // 解密（再 XOR 一次）
@@ -94,13 +93,14 @@ class CryptoRoundTripTest {
         val f2 = File(dir, "binary.bin").apply { writeBytes(plain2) }
 
         val out = File(dir, "roundtrip.pjm")
-        val result = runBlocking {
-            CryptoUtils.encryptUris(
-                context,
-                listOf(Uri.fromFile(f1), Uri.fromFile(f2)),
-                out.absolutePath
-            )
-        }
+        val result =
+            runBlocking {
+                CryptoUtils.encryptUris(
+                    context,
+                    listOf(Uri.fromFile(f1), Uri.fromFile(f2)),
+                    out.absolutePath,
+                )
+            }
         assertTrue("Encryption should succeed: $result", result.isSuccess)
 
         val entries = mutableMapOf<String, ByteArray>()
@@ -119,30 +119,34 @@ class CryptoRoundTripTest {
     fun splitVolumes_eachVolumeIndependentlyDecryptable() {
         val dir = context.cacheDir
         // 5 个文件各 700KB，分卷 1MB → 应生成 2~4 个分卷
-        val files = (1..5).map { i ->
-            File(dir, "vol_$i.dat").apply { writeBytes(ByteArray(700 * 1024) { (i * 13).toByte() }) }
-        }
+        val files =
+            (1..5).map { i ->
+                File(dir, "vol_$i.dat").apply { writeBytes(ByteArray(700 * 1024) { (i * 13).toByte() }) }
+            }
 
-        val volumes = runBlocking {
-            VaultManager.packUrisWithSplitting(
-                context = context,
-                uris = files.map { Uri.fromFile(it) },
-                category = VaultManager.CAT_PJM,
-                baseName = "TestPack",
-                fileDao = db.fileDao(),
-                onProgress = {}
-            )
-        }
+        val volumes =
+            runBlocking {
+                VaultManager.packUrisWithSplitting(
+                    context = context,
+                    uris = files.map { Uri.fromFile(it) },
+                    category = VaultManager.CAT_PJM,
+                    baseName = "TestPack",
+                    fileDao = db.fileDao(),
+                    onProgress = {},
+                )
+            }
         assertTrue("Pack should succeed: $volumes", volumes.isSuccess)
         val volumeCount = volumes.getOrThrow()
         assertTrue("Expected multiple volumes, got $volumeCount", volumeCount >= 2)
 
         // 每个分卷独立解密，验证内容
         val vaultDir = VaultManager.getCategoryDir(context, VaultManager.CAT_PJM)
-        val volumeFiles = vaultDir.listFiles()
-            ?.filter { it.name.startsWith("TestPack.pjm.") }
-            ?.sortedBy { it.name.substringAfterLast('.').toInt() }
-            ?: emptyList()
+        val volumeFiles =
+            vaultDir
+                .listFiles()
+                ?.filter { it.name.startsWith("TestPack.pjm.") }
+                ?.sortedBy { it.name.substringAfterLast('.').toInt() }
+                ?: emptyList()
         assertEquals("Volume files on disk", volumeCount, volumeFiles.size)
 
         var totalEntries = 0

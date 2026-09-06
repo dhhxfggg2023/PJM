@@ -11,7 +11,6 @@ import org.junit.Test
  * 覆盖 `isNewer` 的边界：常规递增、跨位数（1.9 vs 1.10）、等长、不等长、非数字段、相同版本。
  */
 class UpdateCheckerTest {
-
     // ---------- 明显更新 ----------
     @Test
     fun newer_whenMinorBumps() {

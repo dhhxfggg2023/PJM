@@ -17,23 +17,25 @@ sealed class DiscoveryItem {
     data class Image(
         override val displayId: Long,
         override val file: File,
-        override val entity: FileEntity
+        override val entity: FileEntity,
     ) : DiscoveryItem()
 
     data class Video(
         override val displayId: Long,
         override val file: File,
-        override val entity: FileEntity
+        override val entity: FileEntity,
     ) : DiscoveryItem()
 }
 
 /**
  * Enum for discovery modes.
  */
-enum class DiscoveryMode(val value: String) {
+enum class DiscoveryMode(
+    val value: String,
+) {
     BILI_VIDEOS(VaultManager.CAT_BILI_VIDEOS),
     IMAGES(VaultManager.CAT_IMAGES),
-    VIDEOS(VaultManager.CAT_VIDEOS)
+    VIDEOS(VaultManager.CAT_VIDEOS),
 }
 
 /**
@@ -43,5 +45,5 @@ enum class DiscoveryMode(val value: String) {
 data class DiscoveryUiState(
     val items: List<DiscoveryItem> = emptyList(),
     val mode: DiscoveryMode = DiscoveryMode.BILI_VIDEOS,
-    val isLoading: Boolean = false
+    val isLoading: Boolean = false,
 )

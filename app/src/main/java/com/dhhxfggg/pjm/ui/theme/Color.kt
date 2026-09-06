@@ -4,17 +4,17 @@ import androidx.compose.ui.graphics.Color
 
 // ==================== 清爽二次元 · 主色（晴空蓝 + 青 + 萌粉） ====================
 // Light
-val PrimaryLight = Color(0xFF0089E0)             // 晴空亮蓝
+val PrimaryLight = Color(0xFF0089E0) // 晴空亮蓝
 val OnPrimaryLight = Color(0xFFFFFFFF)
-val PrimaryContainerLight = Color(0xFFD3ECFF)    // 淡蓝气泡
+val PrimaryContainerLight = Color(0xFFD3ECFF) // 淡蓝气泡
 val OnPrimaryContainerLight = Color(0xFF003550)
 
-val SecondaryLight = Color(0xFF00A6A6)           // 清新青
+val SecondaryLight = Color(0xFF00A6A6) // 清新青
 val OnSecondaryLight = Color(0xFFFFFFFF)
 val SecondaryContainerLight = Color(0xFFB9F3F0)
 val OnSecondaryContainerLight = Color(0xFF00332F)
 
-val TertiaryLight = Color(0xFFFF4F81)            // 萌粉点缀
+val TertiaryLight = Color(0xFFFF4F81) // 萌粉点缀
 val OnTertiaryLight = Color(0xFFFFFFFF)
 val TertiaryContainerLight = Color(0xFFFFD9E3)
 val OnTertiaryContainerLight = Color(0xFF3F0015)
@@ -85,12 +85,12 @@ val ErrorContainerDark = Color(0xFF93000A)
 val OnErrorContainerDark = Color(0xFFFFDAD6)
 
 // ==================== 分类预设色（明快二次元糖果色）——主页/存储条使用 ====================
-val PresetBiliPink = Color(0xFFFB7299)     // B站 品牌粉
-val PresetSage = Color(0xFF7FB6B6)         // 清新薄荷
-val PresetDustyBlue = Color(0xFF5FA8E8)    // 天蓝
-val PresetForest = Color(0xFF2EC4A6)       // 青绿
-val PresetAmber = Color(0xFFFFA14E)        // 蜜橙
-val PresetRose = Color(0xFFFF6B9C)         // 粉红
-val PresetLavender = Color(0xFFB48CE0)     // 淡紫
-val PresetCharcoal = Color(0xFF3A4757)     // 深蓝灰
-val PresetCloud = Color(0xFFF2F9FF)        // 云白
+val PresetBiliPink = Color(0xFFFB7299) // B站 品牌粉
+val PresetSage = Color(0xFF7FB6B6) // 清新薄荷
+val PresetDustyBlue = Color(0xFF5FA8E8) // 天蓝
+val PresetForest = Color(0xFF2EC4A6) // 青绿
+val PresetAmber = Color(0xFFFFA14E) // 蜜橙
+val PresetRose = Color(0xFFFF6B9C) // 粉红
+val PresetLavender = Color(0xFFB48CE0) // 淡紫
+val PresetCharcoal = Color(0xFF3A4757) // 深蓝灰
+val PresetCloud = Color(0xFFF2F9FF) // 云白

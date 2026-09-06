@@ -1,7 +1,5 @@
 package com.dhhxfggg.pjm.ui.screen
 
-import com.composables.icons.lucide.Lucide
-import com.composables.icons.lucide.ArrowLeft
 import androidx.annotation.OptIn
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
@@ -26,6 +24,8 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
+import com.composables.icons.lucide.ArrowLeft
+import com.composables.icons.lucide.Lucide
 import com.dhhxfggg.pjm.R
 import com.dhhxfggg.pjm.domain.util.FileUtils
 import com.dhhxfggg.pjm.domain.util.VaultManager
@@ -47,54 +47,56 @@ import kotlin.time.Duration.Companion.seconds
 fun MediaDetailScreen(
     relativePath: String,
     onBack: () -> Unit,
-    viewModel: MediaDetailViewModel = hiltViewModel()
+    viewModel: MediaDetailViewModel = hiltViewModel(),
 ) {
     val context = LocalContext.current
     val fileEntity by viewModel.fileEntity.collectAsState()
-    
+
     LaunchedEffect(relativePath) {
         viewModel.loadFile(relativePath)
     }
 
-    val file = remember(fileEntity) {
-        fileEntity?.let { VaultManager.getFileFromEntity(context, it) }
-    }
+    val file =
+        remember(fileEntity) {
+            fileEntity?.let { VaultManager.getFileFromEntity(context, it) }
+        }
 
     Scaffold(
         containerColor = Color.Black,
         topBar = {
             TopAppBar(
-                title = { 
-                    fileEntity?.let { 
+                title = {
+                    fileEntity?.let {
                         // 显示规范化名称（PJM_入库时间.ext）；pjm 容器显示其规范原名
-                        Text(FileUtils.normalizedDisplayName(it), color = Color.White, style = MaterialTheme.typography.titleMedium) 
-                    } 
+                        Text(FileUtils.normalizedDisplayName(it), color = Color.White, style = MaterialTheme.typography.titleMedium)
+                    }
                 },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Lucide.ArrowLeft, null, tint = Color.White)
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Black.copy(alpha = 0.5f))
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Black.copy(alpha = 0.5f)),
             )
-        }
+        },
     ) { innerPadding ->
         Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .background(Color.Black),
-            contentAlignment = Alignment.Center
+            modifier =
+                Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+                    .background(Color.Black),
+            contentAlignment = Alignment.Center,
         ) {
             if (fileEntity != null && file != null) {
                 val entity = fileEntity
                 if (entity?.isImage == true) {
                     ImageViewer(
-                        filePath = file.absolutePath
+                        filePath = file.absolutePath,
                     )
                 } else if (FileUtils.isVideoFile(file.name)) {
                     VideoViewer(
-                        filePath = file.absolutePath
+                        filePath = file.absolutePath,
                     )
                 } else {
                     Text(stringResource(R.string.error_unsupported_preview), color = Color.White)
@@ -117,60 +119,60 @@ fun MediaDetailScreen(
 }
 
 @Composable
-private fun ImageViewer(
-    filePath: String
-) {
+private fun ImageViewer(filePath: String) {
     var scale by remember { mutableFloatStateOf(1f) }
     var offset by remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
 
     AsyncImage(
-        model = ImageRequest.Builder(LocalContext.current)
-            .data(filePath)
-            .build(),
+        model =
+            ImageRequest
+                .Builder(LocalContext.current)
+                .data(filePath)
+                .build(),
         contentDescription = null,
         contentScale = ContentScale.Fit,
-        modifier = Modifier
-            .fillMaxSize()
-            .graphicsLayer(
-                scaleX = scale,
-                scaleY = scale,
-                translationX = offset.x,
-                translationY = offset.y
-            )
-            .pointerInput(Unit) {
-                detectTransformGestures { _, pan, zoom, _ ->
-                    scale = (scale * zoom).coerceIn(1f, 5f)
-                    if (scale > 1f) {
-                        offset += pan
-                    } else {
-                        offset = androidx.compose.ui.geometry.Offset.Zero
+        modifier =
+            Modifier
+                .fillMaxSize()
+                .graphicsLayer(
+                    scaleX = scale,
+                    scaleY = scale,
+                    translationX = offset.x,
+                    translationY = offset.y,
+                ).pointerInput(Unit) {
+                    detectTransformGestures { _, pan, zoom, _ ->
+                        scale = (scale * zoom).coerceIn(1f, 5f)
+                        if (scale > 1f) {
+                            offset += pan
+                        } else {
+                            offset = androidx.compose.ui.geometry.Offset.Zero
+                        }
                     }
-                }
-            }
+                },
     )
 }
 
 @OptIn(UnstableApi::class)
 @Composable
-private fun VideoViewer(
-    filePath: String
-) {
+private fun VideoViewer(filePath: String) {
     val context = LocalContext.current
-    val exoPlayer = remember {
-        ExoPlayer.Builder(context).build().apply {
-            repeatMode = Player.REPEAT_MODE_ONE
-            setAudioAttributes(
-                androidx.media3.common.AudioAttributes.Builder()
-                    .setUsage(androidx.media3.common.C.USAGE_MEDIA)
-                    .setContentType(androidx.media3.common.C.AUDIO_CONTENT_TYPE_MOVIE)
-                    .build(),
-                true
-            )
-            setMediaItem(MediaItem.fromUri(filePath))
-            prepare()
-            playWhenReady = true
+    val exoPlayer =
+        remember {
+            ExoPlayer.Builder(context).build().apply {
+                repeatMode = Player.REPEAT_MODE_ONE
+                setAudioAttributes(
+                    androidx.media3.common.AudioAttributes
+                        .Builder()
+                        .setUsage(androidx.media3.common.C.USAGE_MEDIA)
+                        .setContentType(androidx.media3.common.C.AUDIO_CONTENT_TYPE_MOVIE)
+                        .build(),
+                    true,
+                )
+                setMediaItem(MediaItem.fromUri(filePath))
+                prepare()
+                playWhenReady = true
+            }
         }
-    }
 
     DisposableEffect(Unit) {
         onDispose {
@@ -185,6 +187,6 @@ private fun VideoViewer(
                 useController = true
             }
         },
-        modifier = Modifier.fillMaxSize()
+        modifier = Modifier.fillMaxSize(),
     )
 }
