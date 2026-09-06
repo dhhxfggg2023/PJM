@@ -51,13 +51,13 @@ jobs:
         run: chmod +x gradlew
 
       - name: Unit tests
-        run: ./gradlew :app:testDebugUnitTest --stacktrace
+        run: ./gradlew -Dgradle.user.home=$HOME/.gradle :app:testDebugUnitTest --stacktrace
 
       - name: ktlint check
-        run: ./gradlew ktlintCheck --stacktrace
+        run: ./gradlew -Dgradle.user.home=$HOME/.gradle ktlintCheck --stacktrace
 
       - name: Assemble release
-        run: ./gradlew :app:assembleRelease --stacktrace
+        run: ./gradlew -Dgradle.user.home=$HOME/.gradle :app:assembleRelease --stacktrace
 
       - name: Upload debug test report
         if: always()
