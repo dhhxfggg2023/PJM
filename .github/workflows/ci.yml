@@ -1,10 +1,10 @@
 # PJM CI — 构建 / 单测 / 静态检查
 #
 # 触发：push 与 PR 到 main。
-# 环境要点（与本地一致）：
-#   - JDK 17
-#   - Android SDK（compileSdk 37, NDK 28.2.13676358, CMake 3.22.1）
-#   - 依赖从 google() / mavenCentral() 解析（不依赖本地缓存）
+# 环境：GitHub ubuntu-latest 已预装所需 Android SDK 组件
+#   - platforms;android-37.0 / build-tools;37.0.0 / NDK 28.2.13676358 / cmdline-tools
+#   （无需再执行 sdkmanager --install，runner 已全部具备）
+# 依赖从 google() / mavenCentral() 解析。
 
 name: CI
 
@@ -24,18 +24,21 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
 
       - name: Gradle cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.gradle/caches
@@ -43,16 +46,6 @@ jobs:
           key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle.kts', 'gradle/libs.versions.toml') }}
           restore-keys: |
             ${{ runner.os }}-gradle-
-
-      - name: Install Android SDK components
-        run: |
-          echo "y" | sdkmanager --install \
-            "platforms;android-37" \
-            "build-tools;37.0.0" \
-            "ndk;28.2.13676358" \
-            "cmake;3.22.1" \
-            "platform-tools"
-          echo "y" | sdkmanager --licenses > /dev/null 2>&1 || true
 
       - name: Grant execute permission to gradlew
         run: chmod +x gradlew
@@ -68,7 +61,7 @@ jobs:
 
       - name: Upload debug test report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: unit-test-report
           path: app/build/reports/tests/testDebugUnitTest/
@@ -76,7 +69,7 @@ jobs:
 
       - name: Upload release APK
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: release-apk
           path: app/build/outputs/apk/release/*.apk
