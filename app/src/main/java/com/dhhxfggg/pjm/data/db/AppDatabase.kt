@@ -5,6 +5,7 @@ import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.dhhxfggg.pjm.data.model.FileEntity
+import com.dhhxfggg.pjm.data.model.ViewHistoryEntity
 
 /**
  * PJM Room 数据库。
@@ -21,12 +22,14 @@ import com.dhhxfggg.pjm.data.model.FileEntity
  * 无法补写；当前所有在网安装的数据库均为 v9。自 v9 起启用严格迁移策略。
  */
 @Database(
-    entities = [FileEntity::class],
-    version = 9,
+    entities = [FileEntity::class, ViewHistoryEntity::class],
+    version = 10,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun fileDao(): FileDao
+
+    abstract fun viewHistoryDao(): ViewHistoryDao
 
     companion object {
         /**
@@ -38,18 +41,25 @@ abstract class AppDatabase : RoomDatabase() {
         var openDb: SupportSQLiteDatabase? = null
 
         /**
-         * 显式迁移注册表。
-         *
-         * 未来 schema 变更示例（v9 → v10）：
-         * ```
-         * val MIGRATION_9_10 = object : Migration(9, 10) {
-         *     override fun migrate(db: SupportSQLiteDatabase) {
-         *         db.execSQL("ALTER TABLE files ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0")
-         *     }
-         * }
-         * // 然后在下方数组中加入 MIGRATION_9_10
-         * ```
+         * v9 → v10：新增浏览历史表（发现页“没看过优先”）。
+         * 仅新增表，不触及既有 files 表，对用户数据零影响。
          */
-        val MIGRATIONS: Array<Migration> = arrayOf()
+        private val MIGRATION_9_10 =
+            object : Migration(9, 10) {
+                override fun migrate(db: SupportSQLiteDatabase) {
+                    db.execSQL(
+                        "CREATE TABLE IF NOT EXISTS `view_history` (" +
+                            "`relativePath` TEXT NOT NULL, " +
+                            "`viewedAt` INTEGER NOT NULL, " +
+                            "PRIMARY KEY(`relativePath`))",
+                    )
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_view_history_viewedAt` ON `view_history` (`viewedAt`)")
+                }
+            }
+
+        /**
+         * 显式迁移注册表。
+         */
+        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_9_10)
     }
 }

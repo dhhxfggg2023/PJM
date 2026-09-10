@@ -7,7 +7,9 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.dhhxfggg.pjm.R
 import com.dhhxfggg.pjm.data.db.FileDao
+import com.dhhxfggg.pjm.data.db.ViewHistoryDao
 import com.dhhxfggg.pjm.data.model.FileEntity
+import com.dhhxfggg.pjm.data.model.ViewHistoryEntity
 import com.dhhxfggg.pjm.domain.util.PjmLogger
 import com.dhhxfggg.pjm.domain.util.VaultManager
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -23,11 +25,11 @@ import javax.inject.Inject
 /**
  * ViewModel for the Discovery Screen, handling random file exploration.
  *
- * 核心：全量打乱队列（Shuffled Round-Robin）——
- * 每次从 DB 拉取当前分类全部路径打乱排队，顺序消费；
- * 全部轮完（队列耗尽且无新增）才重新打乱开新一轮；
- * 中途新增的文件自动并入当前队列队尾（不等下一轮）。
- * 保证：一轮内所有文件都会轮到、不重复，时间最少。
+ * 核心：“没看过的优先” + 全量打乱队列（Shuffled Round-Robin）。
+ * · 优先推送浏览历史中【未看过】的文件（打乱）；
+ * · 未看过的刷完后，回退到【全库打乱】开始新一轮（允许重复）—— “看完自动重来”；
+ * · 一轮内不重复；中途新增的文件自动并入队列。
+ * 浏览记录持久化在 view_history 表，跨会话生效。
  */
 @HiltViewModel
 class DiscoveryViewModel
@@ -35,6 +37,7 @@ class DiscoveryViewModel
     constructor(
         private val application: Application,
         private val fileDao: FileDao,
+        private val viewHistoryDao: ViewHistoryDao,
     ) : AndroidViewModel(application) {
         private val _items = MutableStateFlow<List<DiscoveryItem>>(emptyList())
         private val _discoveryMode = MutableStateFlow(DiscoveryMode.BILI_VIDEOS)
@@ -87,23 +90,29 @@ class DiscoveryViewModel
         }
 
         /**
-         * 从 DB 拉当前分类全部路径，把"本轮未看过且未排队"的新增文件打乱追加到队列尾部。
-         * 队列为空且无新增时（本轮已轮完）→ 全量重新打乱开始新的一轮。
+         * 从 DB 补充待消费队列：
+         * 1. 优先取该分类【未看过】的路径（排除 view_history），打乱后加入队列；
+         * 2. 未看过的耗尽时，回退到【全库打乱】（新一轮，允许重复）——“看完自动重来”。
          */
         private suspend fun refillQueue(category: String) {
+            // 优先：未看过的（尚未在本轮队列中的）
+            val queued = pendingQueue.toHashSet()
+            val unviewed = viewHistoryDao.getUnviewedPathsByCategory(category).filter { it !in queued }
+            if (unviewed.isNotEmpty()) {
+                pendingQueue.addAll(unviewed.shuffled())
+                return
+            }
+            // 兜底：全部看过了（或首次进入无未看过样本）→ 全库打乱开新一轮
             val all = fileDao.getAllPathsByCategory(category)
             if (all.isEmpty()) return
-            val queued = pendingQueue.toHashSet()
-            // 新增 = 全量 - 本轮已消费 - 已排队（尚未消费）
-            val fresh = all.filter { it !in seenInRound && it !in queued }
+            val fresh = all.filter { it !in queued }
             if (fresh.isNotEmpty()) {
                 pendingQueue.addAll(fresh.shuffled())
             } else if (pendingQueue.isEmpty()) {
-                // 无新增且队列空 → 本轮全部轮完，开启新一轮（全量重新打乱）
+                // 队列耗尽且全库已在队列中 → 清空重开（真·新一轮）
                 seenInRound.clear()
                 pendingQueue.addAll(all.shuffled())
             }
-            // 极端兜底：all 全被 seenInRound 消费但 queue 非空时不重开（本轮还剩排队项）
         }
 
         /**
@@ -130,6 +139,11 @@ class DiscoveryViewModel
                             }
                             if (paths.isEmpty()) return@withContext emptyList()
                             seenInRound.addAll(paths)
+                            // 批量标记为已看（删除时会联动清理，防止历史表膨胀）
+                            val now = System.currentTimeMillis()
+                            runCatching {
+                                viewHistoryDao.markViewedAll(paths.map { ViewHistoryEntity(it, now) })
+                            }
                             fileDao.getFilesByPaths(paths)
                         }
 

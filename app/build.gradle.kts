@@ -20,8 +20,8 @@ android {
         applicationId = "com.dhhxfggg.pjm"
         minSdk = 24
         targetSdk = 35
-        versionCode = 38
-        versionName = "1.9.2"
+        versionCode = 39
+        versionName = "1.9.3"
 
         ndk {
             abiFilters.addAll(listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64"))
@@ -148,6 +148,7 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.robolectric)
     testImplementation(libs.androidx.test.core)
+    testImplementation(libs.androidx.room.testing)
 }
 
 tasks.withType<KotlinCompile>().configureEach {

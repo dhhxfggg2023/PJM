@@ -11,6 +11,7 @@ import coil3.request.allowHardware
 import coil3.request.crossfade
 import coil3.video.VideoFrameDecoder
 import com.dhhxfggg.pjm.data.db.FileDao
+import com.dhhxfggg.pjm.data.db.ViewHistoryDao
 import com.dhhxfggg.pjm.domain.shizuku.ShizukuBridge
 import com.dhhxfggg.pjm.domain.util.PjmLogger
 import com.dhhxfggg.pjm.domain.util.SettingsManager
@@ -53,6 +54,8 @@ class MainApplication :
         fun thumbnailSyncManager(): ThumbnailSyncManager
 
         fun fileDao(): FileDao
+
+        fun viewHistoryDao(): ViewHistoryDao
 
         fun settingsManager(): SettingsManager
     }
@@ -108,6 +111,16 @@ class MainApplication :
         }
 
         PjmLogger.i("MainApplication", "PJM 应用引擎已启动，兼容层支持: $IS_SEVEN_ZIP_ENABLED")
+
+        // 冷启动后清理浏览历史中已不存在文件的孤儿记录（避免历史表膨胀）
+        applicationScope.launch(VaultManager.PjmDispatchers.Database) {
+            runCatching {
+                EntryPointAccessors
+                    .fromApplication(this@MainApplication, MainAppEntryPoint::class.java)
+                    .viewHistoryDao()
+                    .purgeOrphans()
+            }.onFailure { e -> PjmLogger.w("MainApplication", "浏览历史清理跳过: ${e.message}") }
+        }
 
         // 一次性命名迁移：把旧命名规则的加密容器统一为最新规范
         // `前缀_yyyyMMdd_HHmmss.pjm.N`（如旧式 Export_<毫秒>.pjm.1、X.pjm 单卷缺数字）

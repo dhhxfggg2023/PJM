@@ -5,6 +5,7 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import com.dhhxfggg.pjm.data.db.AppDatabase
 import com.dhhxfggg.pjm.data.db.FileDao
+import com.dhhxfggg.pjm.data.db.ViewHistoryDao
 import com.dhhxfggg.pjm.data.repository.FileRepository
 import com.dhhxfggg.pjm.data.repository.FileRepositoryImpl
 import dagger.Binds
@@ -63,5 +64,12 @@ abstract class AppModule {
         @Provides
         @Singleton
         fun provideFileDao(database: AppDatabase): FileDao = database.fileDao()
+
+        /**
+         * 提供浏览历史 DAO（发现页“没看过优先”）。
+         */
+        @Provides
+        @Singleton
+        fun provideViewHistoryDao(database: AppDatabase): ViewHistoryDao = database.viewHistoryDao()
     }
 }
