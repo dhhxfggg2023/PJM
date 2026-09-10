@@ -159,19 +159,21 @@ object VaultScanner {
                 onProgress(0.6f * (processedTotal.toFloat() / images.size))
             }
             if (fps.size < 2) return@withContext emptyList()
-            val fpList = fps.filter { it.fp != null && it.fp!!.dHash.length == 64 }
+            // 拆成非空 Pair（entity → fingerprint），后续免去 !! 断言（防 NPE）
+            val fpList: List<Pair<FileEntity, ImageFingerprint>> =
+                fps.mapNotNull { f -> f.fp?.let { f.entity to it } }.filter { it.second.dHash.length == 64 }
             if (fpList.size < 2) return@withContext emptyList()
 
             // 2) 二进制串 → Long（加速汉明距离）+ 宽高比/面积预计算（粗筛纯内存过滤）
-            val dHashes = LongArray(fpList.size) { i -> fpList[i].fp!!.dHash.toLongOrNull(2) ?: 0L }
+            val dHashes = LongArray(fpList.size) { i -> fpList[i].second.dHash.toLongOrNull(2) ?: 0L }
             val ratios =
                 FloatArray(fpList.size) { i ->
-                    val fp = fpList[i].fp!!
+                    val fp = fpList[i].second
                     fp.width.toFloat() / fp.height.coerceAtLeast(1)
                 }
             val areas =
                 LongArray(fpList.size) { i ->
-                    val fp = fpList[i].fp!!
+                    val fp = fpList[i].second
                     fp.width.toLong() * fp.height
                 }
 
@@ -228,7 +230,7 @@ object VaultScanner {
                     (start until end)
                         .map { idx ->
                             async(VaultManager.PjmDispatchers.IO) {
-                                val e = fpList[idx].entity
+                                val e = fpList[idx].first
                                 ImageFingerprintCache.getOrComputeGray32(context, e)?.let { e.relativePath to it }
                             }
                         }.awaitAll()
@@ -245,8 +247,8 @@ object VaultScanner {
                     val pair = candidates[idx]
                     val i = pair shr 16
                     val j = pair and 0xFFFF
-                    val g1 = gray32Cache[fpList[i].entity.relativePath]
-                    val g2 = gray32Cache[fpList[j].entity.relativePath]
+                    val g1 = gray32Cache[fpList[i].first.relativePath]
+                    val g2 = gray32Cache[fpList[j].first.relativePath]
                     if (g1 != null && g2 != null && ImageFingerprintCache.gray32Similar(g1, g2)) {
                         candidates[kept++] = pair
                     }
@@ -300,8 +302,8 @@ object VaultScanner {
                                     fpSemaphore.withPermit {
                                         if (ImageFingerprintCache.verifySameContent(
                                                 context,
-                                                fpList[i].entity,
-                                                fpList[j].entity,
+                                                fpList[i].first,
+                                                fpList[j].first,
                                             )
                                         ) {
                                             i to j
@@ -331,16 +333,16 @@ object VaultScanner {
             PjmLogger.i(TAG, "图片感知查重：确认重复对 $verified")
 
             // 4) 分组：每组 ≥ 2 → 保留分辨率最高，其余标记为建议删除（供 UI 对比展示）
-            val groups = HashMap<Int, MutableList<Fp>>()
+            val groups = HashMap<Int, MutableList<Pair<FileEntity, ImageFingerprint>>>()
             fpList.forEachIndexed { i, f -> groups.getOrPut(find(i)) { mutableListOf() }.add(f) }
             val result = mutableListOf<DuplicateGroup>()
             groups.values.forEach { g ->
                 if (g.size > 1) {
-                    val sorted = g.sortedByDescending { it.fp!!.width.toLong() * it.fp!!.height }
+                    val sorted = g.sortedByDescending { it.second.width.toLong() * it.second.height }
                     result.add(
                         DuplicateGroup(
-                            members = sorted.map { it.entity },
-                            recommendedDelete = sorted.drop(1).map { it.entity.relativePath }.toSet(),
+                            members = sorted.map { it.first },
+                            recommendedDelete = sorted.drop(1).map { it.first.relativePath }.toSet(),
                         ),
                     )
                 }

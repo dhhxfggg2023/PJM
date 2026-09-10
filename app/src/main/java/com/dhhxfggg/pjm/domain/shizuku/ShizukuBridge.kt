@@ -181,17 +181,17 @@ object ShizukuBridge {
     private fun bindService() {
         if (boundService != null || _serviceReady.value) return
         val ctx = appContext ?: return
-        if (userServiceArgs == null) {
-            userServiceArgs =
-                Shizuku
+        val args =
+            userServiceArgs
+                ?: Shizuku
                     .UserServiceArgs(
                         ComponentName(ctx, FileBridgeService::class.java),
                     ).daemon(false)
                     .processNameSuffix("file_bridge")
                     .version(1)
-        }
+                    .also { userServiceArgs = it }
         try {
-            Shizuku.bindUserService(userServiceArgs!!, serviceConnection)
+            Shizuku.bindUserService(args, serviceConnection)
         } catch (e: Exception) {
             PjmLogger.e(TAG, "bindService failed", e)
         }

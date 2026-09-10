@@ -1,7 +1,9 @@
 package com.dhhxfggg.pjm.ui.component
 
+import android.content.pm.ApplicationInfo
 import android.net.Uri
 import android.os.Environment
+import android.provider.DocumentsContract
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -120,17 +122,18 @@ fun PjmFolderPickerDialog(
 
     val nodes =
         remember(currentRawDir, currentDocDir, searchQuery, installedApps, privilegedEntries) {
-            val baseNodes: List<Triple<String, Any, android.content.pm.ApplicationInfo?>> =
-                if (currentDocDir != null) {
-                    var filesList = currentDocDir!!.listFiles().toList()
+            val docDir = currentDocDir
+            val baseNodes: List<Triple<String, Any, ApplicationInfo?>> =
+                if (docDir != null) {
+                    var filesList = docDir.listFiles().toList()
                     if (filesList.isEmpty()) {
                         val manualFiles = mutableListOf<DocumentFile>()
                         try {
-                            val treeForQuery = currentTreeUri ?: currentDocDir!!.uri
+                            val treeForQuery = currentTreeUri ?: docDir.uri
                             val childrenUri =
-                                android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(
+                                DocumentsContract.buildChildDocumentsUriUsingTree(
                                     treeForQuery,
-                                    android.provider.DocumentsContract.getDocumentId(currentDocDir!!.uri),
+                                    DocumentsContract.getDocumentId(docDir.uri),
                                 )
                             context.contentResolver
                                 .query(
@@ -163,7 +166,8 @@ fun PjmFolderPickerDialog(
                         // 特权不可用才用 File API。
                         val fileNodes =
                             if (privilegedAvailable && privilegedEntries != null) {
-                                privilegedEntries!!
+                                val entries = privilegedEntries ?: emptyList()
+                                entries
                                     .filter { !it.first.name.startsWith(".") }
                                     .map { Triple(it.first.name, it.first, null) }
                             } else {
@@ -263,8 +267,9 @@ fun PjmFolderPickerDialog(
                     },
                     navigationIcon = {
                         IconButton(onClick = {
-                            if (currentDocDir != null) {
-                                val parent = currentDocDir!!.parentFile
+                            val docDir = currentDocDir
+                            if (docDir != null) {
+                                val parent = docDir.parentFile
                                 if (parent != null) {
                                     currentDocDir = parent
                                 } else {
@@ -372,7 +377,8 @@ fun PjmFolderPickerDialog(
                             // File.isDirectory 恒为 false，导致 download 等目录被误识别成文件。
                             val privilegedFlag =
                                 if (currentDocDir == null && privilegedAvailable && privilegedEntries != null) {
-                                    privilegedEntries!!.firstOrNull { it.first.name == name }?.second
+                                    val entries = privilegedEntries ?: emptyList()
+                                    entries.firstOrNull { it.first.name == name }?.second
                                 } else {
                                     null
                                 }
@@ -473,9 +479,10 @@ fun PjmFolderPickerDialog(
                         Button(
                             onClick = {
                                 val rawUri = Uri.fromFile(currentRawDir)
+                                val docDir = currentDocDir
                                 val selectedUri =
                                     when {
-                                        currentDocDir != null -> currentDocDir!!.uri
+                                        docDir != null -> docDir.uri
                                         rawUri.path?.contains("Android/data") == true -> {
                                             // 核心修复：有全盘访问/特权时直接返回当前精确目录的 file URI，
                                             // 扫描器经 File API 只读该应用目录（不再有其它应用干扰）。

@@ -355,7 +355,8 @@ class MainActivity : ComponentActivity() {
                     if (isDoc) {
                         if (android.provider.DocumentsContract.deleteDocument(contentResolver, uri)) deletedCount++
                     } else if (uri.scheme == "file") {
-                        if (File(uri.path!!).delete()) deletedCount++
+                        val path = uri.path
+                        if (path != null && File(path).delete()) deletedCount++
                     }
                 } catch (e: Exception) {
                     PjmLogger.e("MainActivity", "Delete failed for $uri", e)
@@ -520,7 +521,8 @@ class MainActivity : ComponentActivity() {
                 if (uri.scheme == "file" ||
                     uri.path?.contains(filesDir.absolutePath) == true
                 ) {
-                    PjmContentProvider.getUriForFile(this, File(uri.path!!))
+                    val path = uri.path
+                    if (path != null) PjmContentProvider.getUriForFile(this, File(path)) else uri
                 } else {
                     uri
                 }
