@@ -277,7 +277,7 @@ object ShizukuBridge {
                 depth: Int,
             ) {
                 if (depth > maxDepth) return
-                val entries = runBlockingList(p) ?: return
+                val entries = listEntriesViaService(p) ?: return
                 for (e in entries) {
                     val full = "$p/${e.name}"
                     if (e.isDirectory) {
@@ -291,8 +291,8 @@ object ShizukuBridge {
             results
         }
 
-    /** 供内部递归使用的同步列目录（避免递归中 suspend 限制） */
-    private suspend fun runBlockingList(path: String): List<FileInfo>? =
+    /** 供内部递归使用的列表目录（suspend，经特权服务 IPC；不阻塞线程） */
+    private suspend fun listEntriesViaService(path: String): List<FileInfo>? =
         withService { svc ->
             svc.listFiles(path)?.mapNotNull { line ->
                 try {

@@ -85,6 +85,28 @@ object PjmLogger {
         }
     }
 
+    /**
+     * 安装全局未捕获异常处理器。
+     * 崩溃时把完整堆栈写入 error 日志（落盘 hard-sync），再交回系统默认处理（不影响崩溃报告/重启）。
+     * 配合“导出诊断日志”功能，可以在崩溃后从用户处拿到一线堆栈。
+     */
+    fun installCrashHandler() {
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            try {
+                e(
+                    "CrashHandler",
+                    "UNCAUGHT EXCEPTION on thread [${thread.name}]: ${throwable.javaClass.name}: ${throwable.message}",
+                    throwable,
+                )
+            } catch (_: Throwable) {
+                // 记录失败绝不能影响后续系统处理
+            }
+            // 交回原有处理器（保留系统默认崩溃行为）
+            previous?.uncaughtException(thread, throwable)
+        }
+    }
+
     private fun writeToDisk(
         file: File?,
         content: String,

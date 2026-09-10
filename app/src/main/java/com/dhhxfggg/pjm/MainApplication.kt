@@ -91,6 +91,9 @@ class MainApplication :
         // 核心修复：显式初始化日志引擎，确保文件物理落盘
         PjmLogger.init(this)
 
+        // 安装全局崩溃捕获：未捕获异常写入 error 日志，便于事后定位
+        PjmLogger.installCrashHandler()
+
         // 初始化 Shizuku 桥接（检测服务/授权状态，用于突破 Android/data 访问限制）
         ShizukuBridge.init(this)
 
