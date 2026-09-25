@@ -33,14 +33,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.composables.icons.lucide.ArrowLeft
+import com.composables.icons.lucide.CheckCheck
+import com.composables.icons.lucide.Download
 import com.composables.icons.lucide.LayoutGrid
 import com.composables.icons.lucide.LayoutList
 import com.composables.icons.lucide.ListTodo
 import com.composables.icons.lucide.Lucide
-import com.composables.icons.lucide.Save
 import com.composables.icons.lucide.Square
-import com.composables.icons.lucide.SquareCheck
-import com.composables.icons.lucide.Trash2
 import com.composables.icons.lucide.X
 import com.dhhxfggg.pjm.MainApplication
 import com.dhhxfggg.pjm.R
@@ -51,6 +50,8 @@ import com.dhhxfggg.pjm.domain.util.ShareUtils
 import com.dhhxfggg.pjm.domain.util.VaultManager
 import com.dhhxfggg.pjm.ui.component.FileCard
 import com.dhhxfggg.pjm.ui.component.PjmDeleteConfirmDialog
+import com.dhhxfggg.pjm.ui.component.PjmEmptyState
+import com.dhhxfggg.pjm.ui.component.PjmIconButton
 import com.dhhxfggg.pjm.ui.component.SelectableFileCard
 import com.dhhxfggg.pjm.ui.theme.rememberIconPack
 import com.dhhxfggg.pjm.ui.viewmodel.CryptoViewModel
@@ -64,7 +65,10 @@ import java.io.File
 
 /**
  * Screen for viewing and managing files within a specific vault category.
- * Supports searching, batch operations, different view modes, and shared element transitions.
+ * Supports batch operations, different view modes, and shared element transitions.
+ *
+ * 注：本页**没有搜索功能**（原注释有误）。保险库内文件统一以 UUID 命名，
+ * 按文件名搜索没有意义；需要按名字查找请使用 `PjmFileBrowser`（浏览外部目录时文件名才可读）。
  *
  * @param category The category key (e.g., "images", "videos").
  * @param bottomPadding Padding to be applied at the bottom of the screen.
@@ -182,68 +186,90 @@ fun FileViewerScreen(
                                     .toList()
                             }
                         val isAllSelected = (selectedFiles.size == allFilteredFiles.size) && allFilteredFiles.isNotEmpty()
-                        IconButton(onClick = {
-                            if (isAllSelected) {
-                                selectedFiles.clear()
-                                fileViewModel.setBatchMode(false)
-                            } else {
-                                selectedFiles.clear()
-                                selectedFiles.addAll(allFilteredFiles)
-                            }
-                        }) {
-                            Icon(if (isAllSelected) Lucide.Square else Lucide.SquareCheck, null)
-                        }
-                        IconButton(onClick = {
-                            // 分享到外部：用规范化显示名（PJM_入库时间.ext）生成可分享文件，磁盘原件不动
-                            scope.launch {
-                                val namedFiles =
-                                    withContext(Dispatchers.IO) {
-                                        selectedFiles.map { FileUtils.obtainNamedShareFile(context, it) }
-                                    }
-                                shareFiles(context, namedFiles, shareFilesMsg)
-                            }
-                        }) { Icon(iconPack.actionShare, null) }
+                        PjmIconButton(
+                            icon = if (isAllSelected) Lucide.Square else Lucide.CheckCheck,
+                            contentDescription = stringResource(R.string.action_select_all),
+                            onClick = {
+                                if (isAllSelected) {
+                                    selectedFiles.clear()
+                                    fileViewModel.setBatchMode(false)
+                                } else {
+                                    selectedFiles.clear()
+                                    selectedFiles.addAll(allFilteredFiles)
+                                }
+                            },
+                        )
+                        Spacer(Modifier.width(6.dp))
+
+                        PjmIconButton(
+                            icon = iconPack.actionShare,
+                            contentDescription = stringResource(R.string.action_share),
+                            onClick = {
+                                // 分享到外部：用规范化显示名（PJM_入库时间.ext）生成可分享文件，磁盘原件不动
+                                scope.launch {
+                                    val namedFiles =
+                                        withContext(Dispatchers.IO) {
+                                            selectedFiles.map { FileUtils.obtainNamedShareFile(context, it) }
+                                        }
+                                    shareFiles(context, namedFiles, shareFilesMsg)
+                                }
+                            },
+                        )
+                        Spacer(Modifier.width(6.dp))
 
                         if ((category == VaultManager.CAT_IMAGES) ||
                             (category == VaultManager.CAT_VIDEOS) ||
                             (category == VaultManager.CAT_AUDIOS) ||
                             (category == VaultManager.CAT_BILI_VIDEOS)
                         ) {
-                            IconButton(onClick = {
-                                scope.launch(Dispatchers.IO) {
-                                    var count = 0
-                                    selectedFiles.forEach {
-                                        // 导出到相册：文件名统一为规范显示名（PJM_入库时间.ext）
-                                        val named = FileUtils.obtainNamedShareFile(context, it)
-                                        if (FileUtils.exportToPublicDirectory(
-                                                context,
-                                                named,
-                                                FileUtils.normalizedDisplayName(it),
-                                            )
-                                        ) {
-                                            count++
+                            PjmIconButton(
+                                icon = Lucide.Download,
+                                contentDescription = stringResource(R.string.action_export_to_gallery),
+                                onClick = {
+                                    scope.launch(Dispatchers.IO) {
+                                        var count = 0
+                                        selectedFiles.forEach {
+                                            // 导出到相册：文件名统一为规范显示名（PJM_入库时间.ext）
+                                            val named = FileUtils.obtainNamedShareFile(context, it)
+                                            if (FileUtils.exportToPublicDirectory(
+                                                    context,
+                                                    named,
+                                                    FileUtils.normalizedDisplayName(it),
+                                                )
+                                            ) {
+                                                count++
+                                            }
+                                        }
+                                        withContext(Dispatchers.Main) {
+                                            Toast.makeText(context, exportSuccessMsg, Toast.LENGTH_SHORT).show()
+                                            selectedFiles.clear()
+                                            fileViewModel.setBatchMode(false)
                                         }
                                     }
-                                    withContext(Dispatchers.Main) {
-                                        Toast.makeText(context, exportSuccessMsg, Toast.LENGTH_SHORT).show()
-                                        selectedFiles.clear()
-                                        fileViewModel.setBatchMode(false)
-                                    }
-                                }
-                            }) { Icon(Lucide.Save, stringResource(R.string.action_export_to_gallery)) }
+                                },
+                            )
+                            Spacer(Modifier.width(6.dp))
                         }
 
-                        IconButton(onClick = { showBatchDeleteConfirmDialog = true }) {
-                            Icon(Lucide.Trash2, null, tint = MaterialTheme.colorScheme.error)
-                        }
+                        PjmIconButton(
+                            icon = iconPack.actionDelete,
+                            contentDescription = stringResource(R.string.action_delete),
+                            danger = true,
+                            onClick = { showBatchDeleteConfirmDialog = true },
+                        )
                     } else {
-                        IconButton(onClick = { settingsViewModel.toggleViewMode() }) {
-                            Icon(if (settings.fileViewMode == "grid") Lucide.LayoutList else Lucide.LayoutGrid, null)
-                        }
+                        PjmIconButton(
+                            icon = if (settings.fileViewMode == "grid") Lucide.LayoutList else Lucide.LayoutGrid,
+                            contentDescription = null,
+                            onClick = { settingsViewModel.toggleViewMode() },
+                        )
                         if (flattenedItems.isNotEmpty()) {
-                            IconButton(onClick = { fileViewModel.setBatchMode(true) }) {
-                                Icon(Lucide.ListTodo, null)
-                            }
+                            Spacer(Modifier.width(6.dp))
+                            PjmIconButton(
+                                icon = Lucide.ListTodo,
+                                contentDescription = stringResource(R.string.action_batch_select),
+                                onClick = { fileViewModel.setBatchMode(true) },
+                            )
                         }
                     }
                 },
@@ -258,9 +284,12 @@ fun FileViewerScreen(
             val gridState = rememberLazyGridState()
             if (flattenedItems.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(
-                        text = stringResource(R.string.empty_vault_msg),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    // 改版：原来是居中一行灰字，让人以为页面坏了。
+                    // 现在给出视觉锚点 + 「为什么空」+ 明确的入库方式。
+                    PjmEmptyState(
+                        icon = iconPack.stateEmpty,
+                        title = stringResource(R.string.empty_vault_msg),
+                        description = stringResource(R.string.empty_vault_hint),
                     )
                 }
             } else if (settings.fileViewMode == "grid") {

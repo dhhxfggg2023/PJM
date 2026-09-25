@@ -25,6 +25,10 @@ import com.dhhxfggg.pjm.R
 import com.dhhxfggg.pjm.data.model.Settings
 import com.dhhxfggg.pjm.domain.shizuku.EmbeddedPrivilegedIo
 import com.dhhxfggg.pjm.ui.component.PjmAeroDialog
+import com.dhhxfggg.pjm.ui.theme.PresetAmber
+import com.dhhxfggg.pjm.ui.theme.PresetBiliPink
+import com.dhhxfggg.pjm.ui.theme.PresetForest
+import com.dhhxfggg.pjm.ui.theme.PresetLavender
 import com.dhhxfggg.pjm.ui.viewmodel.MainViewModel
 import com.dhhxfggg.pjm.ui.viewmodel.SettingsViewModel
 import kotlinx.coroutines.delay
@@ -46,6 +50,7 @@ internal fun MainCategoryList(
                         "%.2f".format(settings.globalUiScale),
                     ),
                 onClick = { onNavigate(SettingsPage.Appearance) },
+                accent = PresetLavender,
             )
         }
         SettingsCategory(title = stringResource(R.string.settings_cat_ingestion)) {
@@ -59,6 +64,7 @@ internal fun MainCategoryList(
                         settings.gridSpanCount,
                     ),
                 onClick = { onNavigate(SettingsPage.Ingestion) },
+                accent = PresetForest,
             )
         }
         SettingsCategory(title = stringResource(R.string.settings_cat_bili)) {
@@ -71,6 +77,7 @@ internal fun MainCategoryList(
                         if (settings.biliAutoDelete) stringResource(R.string.toggle_on) else stringResource(R.string.toggle_off),
                     ),
                 onClick = { onNavigate(SettingsPage.Bilibili) },
+                accent = PresetBiliPink,
             )
         }
         SettingsCategory(title = stringResource(R.string.settings_cat_maintenance)) {
@@ -79,6 +86,7 @@ internal fun MainCategoryList(
                 title = stringResource(R.string.settings_title_diag_maintenance),
                 description = stringResource(R.string.settings_desc_diag_maintenance),
                 onClick = { onNavigate(SettingsPage.Maintenance) },
+                accent = PresetAmber,
             )
         }
     }

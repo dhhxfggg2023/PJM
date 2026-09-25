@@ -5,12 +5,14 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -35,7 +37,7 @@ import com.dhhxfggg.pjm.ui.theme.PresetAmber
 import com.dhhxfggg.pjm.ui.theme.PresetBiliPink
 import com.dhhxfggg.pjm.ui.theme.PresetDustyBlue
 import com.dhhxfggg.pjm.ui.theme.PresetForest
-import com.dhhxfggg.pjm.ui.theme.PresetRose
+import com.dhhxfggg.pjm.ui.theme.PresetLavender
 import com.dhhxfggg.pjm.ui.theme.rememberIconPack
 import com.dhhxfggg.pjm.ui.viewmodel.MainViewModel
 import java.io.File
@@ -56,7 +58,9 @@ fun MainScreen(
 
     val iconPack = rememberIconPack()
 
-    val glassColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
+    // 可读性修复：原为 alpha 0.7，在浅色花纹壁纸下卡片与背景糊在一起。
+    // 提到 0.82 后既保留玻璃质感，内容区又足够清晰。
+    val glassColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f)
     val glassBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f)
 
     Scaffold(
@@ -106,10 +110,12 @@ fun MainScreen(
                     name = displayName,
                     icon = icon,
                     count = count,
+                    sizeText = uiState.categorySizes[category]?.let { FileUtils.formatFileSize(it) }.orEmpty(),
                     latestFile = coverFile,
                     glassColor = glassColor,
                     glassBorderColor = glassBorderColor,
                     accentColor = color,
+                    chevron = iconPack.actionChevron,
                     onClick = { onNavigateToCategory(category) },
                 )
                 Spacer(modifier = Modifier.height(12.dp))
@@ -131,7 +137,9 @@ fun getCategoryInfo(
         VaultManager.CAT_BILI_VIDEOS -> Triple("B站视频", iconPack.catBiliVideos, PresetBiliPink)
         VaultManager.CAT_IMAGES -> Triple(stringResource(R.string.cat_images_display), iconPack.catImages, PresetForest)
         VaultManager.CAT_VIDEOS -> Triple(stringResource(R.string.cat_videos_display), iconPack.catVideos, PresetAmber)
-        VaultManager.CAT_AUDIOS -> Triple(stringResource(R.string.cat_audios_display), iconPack.catAudios, PresetRose)
+        // 核心修复：音频库原先用 PresetRose(#FF6B9C)，与 B站视频的 PresetBiliPink(#FB7299)
+        // 几乎同色 —— 两张分类卡并排时看起来像重复的分类。改用淡紫，六个分类颜色即可完全区分。
+        VaultManager.CAT_AUDIOS -> Triple(stringResource(R.string.cat_audios_display), iconPack.catAudios, PresetLavender)
         else -> Triple(stringResource(R.string.cat_others_display), iconPack.catOthers, PresetDustyBlue)
     }
 }
@@ -246,20 +254,26 @@ private fun FlowRow(
 
 /**
  * A card representing a category in the vault.
+ *
+ * 视觉改版：图标底从「主色 15% 淡色块」改为「主色渐变实心块 + 白色图标」，
+ * 右侧补一个箭头，副标题同时给出文件数与占用体积 —— 三处改动让卡片有明确的
+ * 「可点击 → 进入分类」的视觉引导，而不是一块静态色块。
  */
 @Composable
 fun VaultCategoryCard(
     name: String,
     icon: ImageVector,
     count: Int,
+    sizeText: String,
     latestFile: File?,
     glassColor: Color,
     glassBorderColor: Color,
     accentColor: Color,
+    chevron: ImageVector,
     onClick: () -> Unit,
 ) {
     Card(
-        modifier = Modifier.fillMaxWidth().height(90.dp),
+        modifier = Modifier.fillMaxWidth().height(84.dp),
         onClick = onClick,
         colors = CardDefaults.cardColors(containerColor = glassColor),
         border = androidx.compose.foundation.BorderStroke(0.5.dp, glassBorderColor),
@@ -285,28 +299,46 @@ fun VaultCategoryCard(
                 AsyncImage(
                     model = coverRequest,
                     contentDescription = null,
-                    modifier = Modifier.matchParentSize().graphicsLayer(alpha = 0.55f),
+                    modifier = Modifier.matchParentSize().graphicsLayer(alpha = 0.5f),
                     contentScale = ContentScale.Crop,
                 )
             }
             Row(
-                modifier = Modifier.padding(horizontal = 20.dp).fillMaxHeight(),
+                modifier = Modifier.padding(horizontal = 16.dp).fillMaxHeight(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Surface(
-                    color = accentColor.copy(alpha = 0.15f),
-                    shape = MaterialTheme.shapes.medium,
-                    modifier = Modifier.size(48.dp),
+                // 彩色渐变图标底（白图标）：比淡色底更有分量，也让六个分类一眼可辨
+                Box(
+                    modifier =
+                        Modifier
+                            .size(46.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(
+                                Brush.linearGradient(
+                                    listOf(accentColor, accentColor.copy(alpha = 0.70f)),
+                                ),
+                            ),
+                    contentAlignment = Alignment.Center,
                 ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(icon, null, tint = accentColor)
-                    }
+                    Icon(icon, null, tint = Color.White, modifier = Modifier.size(22.dp))
                 }
-                Spacer(Modifier.width(16.dp))
-                Column {
+                Spacer(Modifier.width(14.dp))
+                Column(modifier = Modifier.weight(1f)) {
                     Text(text = name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                    Text(text = stringResource(R.string.label_category_count, count), style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.height(2.dp))
+                    val countLabel = stringResource(R.string.label_category_count, count)
+                    Text(
+                        text = if (sizeText.isNotEmpty()) "$countLabel · $sizeText" else countLabel,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
+                Icon(
+                    imageVector = chevron,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
+                    modifier = Modifier.size(18.dp),
+                )
             }
         }
     }

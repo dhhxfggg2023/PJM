@@ -1,31 +1,25 @@
 package com.dhhxfggg.pjm.ui.theme
 
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.InsertDriveFile
-import androidx.compose.material.icons.rounded.Android
-import androidx.compose.material.icons.rounded.Archive
-import androidx.compose.material.icons.rounded.Delete
-import androidx.compose.material.icons.rounded.Description
-import androidx.compose.material.icons.rounded.Explore
-import androidx.compose.material.icons.rounded.Folder
-import androidx.compose.material.icons.rounded.Home
-import androidx.compose.material.icons.rounded.Image
-import androidx.compose.material.icons.rounded.LibraryMusic
-import androidx.compose.material.icons.rounded.Lock
-import androidx.compose.material.icons.rounded.MusicNote
-import androidx.compose.material.icons.rounded.PhotoLibrary
-import androidx.compose.material.icons.rounded.PlayCircleFilled
-import androidx.compose.material.icons.rounded.Settings
-import androidx.compose.material.icons.rounded.Share
-import androidx.compose.material.icons.rounded.Tv
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.vector.ImageVector
+import com.composables.icons.lucide.*
 
 /**
- * PJM 萌系图标系统 —— 清爽二次元 (Kawaii Clean) 标准
+ * PJM 图标系统 —— 统一使用 Lucide（ISC 许可）。
  *
- * 采用 Material Symbols Rounded（圆润描边、Q 弹可爱），替代早期“极客细线”风格，
- * 契合“白底 + 蓝青 + 圆角”的手游初始界面视觉。
+ * ## 为什么是 Lucide
+ * 项目自 v1.9.x 起已在 14 个文件中直接使用 `Lucide.*`（约 66 处），
+ * 但本文件早期用的是 **Material Symbols Rounded**，于是全应用同时存在两套图标风格：
+ * 底部导航 / 主页分类卡 / 文件类型图标是 Material 的粗笔画，而设置页 / 弹窗 / 文件柜
+ * 是 Lucide 的细线条 —— 同一张文件卡片上就能同时看到两种笔画。
+ *
+ * 现在全部收敛到 Lucide，**不再混用 Material Icons**。
+ * 好处：零新增依赖（`com.composables:icons-lucide-cmp` 已是项目依赖）、
+ * 描边风格统一（24 网格 / 2px / 圆头）、APK 体积不增加。
+ *
+ * ## 约定
+ * 新增图标一律**走本接口**，不要在界面里直接写 `Lucide.XXX` ——
+ * 这样将来换图标库只需要改这一个文件。
  */
 interface IconPack {
     val home: ImageVector
@@ -39,9 +33,24 @@ interface IconPack {
     val catAudios: ImageVector
     val catOthers: ImageVector
 
+    // 动作
     val actionShare: ImageVector
     val actionDelete: ImageVector
+    val actionSearch: ImageVector
+    val actionRename: ImageVector
+    val actionExport: ImageVector
+    val actionImport: ImageVector
+    val actionFilter: ImageVector
+    val actionSort: ImageVector
+    val actionSelectAll: ImageVector
+    val actionClose: ImageVector
+    val actionMore: ImageVector
+    val actionCopy: ImageVector
+    val actionRotate: ImageVector
+    val actionOpen: ImageVector
+    val actionChevron: ImageVector
 
+    // 文件类型
     val fileImage: ImageVector
     val fileVideo: ImageVector
     val fileAudio: ImageVector
@@ -49,34 +58,125 @@ interface IconPack {
     val fileArchive: ImageVector
     val fileApk: ImageVector
     val fileGeneric: ImageVector
+
+    // 设置项
+    val setTheme: ImageVector
+    val setContrast: ImageVector
+    val setBackground: ImageVector
+    val setPermission: ImageVector
+    val setData: ImageVector
+    val setBackup: ImageVector
+    val setUpdate: ImageVector
+    val setLog: ImageVector
+    val setKey: ImageVector
+    val setNetwork: ImageVector
+    val setStorage: ImageVector
+    val setLanguage: ImageVector
+    val setNotice: ImageVector
+    val setAbout: ImageVector
+
+    // 状态
+    val stateEmpty: ImageVector
+    val stateSearchEmpty: ImageVector
+    val stateWarning: ImageVector
+    val stateSuccess: ImageVector
+    val stateLoading: ImageVector
+    val stateSparkle: ImageVector
 }
 
 /**
- * 清爽二次元（唯一视觉标准）
+ * Lucide 图标包（唯一视觉标准）。
+ *
+ * 命名对照（旧 Material → 新 Lucide）：
+ * ```
+ * Icons.Rounded.Home         → Lucide.House
+ * Icons.Rounded.Explore      → Lucide.Compass
+ * Icons.Rounded.Settings     → Lucide.Settings
+ * Icons.Rounded.Lock         → Lucide.Lock
+ * Icons.Rounded.Tv           → Lucide.Tv
+ * Icons.Rounded.PhotoLibrary → Lucide.Images
+ * Icons.Rounded.PlayCircleFilled → Lucide.Clapperboard
+ * Icons.Rounded.LibraryMusic → Lucide.Music
+ * Icons.Rounded.Folder       → Lucide.Folder
+ * Icons.Rounded.Share        → Lucide.Share2
+ * Icons.Rounded.Delete       → Lucide.Trash2
+ * Icons.Rounded.Image        → Lucide.Image
+ * Icons.Rounded.MusicNote    → Lucide.FileAudio
+ * Icons.Rounded.Description  → Lucide.FileText
+ * Icons.Rounded.Archive      → Lucide.FileArchive
+ * Icons.Rounded.Android      → Lucide.Package
+ * Icons.AutoMirrored.Rounded.InsertDriveFile → Lucide.File
+ * ```
  */
-object KawaiiCleanIconPack : IconPack {
-    override val home = Icons.Rounded.Home
-    override val discovery = Icons.Rounded.Explore
-    override val settings = Icons.Rounded.Settings
+object LucideIconPack : IconPack {
+    // ---- 主导航 ----
+    override val home = Lucide.House
+    override val discovery = Lucide.Compass
+    override val settings = Lucide.Settings
 
-    override val catPjm = Icons.Rounded.Lock
-    override val catBiliVideos = Icons.Rounded.Tv
-    override val catImages = Icons.Rounded.PhotoLibrary
-    override val catVideos = Icons.Rounded.PlayCircleFilled
-    override val catAudios = Icons.Rounded.LibraryMusic
-    override val catOthers = Icons.Rounded.Folder
+    // ---- 分类 ----
+    // 注：分类图标选择的是「语义」而非「容器」—— B站视频用场记板（内容创作）、
+    // 视频分类用胶片（本地视频），两者视觉上可以区分开。
+    //
+    // 命名注意：本项目所用的 Lucide 快照里 **没有 file-video / file-audio**，
+    // 且 filter 已更名为 funnel。以下用的是该版本真实存在的图标名（已编译验证）。
+    override val catPjm = Lucide.Lock
+    override val catBiliVideos = Lucide.Clapperboard
+    override val catImages = Lucide.Images
+    override val catVideos = Lucide.Film
+    override val catAudios = Lucide.Music
+    override val catOthers = Lucide.Folder
 
-    override val actionShare = Icons.Rounded.Share
-    override val actionDelete = Icons.Rounded.Delete
+    // ---- 动作 ----
+    override val actionShare = Lucide.Share2
+    override val actionDelete = Lucide.Trash2
+    override val actionSearch = Lucide.Search
+    override val actionRename = Lucide.Pencil
+    override val actionExport = Lucide.Download
+    override val actionImport = Lucide.FolderInput
+    override val actionFilter = Lucide.Funnel
+    override val actionSort = Lucide.ArrowUpDown
+    override val actionSelectAll = Lucide.SquareCheck
+    override val actionClose = Lucide.X
+    override val actionMore = Lucide.EllipsisVertical
+    override val actionCopy = Lucide.Copy
+    override val actionRotate = Lucide.RotateCw
+    override val actionOpen = Lucide.FolderOpen
+    override val actionChevron = Lucide.ChevronRight
 
-    override val fileImage = Icons.Rounded.Image
-    override val fileVideo = Icons.Rounded.PlayCircleFilled
-    override val fileAudio = Icons.Rounded.MusicNote
-    override val fileDoc = Icons.Rounded.Description
-    override val fileArchive = Icons.Rounded.Archive
-    override val fileApk = Icons.Rounded.Android
-    override val fileGeneric = Icons.AutoMirrored.Rounded.InsertDriveFile
+    // ---- 文件类型 ----
+    override val fileImage = Lucide.Image
+    override val fileVideo = Lucide.Video
+    override val fileAudio = Lucide.AudioWaveform
+    override val fileDoc = Lucide.FileText
+    override val fileArchive = Lucide.FileArchive
+    override val fileApk = Lucide.Package
+    override val fileGeneric = Lucide.File
+
+    // ---- 设置项 ----
+    override val setTheme = Lucide.Palette
+    override val setContrast = Lucide.Contrast
+    override val setBackground = Lucide.Image
+    override val setPermission = Lucide.ShieldCheck
+    override val setData = Lucide.Database
+    override val setBackup = Lucide.CloudUpload
+    override val setUpdate = Lucide.RefreshCw
+    override val setLog = Lucide.Bug
+    override val setKey = Lucide.KeyRound
+    override val setNetwork = Lucide.Wifi
+    override val setStorage = Lucide.HardDrive
+    override val setLanguage = Lucide.Globe
+    override val setNotice = Lucide.Bell
+    override val setAbout = Lucide.Info
+
+    // ---- 状态 ----
+    override val stateEmpty = Lucide.Inbox
+    override val stateSearchEmpty = Lucide.SearchX
+    override val stateWarning = Lucide.TriangleAlert
+    override val stateSuccess = Lucide.CircleCheck
+    override val stateLoading = Lucide.LoaderCircle
+    override val stateSparkle = Lucide.Sparkles
 }
 
 @Composable
-fun rememberIconPack(): IconPack = KawaiiCleanIconPack
+fun rememberIconPack(): IconPack = LucideIconPack

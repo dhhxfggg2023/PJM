@@ -5,6 +5,8 @@
     <!-- Actions -->
     <string name="action_clear_cache">清空缓存</string>
     <string name="action_select_all">全选</string>
+    <string name="action_batch_select">批量选择</string>
+    <string name="action_export_short">导出</string>
     <string name="action_share">分享</string>
     <string name="action_open">打开</string>
     <string name="action_delete">删除</string>
@@ -101,6 +103,7 @@
     <string name="cat_audios_display">音频库</string>
     <string name="cat_others_display">其他</string>
     <string name="empty_vault_msg">暂无加密资源</string>
+    <string name="empty_vault_hint">把文件「分享」到 PJM 即可自动入库</string>
 
     <!-- Dialogs -->
     <string name="dialog_delete_title">确认删除</string>

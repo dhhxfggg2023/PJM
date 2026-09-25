@@ -5,6 +5,8 @@
     <!-- Actions -->
     <string name="action_clear_cache">Clear Cache</string>
     <string name="action_select_all">Select All</string>
+    <string name="action_batch_select">Select</string>
+    <string name="action_export_short">Export</string>
     <string name="action_share">Share</string>
     <string name="action_open">Open</string>
     <string name="action_delete">Delete</string>
@@ -101,6 +103,7 @@
     <string name="cat_audios_display">Audio Vault</string>
     <string name="cat_others_display">Others</string>
     <string name="empty_vault_msg">No encrypted items yet</string>
+    <string name="empty_vault_hint">Share files to PJM and they will be imported automatically</string>
 
     <!-- Dialogs -->
     <string name="dialog_delete_title">Confirm Deletion</string>
