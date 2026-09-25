@@ -20,8 +20,8 @@ android {
         applicationId = "com.dhhxfggg.pjm"
         minSdk = 24
         targetSdk = 35
-        versionCode = 39
-        versionName = "1.9.3"
+        versionCode = 40
+        versionName = "1.9.4"
 
         ndk {
             abiFilters.addAll(listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64"))
@@ -98,6 +98,7 @@ dependencies {
     // AndroidX 核心
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.exifinterface)

@@ -87,4 +87,55 @@ class UpdateCheckerTest {
         assertFalse("empty vs empty", UpdateChecker.isNewer("", ""))
         assertFalse("empty should not be newer than 1.0", UpdateChecker.isNewer("", "1.0"))
     }
+
+    // ---------- 下载地址白名单（应用内安装这条供应链通道的入口校验） ----------
+
+    @Test
+    fun downloadUrl_acceptsGithubHosts() {
+        assertTrue(
+            UpdateChecker.isTrustedDownloadUrl(
+                "https://github.com/dhhxfggg2023/PJM/releases/download/v1.9.4/app-release.apk",
+            ),
+        )
+        assertTrue(
+            UpdateChecker.isTrustedDownloadUrl(
+                "https://objects.githubusercontent.com/github-production-release-asset/123/456?token=x",
+            ),
+        )
+    }
+
+    @Test
+    fun downloadUrl_rejectsNonHttps() {
+        assertFalse(
+            "明文 HTTP 必须拒绝",
+            UpdateChecker.isTrustedDownloadUrl("http://github.com/a/b.apk"),
+        )
+        assertFalse(
+            "file:// 必须拒绝",
+            UpdateChecker.isTrustedDownloadUrl("file:///sdcard/evil.apk"),
+        )
+    }
+
+    @Test
+    fun downloadUrl_rejectsForeignHosts() {
+        assertFalse(
+            "非白名单域名必须拒绝",
+            UpdateChecker.isTrustedDownloadUrl("https://evil.example.com/app-release.apk"),
+        )
+        // 子域名欺骗：github.com.evil.com 的 host 不是 github.com
+        assertFalse(
+            UpdateChecker.isTrustedDownloadUrl("https://github.com.evil.example.com/app.apk"),
+        )
+        // 前缀欺骗：notgithub.com
+        assertFalse(
+            UpdateChecker.isTrustedDownloadUrl("https://notgithub.com/app.apk"),
+        )
+    }
+
+    @Test
+    fun downloadUrl_rejectsMalformed() {
+        assertFalse(UpdateChecker.isTrustedDownloadUrl(""))
+        assertFalse(UpdateChecker.isTrustedDownloadUrl("not a url"))
+        assertFalse(UpdateChecker.isTrustedDownloadUrl("https://"))
+    }
 }

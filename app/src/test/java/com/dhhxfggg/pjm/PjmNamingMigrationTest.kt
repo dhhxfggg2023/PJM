@@ -51,8 +51,11 @@ class PjmNamingMigrationTest {
 
     // 旧式毫秒时间戳样本（具体可读值随测试时区换算）
     private val legacyMillis = 1767225600000L
+
+    // 与 VaultNaming.formatReadable 保持同一格式（yyyyMMdd_HHmmssSSS，毫秒精度），
+    // 这里独立写一份而不是直接调用生产代码，避免测试变成同义反复。
     private val legacyTs: String
-        get() = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date(legacyMillis))
+        get() = SimpleDateFormat("yyyyMMdd_HHmmssSSS", Locale.getDefault()).format(Date(legacyMillis))
 
     @Before
     fun setUp() {

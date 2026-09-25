@@ -26,15 +26,10 @@ object ThumbnailCache {
     /** 缩略图目录（公开给后台同步管理器做孤儿清理） */
     fun thumbDir(context: Context): File = File(context.filesDir, DIR_NAME).apply { if (!exists()) mkdirs() }
 
-    /** 缩略图文件名（基于 relativePath 稳定哈希，源文件路径不变则文件名不变；公开给后台同步管理器） */
-    fun thumbName(entity: FileEntity): String {
-        val hash =
-            entity.relativePath
-                .hashCode()
-                .toUInt()
-                .toString(16)
-        return "$hash.jpg"
-    }
+    /**
+     * 缩略图文件名（基于 [CacheKeys] 的 128 位稳定键，源文件路径不变则文件名不变；公开给后台同步管理器）
+     */
+    fun thumbName(entity: FileEntity): String = "${CacheKeys.of(entity)}.jpg"
 
     /** 缩略图文件对象（不保证存在） */
     fun thumbFile(
@@ -72,27 +67,36 @@ object ThumbnailCache {
         if (output.exists()) output.delete()
 
         val retriever = MediaMetadataRetriever()
+        var frame: Bitmap? = null
+        var scaled: Bitmap? = null
         return try {
             retriever.setDataSource(source.absolutePath)
             // 取 1 秒处关键帧（首帧常为黑屏），回退任意帧
-            val frame =
+            frame =
                 retriever.getFrameAtTime(1_000_000L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
                     ?: retriever.frameAtTime
                     ?: return null
 
-            val scaled = scaleDown(frame, MAX_WIDTH)
+            scaled = scaleDown(frame, MAX_WIDTH)
             FileOutputStream(output).use { fos ->
                 scaled.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, fos)
                 fos.flush()
             }
             output
-        } catch (_: Exception) {
+        } catch (_: Throwable) {
+            // 核心修复：catch 由 Exception 放宽到 Throwable。
+            // 4K 视频帧约 33MB，3 并发解码极易抛 OutOfMemoryError —— 那是 Error 不是 Exception，
+            // 旧代码会让它冒泡到 MainApplication.applicationScope 直接崩溃。
             output.delete()
             null
         } finally {
+            // 核心修复：显式回收中间 Bitmap。ImageFingerprintCache 一直有做（注释写明「防 OOM」），
+            // 这里漏了 —— 每批 40 个 4K 视频缩略图会持续堆积数十 MB 原生内存。
+            recycleIfDistinct(scaled, frame)
+            frame?.let { runCatching { it.recycle() } }
             try {
                 retriever.release()
-            } catch (_: Exception) {
+            } catch (_: Throwable) {
             }
         }
     }
@@ -112,6 +116,8 @@ object ThumbnailCache {
         val output = thumbFile(context, entity)
         if (output.exists()) output.delete()
 
+        var bmp: Bitmap? = null
+        var scaled: Bitmap? = null
         return try {
             // 先读边界，计算 inSampleSize 避免全尺寸解码
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -119,16 +125,19 @@ object ThumbnailCache {
             var sample = 1
             while (bounds.outWidth / (sample * 2) >= MAX_WIDTH && bounds.outWidth > 0) sample *= 2
             val decodeOpts = BitmapFactory.Options().apply { inSampleSize = sample }
-            val bmp = BitmapFactory.decodeFile(source.absolutePath, decodeOpts) ?: return null
-            val scaled = scaleDown(bmp, MAX_WIDTH)
+            bmp = BitmapFactory.decodeFile(source.absolutePath, decodeOpts) ?: return null
+            scaled = scaleDown(bmp, MAX_WIDTH)
             FileOutputStream(output).use { fos ->
                 scaled.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, fos)
                 fos.flush()
             }
             output
-        } catch (_: Exception) {
+        } catch (_: Throwable) {
             output.delete()
             null
+        } finally {
+            recycleIfDistinct(scaled, bmp)
+            bmp?.let { runCatching { it.recycle() } }
         }
     }
 
@@ -139,17 +148,35 @@ object ThumbnailCache {
         bitmap: Bitmap,
     ): File? {
         val output = thumbFile(context, entity)
+        var scaled: Bitmap? = null
         return try {
-            val scaled = scaleDown(bitmap, MAX_WIDTH)
+            scaled = scaleDown(bitmap, MAX_WIDTH)
             FileOutputStream(output).use { fos ->
                 scaled.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, fos)
                 fos.flush()
             }
             output
-        } catch (_: Exception) {
+        } catch (_: Throwable) {
             output.delete()
             null
+        } finally {
+            // 只回收自己新建的那张；bitmap 的归属权在调用方
+            recycleIfDistinct(scaled, bitmap)
         }
+    }
+
+    /**
+     * 回收 [candidate]，但当它与 [owner] 是同一对象时跳过 ——
+     * scaleDown 在尺寸已满足时会原样返回入参，重复 recycle 会抛
+     * 「Canvas: trying to use a recycled bitmap」之类的异常。
+     */
+    private fun recycleIfDistinct(
+        candidate: Bitmap?,
+        owner: Bitmap?,
+    ) {
+        val bmp = candidate ?: return
+        if (bmp === owner) return
+        runCatching { bmp.recycle() }
     }
 
     /** 删除某实体的缩略图（源文件删除时调用） */

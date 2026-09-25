@@ -1,8 +1,6 @@
 package com.dhhxfggg.pjm.ui.screen
 
 import android.content.Context
-import android.content.Intent
-import android.net.Uri
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.LocalActivity
@@ -33,7 +31,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.content.FileProvider
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.composables.icons.lucide.ArrowLeft
 import com.composables.icons.lucide.LayoutGrid
@@ -49,6 +46,8 @@ import com.dhhxfggg.pjm.MainApplication
 import com.dhhxfggg.pjm.R
 import com.dhhxfggg.pjm.data.model.FileEntity
 import com.dhhxfggg.pjm.domain.util.FileUtils
+import com.dhhxfggg.pjm.domain.util.PjmLogger
+import com.dhhxfggg.pjm.domain.util.ShareUtils
 import com.dhhxfggg.pjm.domain.util.VaultManager
 import com.dhhxfggg.pjm.ui.component.FileCard
 import com.dhhxfggg.pjm.ui.component.PjmDeleteConfirmDialog
@@ -62,7 +61,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.util.ArrayList
 
 /**
  * Screen for viewing and managing files within a specific vault category.
@@ -548,31 +546,29 @@ private fun openFile(
 
 /**
  * Shares files (already resolved to named share files) using the system share sheet.
+ *
+ * MIME 由 [ShareUtils] 依据真实文件类型推导（图片 → `image/&#42;`）。
+ * 此前这里硬编码全通配类型，导致 QQ / 微信把多选图片当作「文件」而不是图片发送。
  */
 private fun shareFiles(
     context: Context,
     files: List<File>,
     chooserTitle: String,
 ) {
-    val uris = ArrayList<Uri>()
-    files.forEach { file ->
-        try {
-            uris.add(FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file))
-        } catch (_: Exception) {
-            // Log error or ignore invalid files
+    if (files.isEmpty()) return
+    val (uris, failed) = ShareUtils.toShareUris(context, files)
+    if (failed.isNotEmpty()) {
+        val msg = context.getString(R.string.toast_share_partial_failed, failed.size)
+        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+    }
+    val chooser = ShareUtils.createShareChooser(context, uris, chooserTitle)
+    if (chooser == null) {
+        Toast.makeText(context, context.getString(R.string.toast_share_nothing_available), Toast.LENGTH_SHORT).show()
+        return
+    }
+    runCatching { context.startActivity(chooser) }
+        .onFailure {
+            PjmLogger.e("FileViewer", "No activity to handle share", it)
+            Toast.makeText(context, context.getString(R.string.toast_share_nothing_available), Toast.LENGTH_SHORT).show()
         }
-    }
-    if (uris.isNotEmpty()) {
-        val intent =
-            Intent(if (uris.size > 1) Intent.ACTION_SEND_MULTIPLE else Intent.ACTION_SEND).apply {
-                type = "*/*"
-                if (uris.size > 1) {
-                    putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
-                } else {
-                    putExtra(Intent.EXTRA_STREAM, uris[0])
-                }
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
-        context.startActivity(Intent.createChooser(intent, chooserTitle))
-    }
 }

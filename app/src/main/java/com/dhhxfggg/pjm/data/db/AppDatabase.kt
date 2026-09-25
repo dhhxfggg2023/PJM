@@ -23,7 +23,7 @@ import com.dhhxfggg.pjm.data.model.ViewHistoryEntity
  */
 @Database(
     entities = [FileEntity::class, ViewHistoryEntity::class],
-    version = 10,
+    version = 11,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -58,8 +58,30 @@ abstract class AppDatabase : RoomDatabase() {
             }
 
         /**
+         * v10 → v11：清掉三张已废弃的残留表（novels / chapters / download_tasks）。
+         *
+         * 这三张表属于早期的小说阅读与下载管理功能，对应实体早已从 [entities] 中移除，
+         * 全仓库已无任何代码引用（`NovelEntity`/`ChapterEntity`/`DownloadTask` 均搜不到），
+         * 库里也都是 0 行。但 Room 不会自动删除「不再声明」的表 —— 它们连同两个索引
+         * 一直留在用户的数据库文件里，每次写迁移都要考虑它们。
+         *
+         * 用 `DROP TABLE IF EXISTS` + `DROP INDEX IF EXISTS`，对不存在的库执行也无害，
+         * 因此对全新安装、对已升级过的库都安全；**不触及 files / view_history 任何一行**。
+         */
+        private val MIGRATION_10_11 =
+            object : Migration(10, 11) {
+                override fun migrate(db: SupportSQLiteDatabase) {
+                    db.execSQL("DROP INDEX IF EXISTS `index_chapters_novelId`")
+                    db.execSQL("DROP INDEX IF EXISTS `index_chapters_orderIndex`")
+                    db.execSQL("DROP TABLE IF EXISTS `chapters`")
+                    db.execSQL("DROP TABLE IF EXISTS `novels`")
+                    db.execSQL("DROP TABLE IF EXISTS `download_tasks`")
+                }
+            }
+
+        /**
          * 显式迁移注册表。
          */
-        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_9_10)
+        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_9_10, MIGRATION_10_11)
     }
 }

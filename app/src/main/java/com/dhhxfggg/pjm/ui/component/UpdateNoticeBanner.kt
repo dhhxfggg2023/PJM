@@ -25,10 +25,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -38,11 +36,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.composables.icons.lucide.*
 import com.dhhxfggg.pjm.R
-import com.dhhxfggg.pjm.domain.util.UpdateChecker
+import com.dhhxfggg.pjm.domain.util.UpdateController
 import kotlinx.coroutines.delay
 
 /**
- * 顶部「版本更新」提示横幅（自包含）。
+ * 顶部「版本更新」提示横幅。
  *
  * 行为：
  *  - App 启动后延迟数秒静默检查 GitHub 最新 Release（失败/无更新不打扰）；
@@ -50,69 +48,43 @@ import kotlinx.coroutines.delay
  *  - 点击横幅 → 应用内直接下载安装（带进度）；完成后自动拉起系统安装器；
  *  - 下载失败给出 Toast 提示。
  *
+ * 核心修复：检查与下载的协程都上移到 [UpdateController]（进程级作用域）。
+ * 本组件在 MainActivity 中是条件组合的（`if (opTasks.isEmpty())`），旋转屏幕、
+ * 或任何后台任务进度出现都会让它离开组合 —— 原来挂在它 `LaunchedEffect` 上的
+ * 下载协程会被**静默取消**，用户看不到任何提示。现在组件只是观察者。
+ *
  * 用法：放在全局最外层 Box 中即可（建议靠后声明以覆盖在内容层之上）。
  */
 @Composable
 fun UpdateNoticeBanner(modifier: Modifier = Modifier) {
     val context = LocalContext.current
+    val update by UpdateController.available.collectAsState()
+    val downloadProgress by UpdateController.downloadProgress.collectAsState()
+    val dismissed by UpdateController.dismissed.collectAsState()
+    val message by UpdateController.message.collectAsState()
 
-    // null = 不显示；非 null = 待展示的更新信息
-    var available by remember { mutableStateOf<UpdateChecker.CheckResult.UpdateAvailable?>(null) }
-    // 是否已开始下载（true 后进入下载流程）
-    var downloadStarted by remember { mutableStateOf(false) }
-    // 下载进度：null=未开始；0f..1f=进行中
-    var downloadProgress by remember { mutableStateOf<Float?>(null) }
-    // 用户手动关闭
-    var dismissed by remember { mutableStateOf(false) }
-
-    // 1) 启动后静默检查一次
+    // 1) 启动后静默检查一次（controller 内部幂等，重组不会重复触发）
     LaunchedEffect(Unit) {
-        // 让首屏先稳定，稍后检查，避免抢占冷启动资源
-        delay(2500)
-        val result = UpdateChecker.checkForUpdate(context)
-        if (result is UpdateChecker.CheckResult.UpdateAvailable) {
-            available = result
-        }
+        UpdateController.checkOnce(context)
     }
 
     // 2) 自动消失：出现后约 8 秒淡出（下载中不消失）
-    LaunchedEffect(available, downloadStarted) {
-        if (available != null && !downloadStarted) {
+    LaunchedEffect(update, downloadProgress) {
+        if (update != null && downloadProgress == null && !dismissed) {
             delay(8000)
-            dismissed = true
+            UpdateController.dismiss()
         }
     }
 
-    // 3) 下载安装流程（点击横幅触发后执行）
-    LaunchedEffect(downloadStarted) {
-        val update = available ?: return@LaunchedEffect
-        if (!downloadStarted) return@LaunchedEffect
-        when (
-            val result =
-                UpdateChecker.downloadApk(context, update.apkUrl) { p ->
-                    downloadProgress = p
-                }
-        ) {
-            is UpdateChecker.DownloadResult.Success -> {
-                val ok = UpdateChecker.installApk(context, result.apkFile)
-                dismissed = true
-                if (!ok) {
-                    Toast
-                        .makeText(
-                            context,
-                            context.getString(R.string.msg_update_install_fallback),
-                            Toast.LENGTH_LONG,
-                        ).show()
-                }
-            }
-            is UpdateChecker.DownloadResult.Error -> {
-                dismissed = true
-                Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
-            }
-        }
+    // 3) 一次性提示（下载失败 / 安装回退）
+    LaunchedEffect(message) {
+        val text = message ?: return@LaunchedEffect
+        Toast.makeText(context, text, Toast.LENGTH_LONG).show()
+        UpdateController.consumeMessage()
     }
 
-    val show = available != null && !dismissed
+    val show = update != null && !dismissed
+    val progress = downloadProgress
 
     AnimatedVisibility(
         visible = show,
@@ -120,8 +92,7 @@ fun UpdateNoticeBanner(modifier: Modifier = Modifier) {
         exit = slideOutVertically { -it } + fadeOut(),
         modifier = modifier,
     ) {
-        val update = available ?: return@AnimatedVisibility
-        val progress = downloadProgress
+        val current = update ?: return@AnimatedVisibility
 
         Card(
             modifier =
@@ -129,7 +100,7 @@ fun UpdateNoticeBanner(modifier: Modifier = Modifier) {
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp, vertical = 4.dp)
                     .statusBarsPadding()
-                    .clickable(enabled = progress == null) { downloadStarted = true },
+                    .clickable(enabled = progress == null) { UpdateController.startDownload(context) },
             colors =
                 CardDefaults.cardColors(
                     containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.98f),
@@ -159,7 +130,7 @@ fun UpdateNoticeBanner(modifier: Modifier = Modifier) {
                     if (progress != null) {
                         stringResource(R.string.update_banner_downloading, (progress * 100).toInt())
                     } else {
-                        stringResource(R.string.update_banner_text, update.latestVersion)
+                        stringResource(R.string.update_banner_text, current.latestVersion)
                     }
                 Text(
                     text = text,
@@ -172,7 +143,7 @@ fun UpdateNoticeBanner(modifier: Modifier = Modifier) {
                 )
                 Spacer(Modifier.width(4.dp))
                 IconButton(
-                    onClick = { dismissed = true },
+                    onClick = { UpdateController.dismiss() },
                     modifier = Modifier.size(28.dp),
                 ) {
                     Icon(

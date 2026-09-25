@@ -60,6 +60,20 @@ object VaultTasks {
     // 核心新增：任务取消机制 —— 进度条卡住时用户可点 × 中断任务
     private val cancelFlags = ConcurrentHashMap<String, AtomicBoolean>()
 
+    /**
+     * 任务 id 的原子占位集合。
+     *
+     * 核心修复：`tryBeginOperation` 旧实现只读 `_activeTasks`，而任务要等第一次
+     * `updateProgress` 才会进入那个列表 —— 也就是说守卫存在一个「已开始但尚未登记」的窗口。
+     * 同一秒内两次触发（快速双击导出、两条分享 SEND 几乎同时到达）都能通过守卫，
+     * 两条协程随后算出**完全相同**的目标文件名与临时文件名，交叉写同一个临时文件，
+     * 各自 rename 之后一个容器的内容被销毁。
+     *
+     * 现在用 `ConcurrentHashMap.putIfAbsent` 原子占位；释放点与原来的任务生命周期一致
+     * （[endOperation] / [clearProgress]），不会引入新的锁死路径。
+     */
+    private val activeTaskIds = ConcurrentHashMap<String, Boolean>()
+
     // 每个任务独立的完成态自动清除定时器
     private val autoClearJobs = ConcurrentHashMap<String, Job>()
 
@@ -79,15 +93,19 @@ object VaultTasks {
     /**
      * 尝试开始一个任务。同 taskId 已有进行中任务 → false（防连点）；
      * 不同 taskId 允许并发（如查重进行中仍可删除文件）。
+     *
+     * 占位是**原子**的（见 [activeTaskIds]），因此并发触发只会有一个成功。
+     * 调用方必须在所有退出路径上调用 [endOperation] 或 [clearProgress] 释放占位。
      */
     fun tryBeginOperation(taskId: String = "default"): Boolean {
-        if (_activeTasks.value.any { it.taskId == taskId && it.isActive }) return false
+        if (activeTaskIds.putIfAbsent(taskId, true) != null) return false
         clearTaskCancel(taskId) // 重新开始前清除旧取消标志
         return true
     }
 
-    /** 结束/移除一个任务（释放其进度条） */
+    /** 结束/移除一个任务（释放其进度条与占位） */
     fun endOperation(taskId: String = "default") {
+        activeTaskIds.remove(taskId)
         autoClearJobs.remove(taskId)?.cancel()
         clearTaskCancel(taskId)
         _activeTasks.update { list -> list.filterNot { it.taskId == taskId } }
@@ -138,8 +156,11 @@ object VaultTasks {
         }
     }
 
-    /** 清除指定任务（默认 "default"）。不影响其他进行中的任务。 */
+    /** 清除指定任务（默认 "default"）。不影响其他进行中的任务。同时释放其占位。 */
     fun clearProgress(taskId: String = "default") {
+        // 也释放占位：存在「只 clearProgress 不 endOperation」的调用路径，
+        // 不释放会让该 taskId 被永久拦住。
+        activeTaskIds.remove(taskId)
         autoClearJobs.remove(taskId)?.cancel()
         _activeTasks.update { list -> list.filterNot { it.taskId == taskId } }
     }

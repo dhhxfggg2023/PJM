@@ -186,10 +186,26 @@ object VaultManager {
                             releaseBuffer(buffer)
                         }
                     }
+                    // 核心修复：posix_fallocate 会先把文件长度撑到 expectedSize。
+                    // 若实际写入的字节更少（源流偏短，或 MediaStore 报的 SIZE 已过期），
+                    // 尾部会留下一大段 0，且入库 size 也按被撑大的长度记录 ——
+                    // 静默产出一个「长度对得上、内容尾部全零」的损坏文件。
+                    // 这里按实际写入量截断，保证 length() 与实际内容一致。
+                    val written = fos.channel.position()
+                    if (expectedSize > 0 && written < expectedSize) {
+                        fos.channel.truncate(written)
+                    }
                     fos.channel.force(true)
                 }
                 if (!tempFile.renameTo(targetFile)) {
-                    tempFile.inputStream().use { it.copyTo(targetFile.outputStream()) }
+                    // 核心修复：`targetFile.outputStream()` 此前是内联创建、从不关闭 ——
+                    // 每次走到这条 rename 回退路径都会泄漏一个 FileOutputStream（fd 耗尽后
+                    // 整个入库流程崩溃）。改为 use{} 包裹并显式 flush + fsync。
+                    FileOutputStream(targetFile).use { out ->
+                        tempFile.inputStream().use { input -> input.copyTo(out) }
+                        out.flush()
+                        out.fd.sync()
+                    }
                     tempFile.delete()
                 }
 
@@ -231,6 +247,29 @@ object VaultManager {
         context: Context,
         file: File,
     ): String = VaultPaths.getRelativePath(context, file)
+
+    /** 是否为容器写入过程中的临时文件（不应被索引、不应参与迁移）。 */
+    internal fun isTransientFile(file: File): Boolean = file.name.contains(CryptoUtils.TEMP_FILE_MARKER)
+
+    /**
+     * 冷启动清理：删除崩溃/被杀进程残留的容器临时文件。
+     *
+     * 这些文件正常情况下在 rename 成功或 catch 分支里就被删了；只有进程异常终止才会留下。
+     * 它们占空间、会被误索引，且内容多半是不完整容器，没有任何保留价值。
+     *
+     * @return 实际清理的数量
+     */
+    suspend fun cleanupStaleTempFiles(context: Context): Int =
+        withContext(PjmDispatchers.IO) {
+            var removed = 0
+            CATEGORIES.forEach { cat ->
+                getCategoryDir(context, cat).listFiles()?.forEach { f ->
+                    if (f.isFile && isTransientFile(f) && shredFile(f)) removed++
+                }
+            }
+            if (removed > 0) PjmLogger.i(TAG, "已清理 $removed 个残留的容器临时文件")
+            removed
+        }
 
     fun getNextVaultPath(
         context: Context,
@@ -281,7 +320,14 @@ object VaultManager {
         fileDao: FileDao,
     ) = withContext(PjmDispatchers.IO) {
         mutex.withLock {
-            // 核心修复：删除前同步清理对应缩略图 + 感知指纹（图片/视频），避免孤儿残留
+            // 核心修复：顺序改为「先删物理文件 → 成功后再删缓存与索引」。
+            // 旧实现无论物理删除是否成功都会删掉数据库行，删除失败时明文文件会永久
+            // 残留在 pjm_vault 中且不再被任何界面/扫描看到。
+            val target = File(File(context.filesDir, VAULT_ROOT), relativePath)
+            if (!shredFile(target)) {
+                notifyDeleteFailure(context, 1)
+                return@withLock
+            }
             try {
                 fileDao.findByRelativePath(relativePath)?.let {
                     ThumbnailCache.delete(context, it)
@@ -291,7 +337,6 @@ object VaultManager {
                 _: Exception,
             ) {
             }
-            shredFile(File(File(context.filesDir, VAULT_ROOT), relativePath))
             fileDao.deleteByRelativePath(relativePath)
             triggerRefresh()
         }
@@ -305,8 +350,15 @@ object VaultManager {
         if (relativePaths.isEmpty()) return@withContext
         mutex.withLock {
             val root = File(context.filesDir, VAULT_ROOT)
+            val failedPaths = mutableListOf<String>()
             relativePaths.forEach { relPath ->
-                // 核心修复：删除前同步清理对应缩略图 + 感知指纹（图片/视频），避免孤儿残留
+                // 核心修复：同 deleteFile —— 物理删除失败的文件保留索引与缓存，
+                // 避免「界面已删除、明文仍在磁盘」的隐私漏洞与空间泄漏。
+                if (!shredFile(File(root, relPath))) {
+                    PjmLogger.e(TAG, "物理删除失败，保留索引: $relPath")
+                    failedPaths.add(relPath)
+                    return@forEach
+                }
                 try {
                     fileDao.findByRelativePath(relPath)?.let {
                         ThumbnailCache.delete(context, it)
@@ -316,11 +368,36 @@ object VaultManager {
                     _: Exception,
                 ) {
                 }
-                shredFile(File(root, relPath))
             }
-            fileDao.deleteByRelativePaths(relativePaths)
+            val deletedPaths = relativePaths - failedPaths.toSet()
+            if (deletedPaths.isNotEmpty()) fileDao.deleteByRelativePaths(deletedPaths)
+            if (failedPaths.isNotEmpty()) notifyDeleteFailure(context, failedPaths.size)
             triggerRefresh()
         }
+    }
+
+    /**
+     * 物理删除失败时的用户可见反馈。
+     *
+     * 不能抛异常：调用方（FileViewerViewModel / SettingsViewModel）都在 viewModelScope 里
+     * 直接 await，抛出去会变成未捕获异常直接崩溃；也不能静默 —— 否则用户以为文件已删除，
+     * 实际明文仍在磁盘上。这里用 Toast 在主线报告知，数据库行保持不动，用户可重试。
+     */
+    private fun notifyDeleteFailure(
+        context: Context,
+        failedCount: Int,
+    ) {
+        PjmLogger.e(TAG, "物理删除失败 $failedCount 个，已保留索引以便重试")
+        android.os
+            .Handler(android.os.Looper.getMainLooper())
+            .post {
+                android.widget.Toast
+                    .makeText(
+                        context.applicationContext,
+                        context.getString(R.string.toast_delete_failed, failedCount),
+                        android.widget.Toast.LENGTH_LONG,
+                    ).show()
+            }
     }
 
     /**
@@ -328,12 +405,17 @@ object VaultManager {
      * 核心修复：直接物理删除（快速）—— 之前固定 7 次 SecureRandom 覆写 + 每次 fd.sync，
      * GB 级大文件删除耗时以分钟计，进度条长时间卡在中间，体验极差。
      * 闪存介质上覆写也无法真正抹除数据，故统一为直接删除。
+     *
+     * @return 调用结束后文件是否确实已不存在。此前该函数吞掉 `File.delete()` 的返回值，
+     *   调用方因此会在「物理删除失败」时依然删掉数据库行与缩略图 —— 明文文件永久残留在
+     *   `pjm_vault` 目录中，用户以为已删除却再也找不到它，既违背隐私承诺也无法回收空间。
      */
-    internal fun shredFile(file: File) {
-        if (!file.exists()) return
-        try {
-            file.delete()
+    internal fun shredFile(file: File): Boolean {
+        if (!file.exists()) return true
+        return try {
+            file.delete() || !file.exists()
         } catch (_: Exception) {
+            !file.exists()
         }
     }
 
@@ -344,19 +426,42 @@ object VaultManager {
     ) = withContext(PjmDispatchers.IO) {
         mutex.withLock {
             val list = mutableListOf<Pair<File, String>>()
-            CATEGORIES.forEach { cat -> getCategoryDir(context, cat).listFiles()?.filter { it.isFile }?.forEach { list.add(it to cat) } }
+            // 核心修复：跳过容器写入过程中残留的临时文件（`*.tmp_*`）。
+            // 它们与正式容器同目录，进程被杀时不会被清理，而 getFileExtension 会把
+            // `X.pjm.1.tmp_123` 判成 "pjm" —— 半成品容器就会被当成正式资产索引进文件柜。
+            CATEGORIES.forEach { cat ->
+                getCategoryDir(context, cat).listFiles()?.filter { it.isFile && !isTransientFile(it) }?.forEach { list.add(it to cat) }
+            }
+
+            // 核心修复：重建索引时**保留未变化文件的 contentHash**。
+            //
+            // 旧实现一律写 null，而 replaceAll 是「先清表再插入」—— 于是每次点「修复/找回文件」
+            // 都把全部 MD5 / 视频感知指纹抹掉，下次查重要把整个库（可能几十 GB）重新读一遍。
+            // 用户为了清掉一两条幽灵记录点一次修复，代价是十几分钟的重算，非常不合理。
+            //
+            // 匹配规则：relativePath 相同**且** size、lastModified 都相同，才认为文件未变、
+            // 指纹依然有效。任一项不同就不沿用 —— 宁可重算，也绝不误用过期指纹去判重。
+            val previous = fileDao.getAllFiles().first().associateBy { it.relativePath }
             val entities =
                 list.mapIndexed { i, (f, c) ->
                     onProgress(i.toFloat() / list.size)
+                    val relativePath = getRelativePath(context, f)
+                    val size = f.length()
+                    val lastModified = f.lastModified()
+                    val old = previous[relativePath]
+                    val carriedHash =
+                        old?.contentHash?.takeIf {
+                            old.size == size && old.lastModified == lastModified
+                        }
                     FileEntity(
-                        relativePath = getRelativePath(context, f),
+                        relativePath = relativePath,
                         name = f.name,
-                        size = f.length(),
+                        size = size,
                         category = c,
-                        lastModified = f.lastModified(),
+                        lastModified = lastModified,
                         isImage = FileUtils.isImageFile(f.name),
                         extension = FileUtils.getFileExtension(f.name),
-                        contentHash = null,
+                        contentHash = carriedHash,
                     )
                 }
             fileDao.replaceAll(entities)
@@ -388,7 +493,7 @@ object VaultManager {
                 // 收集所有含 .pjm 的文件（容器 X.pjm / X.pjm.N）；非容器由 legacyToCanonicalName 原样返回自然跳过
                 val containers =
                     runCatching {
-                        root.walkTopDown().filter { it.isFile && it.name.contains(".pjm") }.toList()
+                        root.walkTopDown().filter { it.isFile && it.name.contains(".pjm") && !isTransientFile(it) }.toList()
                     }.getOrDefault(emptyList())
                 if (containers.isEmpty()) return@withLock 0
 
@@ -415,15 +520,12 @@ object VaultManager {
                         PjmLogger.w(TAG, "命名迁移失败（重命名失败）: $legacyName -> $canonicalName")
                         return@forEach
                     }
-                    // 同步数据库索引：旧路径记录删除，新路径记录保留原字段写入。
+                    // 同步数据库索引：单事务内把 oldRel 更新为 newPath（其余字段保持不变）。
                     // 关键：若索引更新失败，必须把文件改回原名回滚，保证磁盘与数据库一致，
                     // 否则下次重试会因文件已是新名而跳过，数据库将永远指向旧路径（UI 读不到文件）。
                     val dbOk =
                         runCatching {
-                            fileDao.findByRelativePath(oldRel)?.let { entity ->
-                                fileDao.deleteByRelativePath(oldRel)
-                                fileDao.upsert(entity.copy(relativePath = getRelativePath(context, target), name = target.name))
-                            }
+                            fileDao.renameRelativePath(oldRel, getRelativePath(context, target), target.name)
                         }.isSuccess
                     if (!dbOk) {
                         val rollbackOk = runCatching { target.renameTo(file) }.getOrDefault(false)

@@ -61,17 +61,21 @@ object PjmLogger {
     ) {
         val timestamp = logDateFormatter.get()?.format(Date()) ?: "UNKNOWN"
         val threadName = Thread.currentThread().name
-        val tId = if (traceId != null) " [$traceId]" else ""
+        // 核心修复：日志注入防护。
+        // tag / 消息体里可能包含攻击者可控的文件名（分享进来的 DISPLAY_NAME、共享目录里的
+        // 文件名），其中的换行会把一条日志伪装成多条、伪造出虚假记录。落盘/输出前统一折叠换行。
+        val safeTag = tag.replace('\n', ' ').replace('\r', ' ')
+        val tId = if (traceId != null) " [${traceId.replace('\n', ' ').replace('\r', ' ')}]" else ""
 
-        val fullMsg = if (tr != null) "$msg\n${getStackTrace(tr)}" else msg
-        val logLine = "[$timestamp] [$level] [$threadName]$tId $tag: $fullMsg\n"
+        val fullMsg = if (tr != null) "${sanitize(msg)}\n${getStackTrace(tr)}" else sanitize(msg)
+        val logLine = "[$timestamp] [$level] [$threadName]$tId $safeTag: $fullMsg\n"
 
         // 1. Android Logcat (for development)
         when (level) {
-            "D" -> Log.d(tag, fullMsg)
-            "I" -> Log.i(tag, fullMsg)
-            "W" -> Log.w(tag, fullMsg)
-            "E" -> Log.e(tag, fullMsg)
+            "D" -> Log.d(safeTag, fullMsg)
+            "I" -> Log.i(safeTag, fullMsg)
+            "W" -> Log.w(safeTag, fullMsg)
+            "E" -> Log.e(safeTag, fullMsg)
         }
 
         // 2. Persist to Business Log
@@ -106,6 +110,12 @@ object PjmLogger {
             previous?.uncaughtException(thread, throwable)
         }
     }
+
+    /**
+     * 折叠消息体中的换行/回车，防止攻击者可控的文件名伪造日志行（log injection）。
+     * 堆栈由 [getStackTrace] 单独生成，已经过多行格式化，因此只清洗调用方传入的 msg。
+     */
+    private fun sanitize(message: String): String = message.replace('\n', ' ').replace('\r', ' ')
 
     private fun writeToDisk(
         file: File?,

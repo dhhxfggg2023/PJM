@@ -15,7 +15,6 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.InputStream
-import java.lang.Long
 import java.security.MessageDigest
 import kotlin.math.abs
 
@@ -27,6 +26,18 @@ import kotlin.math.abs
  */
 object VaultScanner {
     private const val TAG = "VaultScanner"
+
+    /**
+     * 视频感知指纹在 `contentHash` 列中的前缀标记。
+     *
+     * `contentHash` 列被两种语义复用：普通文件存 MD5（32 位十六进制），
+     * 视频存「时长|宽|高|dHash」感知指纹。加前缀后完整性检查才能区分二者，
+     * 否则每次查重之后做完整性检查都会把所有视频误判为「已损坏」。
+     */
+    private const val VIDEO_FP_PREFIX = "fp:"
+
+    /** 是否为感知指纹（而非 MD5）。同时兼容加前缀之前写入的历史数据。 */
+    private fun isPerceptualFingerprint(hash: String?): Boolean = hash != null && hash.startsWith(VIDEO_FP_PREFIX)
 
     suspend fun checkIntegrity(
         context: Context,
@@ -40,10 +51,15 @@ object VaultScanner {
             all.forEachIndexed { i, e ->
                 onProgress(i.toFloat() / all.size)
                 val f = VaultManager.getFileFromEntity(context, e)
-                if (!f.exists()) {
-                    missing.add(e)
-                } else if (e.contentHash != null && calculateHash(f) != e.contentHash) {
-                    corrupted.add(e)
+                val hash = e.contentHash
+                // 只有「确定是 MD5」的记录才做字节级校验：
+                //  - null        → 尚未计算，无从比对（空转会被用户误解为「校验通过」，但不误报损坏）
+                //  - fp: 前缀    → 视频感知指纹，与 MD5 不可比
+                //  - 视频文件    → 历史上曾直接写入无前缀的感知指纹，一律不按 MD5 比对
+                val md5Comparable = hash != null && !isPerceptualFingerprint(hash) && !FileUtils.isVideoFile(e.name)
+                when {
+                    !f.exists() -> missing.add(e)
+                    md5Comparable && calculateHash(f) != hash -> corrupted.add(e)
                 }
             }
             mapOf("missing" to missing, "corrupted" to corrupted)
@@ -68,9 +84,20 @@ object VaultScanner {
                 val file = VaultManager.getFileFromEntity(context, entity)
                 // 核心修复：视频用内容级感知指纹（时长+分辨率+关键帧 dHash），
                 // 因为 merge 重封装导致字节级（MD5）不同，但内容相同的视频 MD5 指纹永远检测不到。
+                // 关键：感知指纹必须带 [VIDEO_FP_PREFIX] 前缀与 MD5 区分开 ——
+                // 否则 checkIntegrity 会拿 MD5 去和指纹串比对，把所有跑过查重的视频误报为「已损坏」。
                 val hash =
                     if (FileUtils.isVideoFile(entity.name)) {
-                        calculateVideoFingerprint(file)
+                        // 核心优化：视频感知指纹（MediaMetadataRetriever + 抽帧 + dHash）很贵，
+                        // 历史实现**每次都无条件重算**——873 个视频每次查重都白抽一遍帧。
+                        // 文件未变（长度与修改时间都与索引记录一致）时指纹必然不变，直接复用缓存。
+                        val reusable =
+                            entity.contentHash?.takeIf {
+                                isPerceptualFingerprint(it) &&
+                                    file.length() == entity.size &&
+                                    file.lastModified() == entity.lastModified
+                            }
+                        reusable ?: calculateVideoFingerprint(file)?.let { VIDEO_FP_PREFIX + it }
                     } else {
                         entity.contentHash ?: calculateHash(file)
                     }
@@ -83,7 +110,24 @@ object VaultScanner {
             finalFiles.filter { it.contentHash != null }.groupBy { it.contentHash }.values.forEach { group ->
                 if (group.size > 1) {
                     val sorted = group.sortedBy { it.lastModified }
-                    result.add(DuplicateGroup(members = sorted, recommendedDelete = sorted.drop(1).map { it.relativePath }.toSet()))
+                    // 核心修复：视频组（感知指纹）一律不预勾选。
+                    // 视频指纹只比对「时长 + 分辨率 + 第 1 秒关键帧 dHash」，**没有**图片那样的
+                    // 像素二次验证；同源重封装能命中，但两个时长/分辨率恰好相同、首帧又相似的
+                    // 不同视频也会被分到一组 —— 默认勾选会诱导用户直接误删。
+                    // MD5 组是字节级完全一致，保留预勾选。
+                    val groupHash = group.first().contentHash.orEmpty()
+                    val isPerceptual = groupHash.startsWith(VIDEO_FP_PREFIX)
+                    result.add(
+                        DuplicateGroup(
+                            members = sorted,
+                            recommendedDelete =
+                                if (isPerceptual) {
+                                    emptySet()
+                                } else {
+                                    sorted.drop(1).map { it.relativePath }.toSet()
+                                },
+                        ),
+                    )
                 }
             }
             result
@@ -117,15 +161,19 @@ object VaultScanner {
             val images = all.filter { FileUtils.isImageFile(it.name) }
             if (images.size < 2) return@withContext emptyList()
 
-            // 1) 计算/读取指纹（增量：已缓存跳过）
+            // 1) 计算/读取感知数据（增量：已缓存跳过）
             // 核心修复（崩溃/卡死）：
             //   a. 分批处理（每批 128 张）—— 绝不一次性创建 1.2 万个协程，控制内存峰值；
             //   b. Semaphore(3) 限流 —— 只 3 路并发解码，避免 OOM + 避免占满 8 线程 IO 池
             //      （否则删除等其他操作排队，用户感知"卡死"）；
-            //   c. computeFingerprint 内部 catch Throwable（含 OOM）+ 显式 recycle，单图失败不影响整体。
+            //   c. computeBundle 内部 catch Throwable（含 OOM）+ 显式 recycle，单图失败不影响整体。
+            // 核心优化（一次解码）：dHash 指纹、32×32 灰度、64 宽验证签名三者都来自同一次
+            //   64 宽解码。历史实现里指纹与灰度是**两次独立解码**（都解到 64 宽），
+            //   2 万张图等于白解码两万次；验证阶段更糟 —— 每个候选对都要重新解码两张原图。
             data class Fp(
                 val entity: FileEntity,
                 val fp: ImageFingerprint?,
+                val gray32: ByteArray?,
             )
             val fpSemaphore = Semaphore(3)
             val fps = mutableListOf<Fp>()
@@ -138,16 +186,21 @@ object VaultScanner {
                             .map { e ->
                                 async(VaultManager.PjmDispatchers.IO) {
                                     fpSemaphore.withPermit {
-                                        val cached = ImageFingerprintCache.getFingerprint(context, e)
-                                        if (cached != null) {
-                                            Fp(e, cached)
+                                        val cachedFp = ImageFingerprintCache.getFingerprint(context, e)
+                                        val cachedGray = ImageFingerprintCache.getGray32(context, e)
+                                        val cachedSig = ImageFingerprintCache.getVerifySignature(context, e)
+                                        if (cachedFp != null && cachedGray != null && cachedSig != null) {
+                                            // 三项全命中 → 零解码（增量场景：第二次起查重是秒级）
+                                            Fp(e, cachedFp, cachedGray)
                                         } else {
-                                            val computed = ImageFingerprintCache.computeFingerprint(context, e)
-                                            if (computed != null) {
-                                                ImageFingerprintCache.saveFingerprint(context, e, computed)
-                                                Fp(e, computed)
+                                            // 任一缺失 → 一次解码同时补齐三项（老缓存升级也走这里）
+                                            val bundle = ImageFingerprintCache.computeBundle(context, e)
+                                            if (bundle != null) {
+                                                ImageFingerprintCache.saveBundle(context, e, bundle)
+                                                Fp(e, bundle.fingerprint, bundle.gray32)
                                             } else {
-                                                Fp(e, null)
+                                                // 解码失败：退回已缓存的部分，绝不因单图失败影响整体
+                                                Fp(e, cachedFp, cachedGray)
                                             }
                                         }
                                     }
@@ -181,10 +234,12 @@ object VaultScanner {
             //   a. O(n²) bitCount 保证 100% 召回（不遗漏任何汉明距离 ≤16 的对）；
             //   b. 【内存宽高比预过滤】—— 原图 4:3 与 16:9 不可能是缩略图关系，纯内存直接排除；
             //   c. 【面积差异预过滤】—— 本功能只找"原图 vs 缩略图"（面积差 ≥ 1.2 倍）；
-            //   d. 候选对用 IntArray 紧凑编码 (a shl 16) or b —— 4 字节/对，百万候选对仅 ~4MB。
+            //   d. 候选对用 LongArray 紧凑编码 (a shl 32) or b —— 8 字节/对，百万候选对约 8MB。
+            //      核心修复：原来用 IntArray + `(a shl 16) or b`，图片数 ≥ 65536 时高位被截断，
+            //      解码回来会指向**完全无关的两张图** —— 既产生错误重复组，又白白解码验证。
             onProgress(0.6f)
             val totalPairs = fpList.size.toLong() * (fpList.size - 1) / 2
-            var candidates = IntArray(8192)
+            var candidates = LongArray(8192)
             var candidateCount = 0
             var processedPairs = 0L
             for (i in 0 until fpList.size - 1) {
@@ -203,41 +258,26 @@ object VaultScanner {
                     val maxArea = maxOf(areaI, areas[j])
                     val minArea = minOf(areaI, areas[j])
                     if (maxArea < minArea * 1.2f) continue
-                    if (Long.bitCount(hi xor dHashes[j]) <= 16) {
+                    if ((hi xor dHashes[j]).countOneBits() <= 16) {
                         if (candidateCount == candidates.size) candidates = candidates.copyOf(candidates.size * 2)
-                        candidates[candidateCount++] = (i shl 16) or j
+                        candidates[candidateCount++] = packPair(i, j)
                     }
                 }
             }
             onProgress(0.75f)
             PjmLogger.i(TAG, "图片感知查重：${fpList.size} 张图，$totalPairs 对，候选对 $candidateCount")
 
-            // 3.5) 核心新增：32×32 灰度预筛（纯内存，微秒级）—— 候选对可能达数百万，
-            //      每对解码 64px 验证耗时以小时计。预计算每张图 32×32 灰度（1024 字节，全量仅 ~13MB），
-            //      候选对先纯内存比较灰度：平均亮度差 > 15 → 内容不一致，直接排除。
+            // 3.5) 32×32 灰度预筛（纯内存，微秒级）—— 候选对可能达数百万，
+            //      每对解码 64px 验证耗时以小时计。候选对先纯内存比较灰度：
+            //      平均亮度差 > 15 → 内容不一致，直接排除。
             //      同图不同分辨率灰度差 < 6（通过），不同图 > 20（排除）—— 可砍掉 95%+ 干扰对。
-            // 核心修复（半永久化）：getOrComputeGray32 读缓存优先，未命中才解码并【落盘 .g32】。
-            //      首次查重计算 1.3 万张（~5 分钟），之后每次查重秒级复用，不再重复解码大图。
+            // 核心优化：灰度已在第 1 步随指纹一次性算好并落盘，这里**只做内存归集**，
+            //      不再有第二次解码遍历（历史实现此处会再解码全部图片）。
             onProgress(0.75f)
             val gray32Cache = HashMap<String, ByteArray>(fpList.size)
-            // 加载/计算灰度（并行，每批 128；已落盘的直接读文件，秒级）
-            var grayProcessed = 0
-            val grayBatchSize = 128
-            for (start in 0 until fpList.size step grayBatchSize) {
-                if (VaultManager.isTaskCancelled(VaultManager.TASK_DUPLICATES_PERCEPTUAL)) throw CancellationException("灰度计算已取消")
-                val end = minOf(start + grayBatchSize, fpList.size)
-                coroutineScope {
-                    (start until end)
-                        .map { idx ->
-                            async(VaultManager.PjmDispatchers.IO) {
-                                val e = fpList[idx].first
-                                ImageFingerprintCache.getOrComputeGray32(context, e)?.let { e.relativePath to it }
-                            }
-                        }.awaitAll()
-                        .forEach { pair -> if (pair != null) gray32Cache[pair.first] = pair.second }
-                }
-                grayProcessed += end - start
-                onProgress(0.75f + 0.05f * (grayProcessed.toFloat() / fpList.size))
+            fps.forEach { f ->
+                // 只为进入比对集合（fp 非空）的图片保留灰度，避免为被淘汰的图白占内存
+                if (f.fp != null) f.gray32?.let { gray32Cache[f.entity.relativePath] = it }
             }
             // 用灰度预筛过滤候选对（内存紧凑重建，避免保留被淘汰的）
             if (candidateCount > 0) {
@@ -245,8 +285,8 @@ object VaultScanner {
                 for (idx in 0 until candidateCount) {
                     if (VaultManager.isTaskCancelled(VaultManager.TASK_DUPLICATES_PERCEPTUAL)) throw CancellationException("灰度预筛已取消")
                     val pair = candidates[idx]
-                    val i = pair shr 16
-                    val j = pair and 0xFFFF
+                    val i = pairFirst(pair)
+                    val j = pairSecond(pair)
                     val g1 = gray32Cache[fpList[i].first.relativePath]
                     val g2 = gray32Cache[fpList[j].first.relativePath]
                     if (g1 != null && g2 != null && ImageFingerprintCache.gray32Similar(g1, g2)) {
@@ -297,8 +337,8 @@ object VaultScanner {
                                 async(VaultManager.PjmDispatchers.IO) {
                                     if (VaultManager.isTaskCancelled(VaultManager.TASK_DUPLICATES_PERCEPTUAL)) return@async null
                                     val pair = candidates[idx]
-                                    val i = pair shr 16
-                                    val j = pair and 0xFFFF
+                                    val i = pairFirst(pair)
+                                    val j = pairSecond(pair)
                                     fpSemaphore.withPermit {
                                         if (ImageFingerprintCache.verifySameContent(
                                                 context,
@@ -350,6 +390,16 @@ object VaultScanner {
             onProgress(1f)
             result
         }
+
+    /** 把候选对 (i, j) 打包进一个 Long（各占 32 位，支持索引 ≥ 65536）。 */
+    private fun packPair(
+        i: Int,
+        j: Int,
+    ): Long = (i.toLong() shl 32) or (j.toLong() and 0xFFFFFFFFL)
+
+    private fun pairFirst(pair: Long): Int = (pair ushr 32).toInt()
+
+    private fun pairSecond(pair: Long): Int = (pair and 0xFFFFFFFFL).toInt()
 
     fun calculateHash(file: File): String? {
         try {

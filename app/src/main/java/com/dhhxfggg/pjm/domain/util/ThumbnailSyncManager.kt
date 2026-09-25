@@ -102,6 +102,27 @@ class ThumbnailSyncManager
             } catch (_: Exception) {
             }
 
+            // 1b) 清理孤儿感知指纹（.txt / .g32）。
+            // 核心修复：指纹目录此前【完全没有】清扫 —— 文件改名、外部删除、删除实体后
+            // 指纹会永久残留。数量随使用时间单调增长，且里面含有旧版 32 位哈希键的遗留文件。
+            // 仅在库非空时执行，避免数据库尚未就绪时把整个缓存误删。
+            if (all.isNotEmpty()) {
+                try {
+                    val images = all.filter { FileUtils.isImageFile(it.name) }
+                    val validNames = HashSet<String>(images.size * 2)
+                    images.forEach { validNames.addAll(ImageFingerprintCache.fingerprintFileNames(it)) }
+                    ImageFingerprintCache.fingerprintDir(context).listFiles()?.forEach { f ->
+                        if (f.name !in validNames) {
+                            try {
+                                f.delete()
+                            } catch (_: Exception) {
+                            }
+                        }
+                    }
+                } catch (_: Exception) {
+                }
+            }
+
             // 2) 找出缺失缩略图的实体（半永久缓存命中则跳过 —— 不重复生成）
             val missing = media.filter { !ThumbnailCache.hasThumbnail(context, it) }
             if (missing.isEmpty()) return false

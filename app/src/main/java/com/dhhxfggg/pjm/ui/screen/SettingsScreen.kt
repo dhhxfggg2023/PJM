@@ -29,6 +29,7 @@ import com.dhhxfggg.pjm.data.model.FileEntity
 import com.dhhxfggg.pjm.data.model.Settings
 import com.dhhxfggg.pjm.domain.util.PjmLogger
 import com.dhhxfggg.pjm.domain.util.UpdateChecker
+import com.dhhxfggg.pjm.domain.util.UpdateController
 import com.dhhxfggg.pjm.domain.util.VaultManager
 import com.dhhxfggg.pjm.ui.component.PjmAeroDialog
 import com.dhhxfggg.pjm.ui.component.PjmDuplicateCompareDialog
@@ -198,10 +199,11 @@ fun SettingsScreen(
     var isCheckingUpdate by remember { mutableStateOf(false) }
     var updateCheckResult by remember { mutableStateOf<UpdateChecker.CheckResult?>(null) }
 
-    // 应用内下载状态
-    var isDownloadingUpdate by remember { mutableStateOf(false) }
-    var downloadProgress by remember { mutableFloatStateOf(0f) }
-    var downloadError by remember { mutableStateOf<String?>(null) }
+    // 应用内下载状态：统一由进程级的 UpdateController 持有。
+    // 原来这些状态都在本页的 remember 里，离开设置页/旋转屏幕就丢，
+    // 且下载协程绑在 rememberCoroutineScope() 上会被直接取消。
+    val updateDownloadProgress by UpdateController.downloadProgress.collectAsState()
+    val updateDownloadMessage by UpdateController.message.collectAsState()
 
     Scaffold(
         topBar = {
@@ -560,31 +562,13 @@ fun SettingsScreen(
             confirmButton = {
                 if (result is UpdateChecker.CheckResult.UpdateAvailable) {
                     Button(onClick = {
-                        val apkUrl = result.apkUrl
                         updateCheckResult = null
-                        // 应用内直接下载（不进浏览器）
-                        scope.launch {
-                            isDownloadingUpdate = true
-                            downloadProgress = 0f
-                            downloadError = null
-                            // Compose snapshot state 支持跨线程写入，进度直接在 IO 回调里更新
-                            val dlResult =
-                                UpdateChecker.downloadApk(context, apkUrl) { progress ->
-                                    downloadProgress = progress
-                                }
-                            isDownloadingUpdate = false
-                            when (dlResult) {
-                                is UpdateChecker.DownloadResult.Success -> {
-                                    val ok = UpdateChecker.installApk(context, dlResult.apkFile)
-                                    if (!ok) {
-                                        downloadError = context.getString(R.string.msg_update_install_fallback)
-                                    }
-                                }
-                                is UpdateChecker.DownloadResult.Error -> {
-                                    downloadError = dlResult.message
-                                }
-                            }
-                        }
+                        // 核心修复：下载交给进程级的 UpdateController。
+                        // 原来绑在 rememberCoroutineScope() 上，用户一离开设置页协程就被取消，
+                        // 下载静默消失且没有任何提示。
+                        // 横幅的「可用更新」状态与设置页检查结果共用同一条数据。
+                        UpdateController.publishAvailable(result)
+                        UpdateController.startDownload(context)
                     }) { Text(stringResource(R.string.action_download_install)) }
                 } else {
                     Button(onClick = { updateCheckResult = null }) { Text(stringResource(R.string.action_dismiss)) }
@@ -641,7 +625,7 @@ fun SettingsScreen(
     }
 
     // 应用内下载进度弹窗
-    if (isDownloadingUpdate) {
+    updateDownloadProgress?.let { progress ->
         PjmAeroDialog(
             onDismissRequest = { },
             title = stringResource(R.string.dialog_title_downloading),
@@ -650,13 +634,13 @@ fun SettingsScreen(
         ) {
             Column(Modifier.fillMaxWidth()) {
                 LinearProgressIndicator(
-                    progress = { downloadProgress },
+                    progress = { progress },
                     modifier = Modifier.fillMaxWidth().height(6.dp),
                     color = MaterialTheme.colorScheme.primary,
                 )
                 Spacer(Modifier.height(12.dp))
                 Text(
-                    "${(downloadProgress * 100).toInt()}%",
+                    "${(progress * 100).toInt()}%",
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.align(Alignment.CenterHorizontally),
                 )
@@ -671,19 +655,19 @@ fun SettingsScreen(
     }
 
     // 下载失败/安装引导弹窗
-    downloadError?.let { err ->
+    updateDownloadMessage?.let { err ->
         PjmAeroDialog(
-            onDismissRequest = { downloadError = null },
+            onDismissRequest = { UpdateController.consumeMessage() },
             title = stringResource(R.string.dialog_title_download_failed),
             confirmButton = {
                 Button(onClick = {
-                    downloadError = null
+                    UpdateController.consumeMessage()
                     updateCheckResult = null
                     UpdateChecker.openReleasePage(context)
                 }) { Text(stringResource(R.string.action_browser_download)) }
             },
             dismissButton = {
-                TextButton(onClick = { downloadError = null }) { Text(stringResource(R.string.action_cancel)) }
+                TextButton(onClick = { UpdateController.consumeMessage() }) { Text(stringResource(R.string.action_cancel)) }
             },
         ) {
             Text(err, style = MaterialTheme.typography.bodyMedium)
@@ -731,11 +715,20 @@ fun SettingsScreen(
         }
     }
 
-    uiState.duplicateFiles?.let { groups ->
-        if (groups.isEmpty()) {
+    val duplicateGroups = uiState.duplicateFiles
+    // 核心修复：副作用必须移出组合函数体。
+    // 原写法在组合期直接 Toast + 写状态：组合是可重入/可丢弃的，在状态传播回来之前
+    // 每次重组都会再弹一次 Toast，且在组合期写被本组合读取的状态属于 Compose 禁忌
+    // （可能触发额外重组循环）。
+    LaunchedEffect(duplicateGroups) {
+        if (duplicateGroups != null && duplicateGroups.isEmpty()) {
             Toast.makeText(context, noDuplicatesMsg, Toast.LENGTH_SHORT).show()
             settingsViewModel.clearDuplicateState()
-        } else {
+        }
+    }
+
+    duplicateGroups?.let { groups ->
+        if (groups.isNotEmpty()) {
             // 核心修复：对比确认弹窗 —— 每行两张并排展示，确认无误后再勾选删除
             PjmDuplicateCompareDialog(
                 groups = groups,

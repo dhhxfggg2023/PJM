@@ -17,11 +17,18 @@ object VaultNaming {
     /** 分卷后缀：`主体.pjm.N` */
     private val VOLUME_SUFFIX = Regex("^(.*)\\.pjm\\.(\\d+)$")
 
-    /** 当前时间 → 可读命名时间戳（yyyyMMdd_HHmmss），加密容器命名统一使用 */
+    /** 当前时间 → 可读命名时间戳（yyyyMMdd_HHmmssSSS），加密容器命名统一使用 */
     fun readableTimestamp(): String = formatReadable(System.currentTimeMillis())
 
-    /** 毫秒 → 可读命名时间戳（yyyyMMdd_HHmmss） */
-    fun formatReadable(millis: Long): String = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date(millis))
+    /**
+     * 毫秒 → 可读命名时间戳。
+     *
+     * 核心修复：精度补到毫秒（`yyyyMMdd_HHmmssSSS`）。
+     * 原来只到秒：同一秒内先后两次导出/打包会算出**完全相同的容器名**，
+     * 后一次直接覆盖前一次（数据库里 relativePath 唯一，两行还会塌缩成一行），
+     * 前一次的产物静默消失。加毫秒后碰撞窗口从 1 秒缩到 1 毫秒。
+     */
+    fun formatReadable(millis: Long): String = SimpleDateFormat("yyyyMMdd_HHmmssSSS", Locale.getDefault()).format(Date(millis))
 
     /**
      * 旧式容器名 → 规范名 `前缀_yyyyMMdd_HHmmss.pjm.N`。

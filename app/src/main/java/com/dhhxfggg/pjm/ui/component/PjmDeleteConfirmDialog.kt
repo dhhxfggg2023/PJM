@@ -31,6 +31,8 @@ import com.dhhxfggg.pjm.data.model.FileEntity
 import com.dhhxfggg.pjm.domain.util.FileUtils
 import com.dhhxfggg.pjm.domain.util.ThumbnailCache
 import com.dhhxfggg.pjm.domain.util.VaultManager
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * PJM 统一删除确认弹窗（归一化 UI）。
@@ -63,6 +65,10 @@ fun PjmDeleteConfirmDialog(
     // 勾选状态：默认全选
     val selected = remember(candidates) { mutableStateListOf<FileEntity>().apply { addAll(candidates) } }
     val isAllSelected = selected.size == candidates.size && candidates.isNotEmpty()
+    // 核心修复：行内勾选判定原来对 SnapshotStateList 做 O(n) 线性扫描 ——
+    // 「全选」后列表可达上万项，勾一次会让所有可见行各扫一遍。
+    // 用相对路径集合（derivedStateOf 缓存）把判定降为 O(1)。
+    val selectedPaths by remember { derivedStateOf { selected.mapTo(HashSet()) { it.relativePath } } }
 
     PjmAeroDialog(
         onDismissRequest = onDismiss,
@@ -132,13 +138,10 @@ fun PjmDeleteConfirmDialog(
                 items(candidates, key = { it.relativePath }) { entity ->
                     DeletableFileRow(
                         entity = entity,
-                        isChecked = selected.contains(entity),
+                        isChecked = entity.relativePath in selectedPaths,
                         onToggle = {
-                            if (selected.contains(entity)) {
-                                selected.remove(entity)
-                            } else {
-                                selected.add(entity)
-                            }
+                            val index = selected.indexOfFirst { it.relativePath == entity.relativePath }
+                            if (index >= 0) selected.removeAt(index) else selected.add(entity)
                         },
                     )
                 }
@@ -158,6 +161,15 @@ fun PjmDeleteConfirmDialog(
 }
 
 /**
+ * 单行的磁盘派生信息（在 IO 线程算好后回填给组合层）。
+ */
+private data class DeletableRowInfo(
+    val exists: Boolean = true,
+    val cachedThumb: java.io.File? = null,
+    val resolution: String? = null,
+)
+
+/**
  * 可勾选的文件行：缩略图 + 文件名 + 大小 + Checkbox。
  * 点击整行可切换勾选状态。
  */
@@ -168,26 +180,40 @@ private fun DeletableFileRow(
     onToggle: () -> Unit,
 ) {
     val context = LocalContext.current
-    val file = remember(entity.relativePath) { VaultManager.getFileFromEntity(context, entity) }
-    val cachedThumb =
-        remember(entity.relativePath) {
-            if (FileUtils.isVideoFile(entity.name)) ThumbnailCache.getThumbnailFile(context, entity) else null
-        }
-    // 图片显示分辨率（原图 vs 缩略图直观可辨；只读图片头，成本极低）
-    val resolution =
-        remember(entity.relativePath) {
-            if (entity.isImage && file.exists()) {
-                try {
-                    val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                    BitmapFactory.decodeFile(file.absolutePath, opts)
-                    if (opts.outWidth > 0 && opts.outHeight > 0) "${opts.outWidth}×${opts.outHeight}" else null
-                } catch (_: Exception) {
-                    null
-                }
-            } else {
-                null
+    // 核心修复：这三项都是磁盘操作 —— `File.exists()` 是 stat、分辨率要读图片头、
+    // 视频缩略图要查缓存目录。原来直接写在组合体里，每一行进入组合就在主线程做一次 IO，
+    // 长列表滚动时（每帧都有新行进入组合）会累积成明显掉帧。
+    // 现在统一在 IO 线程算一次，之后只读结果。
+    val rowInfo by produceState(initialValue = DeletableRowInfo(), entity.relativePath) {
+        value =
+            withContext(Dispatchers.IO) {
+                val file = VaultManager.getFileFromEntity(context, entity)
+                val exists = file.exists()
+                val thumb =
+                    if (FileUtils.isVideoFile(entity.name)) {
+                        ThumbnailCache.getThumbnailFile(context, entity)
+                    } else {
+                        null
+                    }
+                val resolution =
+                    if (entity.isImage && exists) {
+                        try {
+                            val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                            BitmapFactory.decodeFile(file.absolutePath, opts)
+                            if (opts.outWidth > 0 && opts.outHeight > 0) "${opts.outWidth}×${opts.outHeight}" else null
+                        } catch (_: Exception) {
+                            null
+                        }
+                    } else {
+                        null
+                    }
+                DeletableRowInfo(exists = exists, cachedThumb = thumb, resolution = resolution)
             }
-        }
+    }
+    val file = remember(entity.relativePath) { VaultManager.getFileFromEntity(context, entity) }
+    val cachedThumb = rowInfo.cachedThumb
+    val resolution = rowInfo.resolution
+    val fileExists = rowInfo.exists
 
     Row(
         modifier =
@@ -208,7 +234,7 @@ private fun DeletableFileRow(
                     .background(MaterialTheme.colorScheme.surfaceVariant),
         ) {
             when {
-                entity.isImage && file.exists() ->
+                entity.isImage && fileExists ->
                     AsyncImage(
                         model =
                             ImageRequest
@@ -234,7 +260,7 @@ private fun DeletableFileRow(
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize(),
                     )
-                FileUtils.isVideoFile(entity.name) && file.exists() ->
+                FileUtils.isVideoFile(entity.name) && fileExists ->
                     AsyncImage(
                         model =
                             ImageRequest

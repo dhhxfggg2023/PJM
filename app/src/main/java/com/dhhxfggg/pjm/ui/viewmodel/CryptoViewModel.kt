@@ -51,14 +51,6 @@ class CryptoViewModel
          */
         sealed class CryptoEvent {
             /**
-             * Request to open a file with the system app.
-             */
-            data class RequestSystemOpen(
-                val uri: Uri,
-                val fileName: String,
-            ) : CryptoEvent()
-
-            /**
              * Request the user to provide a password.
              */
             data class RequestPassword(

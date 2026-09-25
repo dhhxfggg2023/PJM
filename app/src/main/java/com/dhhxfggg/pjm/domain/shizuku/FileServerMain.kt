@@ -14,6 +14,13 @@ import java.io.File
  * - server 轮询处理，写响应文件 resp_<seq>.txt
  * - 共享目录：/sdcard/Android/data/<pkg>/files/io/（app 与 shell 均可读写）
  *
+ * 目录访问边界（澄清一个常见的误判）：本目录位于 `Android/data/<pkg>/` 之下，
+ * 自 Android 4.4（API 19）起该路径就是**应用专属**的 —— 其它应用即使持有
+ * WRITE_EXTERNAL_STORAGE 也无法在其中创建/覆盖文件。而本项目 minSdk = 24，
+ * 因此「其它应用伪造请求文件/替换 start.sh」这一攻击路径在受支持的版本上并不成立；
+ * 固定 token 的实际作用是防止**误触发**，不是防伪。下面仍然做了参数校验与
+ * 「只删自己的文件」，作为纵深防御与防手滑。
+ *
  * 注意：本类仅依赖 java.*，不依赖 Android Context（shell 进程不可用）。
  */
 object FileServerMain {
@@ -37,12 +44,27 @@ object FileServerMain {
             println("PJM privileged server: usage: FileServerMain <io_dir>")
             return
         }
+        // 核心修复：校验传入目录。
+        // 下面会清理该目录，若参数写错（例如误传 /sdcard 或 /data/local/tmp），
+        // 旧实现会把这个 shell 可写目录里的文件全部删掉。这里要求路径必须是
+        // 本应用的共享 IO 目录 `<外部私有目录>/files/io`，与 EmbeddedPrivilegedIo
+        // 的实际用法（以及 start.sh 传参）完全一致，不影响正常启动。
+        val normalized = ioDir.absolutePath.replace('\\', '/').trimEnd('/')
+        if (!normalized.endsWith("/files/$IO_DIR_NAME")) {
+            println("PJM privileged server: 拒绝启动 —— ioDir 必须是 <外部私有目录>/files/$IO_DIR_NAME，实际为: $normalized")
+            System.out.flush()
+            return
+        }
         println("PJM privileged server starting (uid=${android.os.Process.myUid()}, ioDir=$ioDir)")
         System.out.flush()
         if (!ioDir.exists()) ioDir.mkdirs()
 
-        // 启动时清理残留请求/响应文件
-        ioDir.listFiles()?.forEach { it.delete() }
+        // 启动时清理残留请求/响应文件。
+        // 核心修复：只删本协议自己的文件。旧实现是 `listFiles()?.forEach { it.delete() }`，
+        // 会把该目录下的**所有**文件删光 —— 一旦传错目录就是一次数据破坏。
+        ioDir
+            .listFiles { f -> f.isFile && (f.name.startsWith(REQ_PREFIX) || f.name.startsWith(RESP_PREFIX)) }
+            ?.forEach { it.delete() }
 
         while (true) {
             try {

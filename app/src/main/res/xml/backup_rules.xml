@@ -1,13 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?><!--
-   Sample backup rules file; uncomment and customize as necessary.
-   See https://developer.android.com/guide/topics/data/autobackup
-   for details.
-   Note: This file is ignored for devices older than API 31
-   See https://developer.android.com/about/versions/12/backup-restore
+  API < 31 的自动备份规则（由 android:fullBackupContent 引用）。
+
+  本应用是【本地隐私保险库】：保险库明文文件、数据库索引、缩略图、指纹与日志
+  一律不参与云备份，避免「本地加密」的资料被静默同步到云端。
+  参见 https://developer.android.com/guide/topics/data/autobackup
 -->
 <full-backup-content>
-    <!--
-   <include domain="sharedpref" path="."/>
-   <exclude domain="sharedpref" path="device.xml"/>
--->
+    <!-- 保险库本体：分类目录下的明文文件 + .pjm 容器 -->
+    <exclude domain="file" path="pjm_vault/" />
+    <!-- 派生数据：缩略图 / 感知指纹（可从保险库重建，无需备份） -->
+    <exclude domain="file" path="thumbnails/" />
+    <exclude domain="file" path="image_fingerprints/" />
+    <!-- 数据库每日备份 -->
+    <exclude domain="file" path="backups/" />
+    <!-- 运行日志：包含文件名与绝对路径 -->
+    <exclude domain="file" path="logs/" />
+    <!-- 分享用的规范名副本 -->
+    <exclude domain="file" path="pjm_named_share/" />
+    <!-- 索引库与设置 -->
+    <exclude domain="database" path="." />
+    <exclude domain="sharedpref" path="." />
 </full-backup-content>

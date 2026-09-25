@@ -20,8 +20,9 @@ class VaultNamingTest {
     @Test
     fun legacyMillis_convertToReadable() {
         val readable = VaultNaming.formatReadable(sampleMillis)
-        // 格式必须 yyyyMMdd_HHmmss：14 位数字
-        assertEquals(15, readable.length) // 8 + 1 + 6
+        // 格式必须 yyyyMMdd_HHmmssSSS：8 + 1 + 9 = 18 位数字（毫秒精度，
+        // 避免同一秒内两次导出/打包算出相同的容器名而互相覆盖）
+        assertEquals(18, readable.length)
         assertEquals("_", readable[8].toString())
         assertNull("应全为数字（除第 9 位下划线）", readable.filterIndexed { i, c -> i != 8 && !c.isDigit() }.takeIf { it.isNotEmpty() })
 

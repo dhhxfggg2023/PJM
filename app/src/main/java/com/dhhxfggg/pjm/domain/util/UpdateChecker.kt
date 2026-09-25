@@ -2,8 +2,11 @@ package com.dhhxfggg.pjm.domain.util
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
+import android.content.pm.Signature
 import android.net.Uri
+import android.os.Build
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -11,12 +14,21 @@ import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.MessageDigest
 
 /**
  * GitHub Release 检查更新器 + 应用内下载安装。
  *
  * 通过 GitHub API 查询 PJM 仓库的最新 Release，与本地安装版本比较。
  * 仓库已公开，匿名 API 即可访问（无需 token）。
+ *
+ * 安全约束（本文件是「应用内安装」这条供应链通道的唯一入口）：
+ * 1. **下载地址白名单**：只接受 https + GitHub 自家域名。Release JSON 是网络数据，
+ *    不能当作可信输入 —— 否则任何能改写响应的一方（企业/私人 CA、恶意代理、仓库被接管）
+ *    都能把 URL 指向任意主机。
+ * 2. **安装包签名比对**：下载完成后解析 APK 的签名证书，必须与当前已安装包的证书一致，
+ *    否则直接丢弃。没有这一步，上面的白名单只能防「换主机」，防不住「在 GitHub 上换包」。
+ * 3. **体积上限**：防止恶意/异常响应把缓存目录写满。
  */
 object UpdateChecker {
     private const val TAG = "UpdateChecker"
@@ -26,6 +38,20 @@ object UpdateChecker {
 
     /** 下载目录（app cache 下，安装后自动清理） */
     private const val DOWNLOAD_DIR = "pjm_updates"
+
+    /** 允许下载 APK 的域名（GitHub Release 会 302 到 objects.githubusercontent.com） */
+    private val ALLOWED_DOWNLOAD_HOSTS =
+        setOf(
+            "github.com",
+            "api.github.com",
+            "codeload.github.com",
+            "objects.githubusercontent.com",
+            "github-releases.githubusercontent.com",
+            "release-assets.githubusercontent.com",
+        )
+
+    /** 安装包体积上限（防止恶意响应写满缓存） */
+    private const val MAX_APK_BYTES = 300L * 1024 * 1024
 
     /** 检查结果 */
     sealed class CheckResult {
@@ -127,6 +153,7 @@ object UpdateChecker {
 
     /**
      * 从 Release JSON 的 assets 数组中解析 APK 的 browser_download_url。
+     * 只接受通过 [isTrustedDownloadUrl] 校验的地址。
      */
     private fun findApkUrl(json: JSONObject): String? {
         return try {
@@ -136,7 +163,13 @@ object UpdateChecker {
                 val name = asset.optString("name", "").lowercase()
                 if (name.endsWith(".apk")) {
                     val url = asset.optString("browser_download_url", "")
-                    if (url.isNotEmpty()) return url
+                    if (url.isEmpty()) continue
+                    if (!isTrustedDownloadUrl(url)) {
+                        // 明确记录并拒绝，而不是「跳过继续找下一个」—— 出现不可信地址本身就是异常信号
+                        PjmLogger.e(TAG, "拒绝不可信的 APK 下载地址: $url")
+                        return null
+                    }
+                    return url
                 }
             }
             null
@@ -144,6 +177,86 @@ object UpdateChecker {
             PjmLogger.w(TAG, "解析 APK 直链失败: ${e.message}")
             null
         }
+    }
+
+    /**
+     * 下载地址白名单校验：必须 https，且 host 在 [ALLOWED_DOWNLOAD_HOSTS] 内。
+     * internal：供单元测试直接验证。
+     */
+    internal fun isTrustedDownloadUrl(raw: String): Boolean =
+        try {
+            val url = URL(raw)
+            url.protocol.equals("https", ignoreCase = true) &&
+                url.host.lowercase() in ALLOWED_DOWNLOAD_HOSTS
+        } catch (_: Exception) {
+            false
+        }
+
+    /**
+     * 校验下载到的 APK 与当前已安装包同源（包名一致 + 签名证书一致）。
+     *
+     * 采用「归档包的签名证书必须包含在已安装包的已知证书集合内」的判定，
+     * 已安装侧同时取 signingCertificateHistory，以兼容密钥轮换。
+     */
+    private fun isSameSignerAsInstalled(
+        context: Context,
+        apkFile: File,
+    ): Boolean {
+        val pm = context.packageManager
+        val flags =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                PackageManager.GET_SIGNING_CERTIFICATES
+            } else {
+                @Suppress("DEPRECATION")
+                PackageManager.GET_SIGNATURES
+            }
+        return try {
+            val archive = pm.getPackageArchiveInfo(apkFile.absolutePath, flags) ?: return false
+            if (archive.packageName != context.packageName) {
+                PjmLogger.e(TAG, "APK 包名不匹配: ${archive.packageName}")
+                return false
+            }
+            val archiveDigests = apkSignerDigests(archive, historyPreferred = false)
+            val installedDigests = apkSignerDigests(pm.getPackageInfo(context.packageName, flags), historyPreferred = true)
+            if (archiveDigests.isEmpty() || installedDigests.isEmpty()) {
+                PjmLogger.e(TAG, "无法读取签名证书，拒绝安装")
+                return false
+            }
+            val trusted = archiveDigests.all { it in installedDigests }
+            if (!trusted) PjmLogger.e(TAG, "APK 签名与已安装包不一致，已丢弃")
+            trusted
+        } catch (e: Exception) {
+            PjmLogger.e(TAG, "签名校验失败", e)
+            false
+        }
+    }
+
+    /** 取签名证书的 SHA-256 摘要集合 */
+    private fun apkSignerDigests(
+        info: PackageInfo,
+        historyPreferred: Boolean,
+    ): Set<String> {
+        val signatures: Array<Signature>? =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                val signing = info.signingInfo
+                when {
+                    signing == null -> null
+                    signing.hasMultipleSigners() -> signing.apkContentsSigners
+                    historyPreferred -> signing.signingCertificateHistory
+                    else -> signing.apkContentsSigners
+                }
+            } else {
+                @Suppress("DEPRECATION")
+                info.signatures
+            }
+        return signatures
+            ?.map { sig ->
+                MessageDigest
+                    .getInstance("SHA-256")
+                    .digest(sig.toByteArray())
+                    .joinToString("") { "%02x".format(it) }
+            }?.toSet()
+            ?: emptySet()
     }
 
     /**
@@ -156,6 +269,12 @@ object UpdateChecker {
         onProgress: (Float) -> Unit = {},
     ): DownloadResult =
         withContext(Dispatchers.IO) {
+            // 纵深防御：即使调用方绕过了 checkForUpdate，这里也再校验一次地址
+            if (!isTrustedDownloadUrl(url)) {
+                PjmLogger.e(TAG, "下载地址不在白名单内: $url")
+                return@withContext DownloadResult.Error("下载地址不可信，已阻止")
+            }
+
             // 清理旧下载残留
             val dir = File(context.cacheDir, DOWNLOAD_DIR)
             dir.deleteRecursively()
@@ -177,6 +296,9 @@ object UpdateChecker {
                     return@withContext DownloadResult.Error("下载失败 (HTTP $code)")
                 }
                 val total = conn.contentLengthLong
+                if (total > MAX_APK_BYTES) {
+                    return@withContext DownloadResult.Error("安装包体积异常，已阻止")
+                }
                 var downloaded = 0L
                 val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
 
@@ -185,8 +307,13 @@ object UpdateChecker {
                         while (true) {
                             val read = input.read(buffer)
                             if (read <= 0) break
-                            output.write(buffer, 0, read)
                             downloaded += read
+                            // 服务器可能不返回 Content-Length，因此边下边卡上限
+                            if (downloaded > MAX_APK_BYTES) {
+                                apkFile.delete()
+                                return@withContext DownloadResult.Error("安装包体积异常，已阻止")
+                            }
+                            output.write(buffer, 0, read)
                             if (total > 0) {
                                 onProgress((downloaded.toFloat() / total).coerceIn(0f, 1f))
                             }
@@ -195,6 +322,11 @@ object UpdateChecker {
                 }
                 if (apkFile.length() <= 0) {
                     return@withContext DownloadResult.Error("下载内容为空")
+                }
+                // 关键：签名不一致的包直接丢弃，绝不交给系统安装器
+                if (!isSameSignerAsInstalled(context, apkFile)) {
+                    apkFile.delete()
+                    return@withContext DownloadResult.Error("安装包签名校验未通过，已丢弃")
                 }
                 DownloadResult.Success(apkFile)
             } catch (e: Exception) {

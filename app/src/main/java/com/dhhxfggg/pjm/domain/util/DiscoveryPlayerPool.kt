@@ -24,12 +24,19 @@ object DiscoveryPlayerPool {
 
     /**
      * 借出一个播放器。池中有空闲则复用，否则新建。
+     *
+     * 核心修复：一律使用 `applicationContext` 构建播放器。
+     * 调用方传进来的是 `LocalContext.current`（Activity），而 ExoPlayer 的
+     * `DefaultRenderersFactory` → `MediaCodecVideoRenderer` 会长期持有该 Context；
+     * 池是进程级单例且从不销毁 → 每次 Activity 重建（旋转/深色模式切换）都会
+     * 永久泄漏一个 Activity。换成 Application Context 后与 Activity 生命周期彻底解耦。
      */
     @Synchronized
     fun acquire(context: Context): ExoPlayer {
+        val appContext = context.applicationContext ?: context
         val player =
             pool.pollFirst()
-                ?: ExoPlayer.Builder(context).build().apply {
+                ?: ExoPlayer.Builder(appContext).build().apply {
                     repeatMode = Player.REPEAT_MODE_ONE
                     setAudioAttributes(
                         AudioAttributes

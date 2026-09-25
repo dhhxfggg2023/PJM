@@ -5,7 +5,6 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
-import android.webkit.MimeTypeMap
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -128,7 +127,6 @@ class MainActivity : ComponentActivity() {
             LaunchedEffect(Unit) {
                 cryptoViewModel.events.collectLatest { event ->
                     when (event) {
-                        is CryptoViewModel.CryptoEvent.RequestSystemOpen -> openWithSystemTool(event.uri, event.fileName)
                         is CryptoViewModel.CryptoEvent.RequestPassword -> passwordRequestInfo = event.fileName
                         is CryptoViewModel.CryptoEvent.RequestDeletePermission -> {
                             // 核心修复：直接从 ViewModel 获取最新设置，不再信任闭包捕获的 stale 值
@@ -509,43 +507,6 @@ class MainActivity : ComponentActivity() {
             },
         ) {
             Text(stringResource(R.string.dialog_msg_new_file_found), style = MaterialTheme.typography.bodyMedium)
-        }
-    }
-
-    private fun openWithSystemTool(
-        uri: Uri,
-        fileName: String,
-    ) {
-        try {
-            val targetUri =
-                if (uri.scheme == "file" ||
-                    uri.path?.contains(filesDir.absolutePath) == true
-                ) {
-                    val path = uri.path
-                    if (path != null) PjmContentProvider.getUriForFile(this, File(path)) else uri
-                } else {
-                    uri
-                }
-            val ext = fileName.substringAfterLast('.', "").lowercase()
-            val mimeType =
-                if (ext ==
-                    "apk"
-                ) {
-                    "application/vnd.android.package-archive"
-                } else {
-                    MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext)
-                        ?: "application/octet-stream"
-                }
-            startActivity(
-                Intent(Intent.ACTION_VIEW).apply {
-                    setDataAndType(targetUri, mimeType)
-                    addFlags(
-                        Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK,
-                    )
-                },
-            )
-        } catch (_: Exception) {
-            Toast.makeText(this, getString(R.string.error_unable_to_open_external_tool), Toast.LENGTH_SHORT).show()
         }
     }
 

@@ -22,6 +22,7 @@ import dagger.hilt.InstallIn
 import dagger.hilt.android.EntryPointAccessors
 import dagger.hilt.android.HiltAndroidApp
 import dagger.hilt.components.SingletonComponent
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -37,8 +38,25 @@ class MainApplication :
     Application(),
     SingletonImageLoader.Factory {
     companion object {
-        /** 全局 IO 协程作用域 */
-        val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        /**
+         * 全局 IO 协程作用域。
+         *
+         * 核心修复：补上 [CoroutineExceptionHandler]。
+         * `SupervisorJob` 只保证「一个子任务失败不影响兄弟任务」，**不会**捕获异常 ——
+         * 未捕获的异常会沿作用域冒泡到线程的默认处理器，直接让整个应用崩溃。
+         * 后台补齐缩略图、数据库备份、命名迁移、后台删除等都在这个作用域里跑，
+         * 任何一处漏掉的异常都会变成用户看到的闪退。
+         */
+        val applicationScope =
+            CoroutineScope(
+                SupervisorJob() +
+                    Dispatchers.IO +
+                    CoroutineExceptionHandler { _, throwable ->
+                        // 记录后吞掉：后台任务失败不应该带走整个应用。
+                        // PjmLogger 未初始化时内部会安全跳过（业务日志文件为 null）。
+                        PjmLogger.e("AppScope", "后台任务未捕获异常（已拦截）: ${throwable.javaClass.name}", throwable)
+                    },
+            )
 
         /** 是否开启 7z 兼容层支持 */
         const val IS_SEVEN_ZIP_ENABLED: Boolean = true
@@ -120,6 +138,13 @@ class MainApplication :
                     .viewHistoryDao()
                     .purgeOrphans()
             }.onFailure { e -> PjmLogger.w("MainApplication", "浏览历史清理跳过: ${e.message}") }
+        }
+
+        // 冷启动清理：进程被强杀时残留的容器临时文件（`*.tmp_*`）。
+        // 放在命名迁移之前 —— 否则迁移扫描会先看到这些半成品。
+        applicationScope.launch(VaultManager.PjmDispatchers.IO) {
+            runCatching { VaultManager.cleanupStaleTempFiles(this@MainApplication) }
+                .onFailure { e -> PjmLogger.w("MainApplication", "容器临时文件清理跳过: ${e.message}") }
         }
 
         // 一次性命名迁移：把旧命名规则的加密容器统一为最新规范

@@ -29,6 +29,7 @@ import com.composables.icons.lucide.Lucide
 import com.dhhxfggg.pjm.R
 import com.dhhxfggg.pjm.domain.util.FileUtils
 import com.dhhxfggg.pjm.domain.util.VaultManager
+import com.dhhxfggg.pjm.ui.component.rememberIsAppVisible
 import com.dhhxfggg.pjm.ui.viewmodel.MediaDetailViewModel
 import kotlin.time.Duration.Companion.seconds
 
@@ -156,9 +157,12 @@ private fun ImageViewer(filePath: String) {
 @Composable
 private fun VideoViewer(filePath: String) {
     val context = LocalContext.current
+    // 核心修复：remember 必须以 filePath 为 key。
+    // 同一组合槽位换视频（列表里点开另一个文件）时，原来不会重建播放器，
+    // 也不会复位播放位置，看到的仍是上一个视频。
     val exoPlayer =
-        remember {
-            ExoPlayer.Builder(context).build().apply {
+        remember(filePath) {
+            ExoPlayer.Builder(context.applicationContext).build().apply {
                 repeatMode = Player.REPEAT_MODE_ONE
                 setAudioAttributes(
                     androidx.media3.common.AudioAttributes
@@ -174,10 +178,16 @@ private fun VideoViewer(filePath: String) {
             }
         }
 
-    DisposableEffect(Unit) {
+    DisposableEffect(filePath) {
         onDispose {
             exoPlayer.release()
         }
+    }
+
+    // 核心修复：退到后台/熄屏时暂停，回到前台再继续（否则音频会一直在后台响）
+    val isAppVisible = rememberIsAppVisible()
+    LaunchedEffect(exoPlayer, isAppVisible) {
+        exoPlayer.playWhenReady = isAppVisible
     }
 
     AndroidView(

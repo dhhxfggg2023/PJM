@@ -15,13 +15,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.hilt.navigation.compose.hiltViewModel
 import com.composables.icons.lucide.Check
 import com.composables.icons.lucide.Lucide
 import com.dhhxfggg.pjm.data.model.FileEntity
 import com.dhhxfggg.pjm.domain.util.FileUtils
 import com.dhhxfggg.pjm.ui.theme.rememberIconPack
-import com.dhhxfggg.pjm.ui.viewmodel.SettingsViewModel
 
 /**
  * Returns an appropriate icon vector based on the file extension.
@@ -53,7 +51,6 @@ fun SelectableFileCard(
     modifier: Modifier = Modifier,
     imageOnly: Boolean = false,
     gridSpanCount: Int = 2,
-    settingsViewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val iconPack = rememberIconPack()
 

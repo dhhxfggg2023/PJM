@@ -24,10 +24,13 @@ object PermissionManager {
     val REQUIRED_PERMISSIONS: Array<String> =
         when {
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU -> {
-                // Android 13+：通常不需要全局存储权限，按需申请媒体权限
+                // Android 13+：通常不需要全局存储权限，按需申请媒体权限。
+                // 核心修复：补上 READ_MEDIA_AUDIO —— manifest 里声明了它，这里却漏了，
+                // 一旦将来真的走「按需请求」这条路，音频权限会永远申请不到。
                 arrayOf(
                     Manifest.permission.READ_MEDIA_IMAGES,
                     Manifest.permission.READ_MEDIA_VIDEO,
+                    Manifest.permission.READ_MEDIA_AUDIO,
                 )
             }
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.R -> {

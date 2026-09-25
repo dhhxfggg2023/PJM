@@ -26,6 +26,8 @@ import com.dhhxfggg.pjm.data.model.FileEntity
 import com.dhhxfggg.pjm.domain.util.DuplicateGroup
 import com.dhhxfggg.pjm.domain.util.FileUtils
 import com.dhhxfggg.pjm.domain.util.VaultManager
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * PJM 重复内容对比确认弹窗（归一化 UI）。
@@ -63,6 +65,9 @@ fun PjmDuplicateCompareDialog(
         }
     val allMembers = remember(groups) { groups.flatMap { it.members } }
     val isAllSelected = selected.size == allMembers.size && allMembers.isNotEmpty()
+    // 核心修复：行内勾选判定原来是 O(n) 线性扫描（全选后可达上万项），
+    // 改成相对路径集合后判定降为 O(1)；切换只对当前项做一次查找。
+    val selectedPaths by remember { derivedStateOf { selected.mapTo(HashSet()) { it.relativePath } } }
 
     PjmAeroDialog(
         onDismissRequest = onDismiss,
@@ -140,14 +145,11 @@ fun PjmDuplicateCompareDialog(
                                     Box(modifier = Modifier.weight(1f)) {
                                         CompareImageCard(
                                             entity = entity,
-                                            isChecked = selected.contains(entity),
+                                            isChecked = entity.relativePath in selectedPaths,
                                             isRecommendedDelete = entity.relativePath in group.recommendedDelete,
                                             onToggle = {
-                                                if (selected.contains(entity)) {
-                                                    selected.remove(entity)
-                                                } else {
-                                                    selected.add(entity)
-                                                }
+                                                val index = selected.indexOfFirst { it.relativePath == entity.relativePath }
+                                                if (index >= 0) selected.removeAt(index) else selected.add(entity)
                                             },
                                         )
                                     }
@@ -204,9 +206,18 @@ private fun GroupHeader(
 }
 
 /**
+ * 单张对比卡的磁盘派生信息（在 IO 线程算好后回填给组合层）。
+ */
+private data class CompareCardInfo(
+    val exists: Boolean = true,
+    val resolution: String? = null,
+)
+
+/**
  * 单张对比卡片：大缩略图 + 文件名 + 分辨率/大小 + 勾选框。
  * 点击卡片任意处切换勾选。被推荐保留的原图显示"推荐保留"角标。
  */
+
 @Composable
 private fun CompareImageCard(
     entity: FileEntity,
@@ -216,21 +227,29 @@ private fun CompareImageCard(
 ) {
     val context = LocalContext.current
     val file = remember(entity.relativePath) { VaultManager.getFileFromEntity(context, entity) }
-    // 分辨率（只读图片头，成本极低）
-    val resolution =
-        remember(entity.relativePath) {
-            if (file.exists()) {
-                try {
-                    val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                    BitmapFactory.decodeFile(file.absolutePath, opts)
-                    if (opts.outWidth > 0 && opts.outHeight > 0) "${opts.outWidth}×${opts.outHeight}" else null
-                } catch (_: Exception) {
-                    null
-                }
-            } else {
-                null
+    // 核心修复：`file.exists()`（stat）与读图片头都是磁盘操作，原来写在组合体里 ——
+    // 每张对比卡片进入组合就在主线程做一次 IO。改为在 IO 线程算一次后回填。
+    val cardInfo by produceState(initialValue = CompareCardInfo(), entity.relativePath) {
+        value =
+            withContext(Dispatchers.IO) {
+                val exists = file.exists()
+                val resolution =
+                    if (exists) {
+                        try {
+                            val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                            BitmapFactory.decodeFile(file.absolutePath, opts)
+                            if (opts.outWidth > 0 && opts.outHeight > 0) "${opts.outWidth}×${opts.outHeight}" else null
+                        } catch (_: Exception) {
+                            null
+                        }
+                    } else {
+                        null
+                    }
+                CompareCardInfo(exists = exists, resolution = resolution)
             }
-        }
+    }
+    val fileExists = cardInfo.exists
+    val resolution = cardInfo.resolution
 
     Column(
         modifier =
@@ -251,7 +270,7 @@ private fun CompareImageCard(
                     .background(MaterialTheme.colorScheme.surfaceVariant),
             contentAlignment = Alignment.Center,
         ) {
-            if (file.exists()) {
+            if (fileExists) {
                 AsyncImage(
                     model =
                         ImageRequest

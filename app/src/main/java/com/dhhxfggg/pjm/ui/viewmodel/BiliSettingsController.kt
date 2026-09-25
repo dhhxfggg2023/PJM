@@ -202,7 +202,10 @@ class BiliSettingsController(
                     }
                 }
             }
-            BiliBridge.cleanupEmptyBiliDirs(app)
+            // 核心修复：cleanupEmptyBiliDirs 是 suspend 但内部【没有】切线程，
+            // 它会做 Shizuku IPC + 递归遍历 Android/data/<pkg>/download。
+            // 原来这一行写在 withContext(IO) 块之外 → 直接跑在主线程，批量导入完成后卡 UI 甚至 ANR。
+            withContext(VaultManager.PjmDispatchers.IO) { BiliBridge.cleanupEmptyBiliDirs(app) }
             VaultManager.updateProgress(
                 1f,
                 app.getString(R.string.status_all_tasks_complete),
@@ -386,7 +389,8 @@ class BiliSettingsController(
                         }
                 }
             }
-            BiliBridge.cleanupEmptyBiliDirs(app)
+            // 核心修复：同 TASK_BILI_IMPORT_MERGED —— 这行原本跑在主线程（Shizuku IPC + 递归遍历）。
+            withContext(VaultManager.PjmDispatchers.IO) { BiliBridge.cleanupEmptyBiliDirs(app) }
             VaultManager.updateProgress(1f, app.getString(R.string.status_all_tasks_complete), taskId = VaultManager.TASK_BILI_IMPORT)
             delay(1000.milliseconds)
             VaultManager.clearProgress(VaultManager.TASK_BILI_IMPORT)

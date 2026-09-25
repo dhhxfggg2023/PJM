@@ -120,12 +120,12 @@ class VaultService : Service() {
         // 不同任务（如查重/删除）允许并行，互不阻塞。
         val taskId = if (action == ACTION_ENCRYPT) TASK_ENCRYPT else TASK_STORE
         currentTaskId = taskId
-        if (!VaultManager.tryBeginOperation(taskId)) {
-            PjmLogger.w("VaultService", "Operation already in progress, ignoring duplicate trigger")
-            return START_NOT_STICKY
-        }
 
-        // Android 14+ requirement: Specify foreground service type
+        // 核心修复：必须先满足前台服务契约。
+        // 本服务由 startForegroundService() 启动，系统要求 5 秒内调用 startForeground()，
+        // 否则抛 RemoteServiceException(ForegroundServiceDidNotStartInTime) 直接崩溃。
+        // 旧代码把这一步放在防连点判断之后：用户在任务进行中再次分享（非常容易触发），
+        // 就会既不 startForeground() 也不 stopSelf()，必然崩溃。
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(
                 NOTIFICATION_ID,
@@ -134,6 +134,19 @@ class VaultService : Service() {
             )
         } else {
             startForeground(NOTIFICATION_ID, createNotification("Preparing operation...", 0))
+        }
+
+        if (!VaultManager.tryBeginOperation(taskId)) {
+            PjmLogger.w("VaultService", "Operation already in progress, ignoring duplicate trigger")
+            // 若确实有任务在跑：生命周期交给那个任务自己的 finally 收尾。
+            // 这里不能无条件 stopSelf() —— 那会走 onDestroy → serviceScope.cancel()，
+            // 把正在进行的入库/加密任务一起杀掉（用户看到「分享成功但文件没进库」）。
+            // 若没有任何任务在跑，说明只是残留的活动标志，此时可以安全收尾。
+            if (currentJob?.isActive != true) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf(startId)
+            }
+            return START_NOT_STICKY
         }
 
         currentJob?.cancel()
@@ -208,8 +221,12 @@ class VaultService : Service() {
         fgsType: Int,
     ) {
         PjmLogger.w("VaultService", "Foreground service timed out for type $fgsType")
+        val taskId = currentTaskId
         currentJob?.cancel()
-        VaultManager.updateProgress(0f, "Operation timed out", taskId = TASK_ENCRYPT, isError = true)
+        VaultManager.updateProgress(0f, "Operation timed out", taskId = taskId, isError = true)
+        // 核心修复：超时同样必须释放任务槽位，否则该 taskId 会永久停留在 isActive=true，
+        // 之后所有同类型任务（入库/加密）都会被防连点逻辑拦下，只能重启应用才能恢复。
+        VaultManager.endOperation(taskId)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }

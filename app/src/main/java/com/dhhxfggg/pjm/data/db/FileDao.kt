@@ -78,6 +78,35 @@ interface FileDao {
     @Query("DELETE FROM files WHERE relativePath IN (:paths)")
     suspend fun _internalDeleteByRelativePaths(paths: List<String>)
 
+    @Query("UPDATE files SET relativePath = :newPath, name = :newName WHERE relativePath = :oldPath")
+    suspend fun _internalUpdateRelativePath(
+        oldPath: String,
+        newPath: String,
+        newName: String,
+    ): Int
+
+    /**
+     * 单事务重命名：把一条记录的 relativePath/name 迁移到新值（其余字段保持不变）。
+     *
+     * 核心修复：命名迁移原来用 `deleteByRelativePath(old)` + `upsert(new)` 两条独立语句，
+     * 中间进程被杀就会变成「磁盘文件已改名，数据库却一行都没有」—— UI 里完全看不到，
+     * 必须手动触发全量同步才能找回。
+     *
+     * 目标路径若已存在陈旧记录，先移除再更新，避免 `relativePath` 的唯一索引冲突
+     * （旧实现用 `@Upsert` 的 REPLACE 语义，同样会覆盖，这里保持一致但保证原子）。
+     *
+     * @return 实际被更新的行数（0 表示原本就没有该路径的记录，不算失败）
+     */
+    @Transaction
+    suspend fun renameRelativePath(
+        oldPath: String,
+        newPath: String,
+        newName: String,
+    ): Int {
+        _internalDeleteByRelativePaths(listOf(newPath))
+        return _internalUpdateRelativePath(oldPath, newPath, newName)
+    }
+
     /**
      * Batch deletion of files with SQLite variable limit handling (chunking).
      */

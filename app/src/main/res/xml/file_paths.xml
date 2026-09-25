@@ -5,11 +5,15 @@
     <files-path name="pjm_storage" path="PJMStorage/" />
     <files-path name="decrypted_files" path="PJMStorage/decrypted/" />
 
-    <!-- 应用缓存目录 -->
+    <!-- 应用缓存目录（规范名分享副本、更新包、解压临时索引都落在这里） -->
     <cache-path name="cache_root" path="." />
     <cache-path name="pjm_cache" path="pjm_temp/" />
 
-    <!-- 外部存储目录 -->
-    <external-path name="external_root" path="." />
+    <!--
+      外部存储：这里刻意【不】声明 `external-path path="."`。
+      那种写法允许为 /sdcard 下任意路径（包括别的应用放在共享存储里的文件）生成可授权 URI，
+      属于无谓的暴露面。本应用分享/打开的对象全部来自自身私有目录或缓存目录；
+      确实需要外部私有目录时用下面这条（仅限 getExternalFilesDir()）。
+    -->
     <external-files-path name="external_files" path="." />
 </paths>

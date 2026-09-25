@@ -84,7 +84,6 @@
     <string name="error_delete_failed">Deletion failed: %1$s</string>
     <string name="error_export_failed">Export failed: %1$s</string>
     <string name="error_read_failed">Read failed</string>
-    <string name="error_unable_to_open_external_tool">Unable to open external tool</string>
     <string name="error_processing_failed">Processing failed: %1$s</string>
     <string name="error_insufficient_storage_extract">Insufficient storage for extraction pre-processing</string>
     <string name="error_unsupported_preview">Preview not supported for this file type</string>
@@ -362,4 +361,14 @@
     <string name="update_banner_text">New version v%1$s available, tap to download</string>
     <string name="update_banner_downloading">Downloading new version… %1$d%%</string>
     <string name="update_banner_close">Dismiss</string>
+
+    <!-- System share -->
+    <string name="toast_share_nothing_available">No shareable file</string>
+    <string name="toast_share_partial_failed">%1$d file(s) could not be shared and were skipped</string>
+
+    <!-- Deletion -->
+    <string name="toast_delete_failed">%1$d file(s) could not be deleted and were kept in the vault</string>
+
+    <!-- Archive extraction -->
+    <string name="status_archive_failed">Extraction failed, stored as a plain file instead: %1$s</string>
 </resources>

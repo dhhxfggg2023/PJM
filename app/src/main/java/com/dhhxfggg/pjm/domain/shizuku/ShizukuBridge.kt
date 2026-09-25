@@ -204,10 +204,13 @@ object ShizukuBridge {
         var service = boundService
         if (service == null) {
             bindService()
-            // 等待绑定（最多 2 秒）
-            repeat(20) {
-                if (boundService != null) return@repeat
+            // 核心修复：原写法 `repeat(20) { if (boundService != null) return@repeat; delay(100) }`
+            // 中的 `return@repeat` 只结束【本次迭代】，并不能跳出循环 —— 服务在 100ms 内
+            // 绑定成功时仍会空转满 2 秒，每次冷启动的文件操作都要白等。
+            var waited = 0
+            while (boundService == null && waited < 20) {
                 kotlinx.coroutines.delay(100)
+                waited++
             }
             service = boundService
         }

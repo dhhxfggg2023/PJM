@@ -41,6 +41,11 @@ sealed class FileListItem {
     data class FileItem(
         val entity: FileEntity,
     ) : FileListItem()
+
+    companion object {
+        /** 日期分桶粒度（毫秒/天）；internal 供 getFlattenedFiles 使用 */
+        internal const val MILLIS_PER_DAY = 24L * 60 * 60 * 1000
+    }
 }
 
 /**
@@ -87,12 +92,23 @@ class FileViewerViewModel
                     .getFilesByCategory(category)
                     .map { files ->
                         withContext(Dispatchers.Default) {
-                            val grouped = files.groupBy { FileUtils.formatFileTime(it.lastModified) }
-
+                            // 核心修复：按【天】分桶后再格式化，而不是对每个文件各格式化一次。
+                            // 旧写法 `files.groupBy { FileUtils.formatFileTime(it.lastModified) }`
+                            // 会为每个文件创建 Date 并跑一遍 SimpleDateFormat.format ——
+                            // 万级库每次数据库写入都要做一万次，是滚动/删除时的主要卡顿来源。
+                            // 分桶后格式化次数从 O(文件数) 降到 O(天数)。
+                            //
+                            // 说明：repository 已按 lastModified DESC 排序，因此按插入顺序遍历
+                            // 天然保持「新的日期在前、组内也是新的在前」。
                             val result = mutableListOf<FileListItem>()
-                            grouped.forEach { (date, items) ->
-                                result.add(FileListItem.Header(date))
-                                items.forEach { result.add(FileListItem.FileItem(it)) }
+                            var currentBucket = Long.MIN_VALUE
+                            files.forEach { entity ->
+                                val bucket = Math.floorDiv(entity.lastModified, FileListItem.MILLIS_PER_DAY)
+                                if (bucket != currentBucket) {
+                                    currentBucket = bucket
+                                    result.add(FileListItem.Header(FileUtils.formatFileTime(entity.lastModified)))
+                                }
+                                result.add(FileListItem.FileItem(entity))
                             }
                             result
                         }

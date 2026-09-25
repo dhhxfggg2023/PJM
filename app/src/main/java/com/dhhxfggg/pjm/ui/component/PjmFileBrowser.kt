@@ -30,6 +30,8 @@ import com.composables.icons.lucide.*
 import com.dhhxfggg.pjm.R
 import com.dhhxfggg.pjm.domain.shizuku.EmbeddedPrivilegedIo
 import com.dhhxfggg.pjm.domain.util.BiliBridge
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
@@ -69,10 +71,15 @@ fun PjmFolderPickerDialog(
         value = EmbeddedPrivilegedIo.isAvailable(context)
     }
     // MT 管理器同款：所有文件访问权限（MANAGE_EXTERNAL_STORAGE）可浏览公共目录全部文件。
-    // 非 remember：每次重组实时读取，用户去系统设置授权返回后立即生效，无需重启选择器。
+    // 核心修复：以「App 回到前台」作为刷新时机 —— 用户去系统设置授权后返回时重读一次即可。
+    // 原来每次重组都直接调 Environment.isExternalStorageManager()（跨进程 IPC），
+    // 而搜索框每敲一个字符都会触发重组 → 每敲一下就是一次 binder 调用。
+    val isAppVisible = rememberIsAppVisible()
     val hasAllFilesAccess =
-        android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R &&
-            android.os.Environment.isExternalStorageManager()
+        remember(isAppVisible) {
+            android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R &&
+                Environment.isExternalStorageManager()
+        }
 
     // 核心修复：特权模式下 Android/data 下任意目录（含应用内部 download 等）必须用特权 IO 枚举，
     // File API 在 Android 14 读 Android/data/<pkg> 返回空 → 之前看不到 download 的根因。
@@ -92,132 +99,50 @@ fun PjmFolderPickerDialog(
     // 核心修复：只显示用户安装的应用（过滤全部系统应用，含更新过的系统应用）。
     // FLAG_SYSTEM 标记预装系统应用，FLAG_UPDATED_SYSTEM_APP 标记被 Play/商店更新过的
     // 系统应用（仍有系统签名），两者都应过滤。仅保留 B站/PJM 重要包例外。
-    var installedApps by remember { mutableStateOf<List<Triple<String, String, android.content.pm.ApplicationInfo?>>>(emptyList()) }
+    var installedApps by remember { mutableStateOf<List<Triple<String, String, ApplicationInfo?>>>(emptyList()) }
     LaunchedEffect(currentRawDir, currentDocDir) {
-        if (currentRawDir.absolutePath.endsWith("Android/data") && currentDocDir == null) {
-            val pm = context.packageManager
-            installedApps =
-                pm
-                    .getInstalledPackages(0)
-                    .mapNotNull { info ->
-                        try {
-                            val appInfo = info.applicationInfo ?: return@mapNotNull null
-                            val pkg = info.packageName
-                            val isSystemApp =
-                                (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0 ||
-                                    (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
-                            // 重要包例外：B站/PJM 即使预装也保留（核心功能）
-                            val isImportant = pkg in BiliBridge.BILI_PKGS || pkg == context.packageName
-                            if (isSystemApp && !isImportant) return@mapNotNull null
-                            val name = pm.getApplicationLabel(appInfo).toString()
-                            Triple(name, pkg, appInfo)
-                        } catch (_: Exception) {
-                            null
-                        }
-                    }.sortedBy { it.first.lowercase() }
-        } else {
-            installedApps = emptyList()
-        }
+        installedApps =
+            if (currentRawDir.absolutePath.endsWith("Android/data") && currentDocDir == null) {
+                // 核心修复：getInstalledPackages 是 PackageManager 的跨进程调用，设备应用多时数百毫秒。
+                // LaunchedEffect 默认跑在 Main，之前这里会直接卡住 UI；现在下移到 IO。
+                withContext(Dispatchers.IO) { loadInstalledApps(context) }
+            } else {
+                emptyList()
+            }
+    }
+
+    // 核心修复：目录内容加载与搜索关键词解耦。
+    // 原实现把 searchQuery 作为 remember 的 key，导致搜索框【每敲一个字符】就在主线程
+    // 重新执行 listFiles() / SAF 跨进程 query / DocumentFile 包装。现在：
+    //   1) 目录内容只在目录变化时于 IO 线程加载一次；
+    //   2) 搜索只在已加载的结果上做内存过滤。
+    val dirEntries by produceState(
+        initialValue = emptyList<Triple<String, Any, ApplicationInfo?>>(),
+        currentRawDir,
+        currentDocDir,
+        currentTreeUri,
+        installedApps,
+        privilegedEntries,
+        hasRootAuth,
+    ) {
+        value =
+            withContext(Dispatchers.IO) {
+                loadDirEntries(
+                    context = context,
+                    currentRawDir = currentRawDir,
+                    docDir = currentDocDir,
+                    currentTreeUri = currentTreeUri,
+                    installedApps = installedApps,
+                    privilegedEntries = privilegedEntries,
+                    hasRootAuth = hasRootAuth,
+                    persistedTreeUris = persistedPermissions.map { it.uri },
+                )
+            }
     }
 
     val nodes =
-        remember(currentRawDir, currentDocDir, searchQuery, installedApps, privilegedEntries) {
-            val docDir = currentDocDir
-            val baseNodes: List<Triple<String, Any, ApplicationInfo?>> =
-                if (docDir != null) {
-                    var filesList = docDir.listFiles().toList()
-                    if (filesList.isEmpty()) {
-                        val manualFiles = mutableListOf<DocumentFile>()
-                        try {
-                            val treeForQuery = currentTreeUri ?: docDir.uri
-                            val childrenUri =
-                                DocumentsContract.buildChildDocumentsUriUsingTree(
-                                    treeForQuery,
-                                    DocumentsContract.getDocumentId(docDir.uri),
-                                )
-                            context.contentResolver
-                                .query(
-                                    childrenUri,
-                                    arrayOf(android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID),
-                                    null,
-                                    null,
-                                    null,
-                                )?.use { cursor ->
-                                    while (cursor.moveToNext()) {
-                                        val id = cursor.getString(0)
-                                        val fileUri = android.provider.DocumentsContract.buildDocumentUriUsingTree(treeForQuery, id)
-                                        DocumentFile.fromSingleUri(context, fileUri)?.let { manualFiles.add(it) }
-                                    }
-                                }
-                            filesList = manualFiles
-                        } catch (_: Exception) {
-                        }
-                    }
-                    // 核心修复：目录选择器同时展示文件与目录（文件带图标不可选，仅供确认目录内容）
-                    filesList.map { Triple(it.name ?: "Unknown", it, null) }
-                } else {
-                    if (currentRawDir.absolutePath.endsWith("Android/data")) {
-                        installedApps.map { Triple(it.first, File(currentRawDir, it.second), it.third) }
-                    } else {
-                        // 核心修复：隐藏目录过滤不可靠（.data 会被误显示成 data）——
-                        // 用 isHidden + “以 . 开头”双重判断，彻底过滤 .xxx 隐藏目录。
-                        // 目录和文件都展示，文件仅供浏览确认，不可选择。
-                        // 特权模式可用时优先用 shell 身份枚举（Android 14 的 File API 读 Android/data 返回空）；
-                        // 特权不可用才用 File API。
-                        val fileNodes =
-                            if (privilegedAvailable && privilegedEntries != null) {
-                                val entries = privilegedEntries ?: emptyList()
-                                entries
-                                    .filter { !it.first.name.startsWith(".") }
-                                    .map { Triple(it.first.name, it.first, null) }
-                            } else {
-                                currentRawDir
-                                    .listFiles()
-                                    ?.filter { !it.isHidden && !it.name.startsWith(".") }
-                                    ?.map { Triple(it.name, it, null) } ?: emptyList()
-                            }
-                        // 核心修复：浏览 Android 目录时，File API 在 Android 14+ 看不到受保护的 data 目录（只剩 .data）。
-                        // 若已有根授权（SAF），用 SAF 构建 data 入口，让用户能进入 Android/data。
-                        if (currentRawDir.absolutePath.endsWith("Android") && hasRootAuth) {
-                            val rootTree =
-                                persistedPermissions.map { it.uri }.firstOrNull { tree ->
-                                    val treeId =
-                                        try {
-                                            android.provider.DocumentsContract.getTreeDocumentId(tree)
-                                        } catch (_: Exception) {
-                                            ""
-                                        }
-                                    treeId == "primary:" ||
-                                        treeId.contains("primary:Android/data") ||
-                                        treeId.contains("primary%3AAndroid%2Fdata")
-                                }
-                            if (rootTree != null) {
-                                val dataDoc =
-                                    try {
-                                        val subUri =
-                                            android.provider.DocumentsContract.buildDocumentUriUsingTree(
-                                                rootTree,
-                                                "primary:Android/data",
-                                            )
-                                        DocumentFile.fromSingleUri(context, subUri)
-                                    } catch (_: Exception) {
-                                        null
-                                    }
-                                if (dataDoc != null) {
-                                    // data 入口排在最前，优先展示（它受保护但 SAF 可达）
-                                    listOf(Triple("data", dataDoc, null)) + fileNodes
-                                } else {
-                                    fileNodes
-                                }
-                            } else {
-                                fileNodes
-                            }
-                        } else {
-                            fileNodes
-                        }
-                    }
-                }
-            baseNodes
+        remember(dirEntries, searchQuery) {
+            dirEntries
                 .filter {
                     it.first.contains(searchQuery, ignoreCase = true) ||
                         (it.second as? File)?.name?.contains(searchQuery, ignoreCase = true) == true
@@ -566,4 +491,138 @@ private fun FolderItem(
             }
         }
     }
+}
+
+/**
+ * 读取「只显示用户安装的应用」列表。
+ *
+ * 只显示用户安装的应用（过滤全部系统应用，含被商店更新过的系统应用）：
+ * `FLAG_SYSTEM` 标记预装系统应用，`FLAG_UPDATED_SYSTEM_APP` 标记被 Play/商店更新过的
+ * 系统应用（仍有系统签名），两者都应过滤。仅保留 B站/PJM 重要包例外。
+ *
+ * **必须在 IO 线程调用**：`getInstalledPackages` 是 PackageManager 跨进程调用。
+ */
+private fun loadInstalledApps(context: android.content.Context): List<Triple<String, String, ApplicationInfo?>> {
+    val pm = context.packageManager
+    return pm
+        .getInstalledPackages(0)
+        .mapNotNull { info ->
+            try {
+                val appInfo = info.applicationInfo ?: return@mapNotNull null
+                val pkg = info.packageName
+                val isSystemApp =
+                    (appInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0 ||
+                        (appInfo.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
+                // 重要包例外：B站/PJM 即使预装也保留（核心功能）
+                val isImportant = pkg in BiliBridge.BILI_PKGS || pkg == context.packageName
+                if (isSystemApp && !isImportant) return@mapNotNull null
+                val name = pm.getApplicationLabel(appInfo).toString()
+                Triple(name, pkg, appInfo)
+            } catch (_: Exception) {
+                null
+            }
+        }.sortedBy { it.first.lowercase() }
+}
+
+/**
+ * 枚举当前目录内容。
+ *
+ * **必须在 IO 线程调用** —— 内含 `listFiles()`、SAF 跨进程 `contentResolver.query()`
+ * 与 `DocumentFile` 包装。
+ *
+ * @return 每项为 (显示名, File 或 DocumentFile, ApplicationInfo?)
+ */
+@Suppress("LongParameterList")
+private fun loadDirEntries(
+    context: android.content.Context,
+    currentRawDir: File,
+    docDir: DocumentFile?,
+    currentTreeUri: Uri?,
+    installedApps: List<Triple<String, String, ApplicationInfo?>>,
+    privilegedEntries: List<Pair<File, Boolean>>?,
+    hasRootAuth: Boolean,
+    persistedTreeUris: List<Uri>,
+): List<Triple<String, Any, ApplicationInfo?>> {
+    if (docDir != null) {
+        var filesList = docDir.listFiles().toList()
+        if (filesList.isEmpty()) {
+            val manualFiles = mutableListOf<DocumentFile>()
+            try {
+                val treeForQuery = currentTreeUri ?: docDir.uri
+                val childrenUri =
+                    DocumentsContract.buildChildDocumentsUriUsingTree(
+                        treeForQuery,
+                        DocumentsContract.getDocumentId(docDir.uri),
+                    )
+                context.contentResolver
+                    .query(
+                        childrenUri,
+                        arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID),
+                        null,
+                        null,
+                        null,
+                    )?.use { cursor ->
+                        while (cursor.moveToNext()) {
+                            val id = cursor.getString(0)
+                            val fileUri = DocumentsContract.buildDocumentUriUsingTree(treeForQuery, id)
+                            DocumentFile.fromSingleUri(context, fileUri)?.let { manualFiles.add(it) }
+                        }
+                    }
+                filesList = manualFiles
+            } catch (_: Exception) {
+            }
+        }
+        // 核心修复：目录选择器同时展示文件与目录（文件带图标不可选，仅供确认目录内容）
+        return filesList.map { Triple(it.name ?: "Unknown", it, null) }
+    }
+
+    if (currentRawDir.absolutePath.endsWith("Android/data")) {
+        return installedApps.map { Triple(it.first, File(currentRawDir, it.second), it.third) }
+    }
+
+    // 核心修复：隐藏目录过滤不可靠（.data 会被误显示成 data）——
+    // 用 isHidden + “以 . 开头”双重判断，彻底过滤 .xxx 隐藏目录。
+    // 目录和文件都展示，文件仅供浏览确认，不可选择。
+    // 特权模式可用时优先用 shell 身份枚举（Android 14 的 File API 读 Android/data 返回空）；
+    // 特权不可用才用 File API。
+    val fileNodes =
+        if (privilegedEntries != null) {
+            privilegedEntries
+                .filter { !it.first.name.startsWith(".") }
+                .map { Triple(it.first.name, it.first, null) }
+        } else {
+            currentRawDir
+                .listFiles()
+                ?.filter { !it.isHidden && !it.name.startsWith(".") }
+                ?.map { Triple(it.name, it, null) } ?: emptyList()
+        }
+
+    // 核心修复：浏览 Android 目录时，File API 在 Android 14+ 看不到受保护的 data 目录（只剩 .data）。
+    // 若已有根授权（SAF），用 SAF 构建 data 入口，让用户能进入 Android/data。
+    if (currentRawDir.absolutePath.endsWith("Android") && hasRootAuth) {
+        val rootTree =
+            persistedTreeUris.firstOrNull { tree ->
+                val treeId =
+                    try {
+                        DocumentsContract.getTreeDocumentId(tree)
+                    } catch (_: Exception) {
+                        ""
+                    }
+                treeId == "primary:" ||
+                    treeId.contains("primary:Android/data") ||
+                    treeId.contains("primary%3AAndroid%2Fdata")
+            }
+        if (rootTree != null) {
+            val dataDoc =
+                try {
+                    val subUri = DocumentsContract.buildDocumentUriUsingTree(rootTree, "primary:Android/data")
+                    DocumentFile.fromSingleUri(context, subUri)
+                } catch (_: Exception) {
+                    null
+                }
+            // data 入口排在最前，优先展示（它受保护但 SAF 可达）
+            if (dataDoc != null) return listOf(Triple("data", dataDoc, null)) + fileNodes
+        }
+    }
+    return fileNodes
 }

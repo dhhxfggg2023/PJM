@@ -2,9 +2,9 @@ package com.dhhxfggg.pjm.ui.screen
 
 import android.app.Activity
 import android.content.Context
-import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.graphics.Bitmap
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
@@ -59,7 +59,9 @@ import com.composables.icons.lucide.Minimize
 import com.composables.icons.lucide.Play
 import com.dhhxfggg.pjm.R
 import com.dhhxfggg.pjm.domain.util.DiscoveryPlayerPool
+import com.dhhxfggg.pjm.domain.util.ShareUtils
 import com.dhhxfggg.pjm.ui.component.PjmDeleteConfirmDialog
+import com.dhhxfggg.pjm.ui.component.rememberIsAppVisible
 import com.dhhxfggg.pjm.ui.theme.rememberIconPack
 import com.dhhxfggg.pjm.ui.viewmodel.DiscoveryItem
 import com.dhhxfggg.pjm.ui.viewmodel.DiscoveryMode
@@ -125,9 +127,22 @@ fun DiscoveryScreen(
         }
     }
 
-    LaunchedEffect(pagerState.currentPage, uiState.items.size) {
+    // 核心修复：用「已停稳的页」而不是「当前页」来驱动副作用与播放器激活状态。
+    //
+    // 旧写法在两处直接读 `pagerState.currentPage`：
+    //  1) 顶层 `LaunchedEffect(pagerState.currentPage, ...)` —— 顶层读取快照状态意味着
+    //     **每次翻页都会重组整个 DiscoveryScreen**（含模式 Tab 与所有已组合页面）；
+    //  2) 每页的 `isActive = (currentPage == page)` —— 滑动过半阈值时旧页立刻 release、
+    //     新页 setMediaItem + prepare()，来回抖动还会反复重建解码器。
+    //
+    // `settledPage` 只在页面真正停稳后变化（derivedStateOf 会缓存，滑动过程中不触发重组），
+    // 两个问题一并解决；`LaunchedEffect` 的读取发生在 effect 体内，不构成组合期读取。
+    val settledPage by remember { derivedStateOf { pagerState.settledPage } }
+    val isPagerScrolling by remember { derivedStateOf { pagerState.isScrollInProgress } }
+
+    LaunchedEffect(settledPage, uiState.items.size) {
         isInteractionLocked = false
-        if (uiState.items.isNotEmpty() && (pagerState.currentPage >= (uiState.items.size - 2))) {
+        if (uiState.items.isNotEmpty() && (settledPage >= (uiState.items.size - 2))) {
             viewModel.loadMoreItems()
         }
     }
@@ -157,8 +172,10 @@ fun DiscoveryScreen(
                     Box(modifier = Modifier.fillMaxSize()) {
                         DiscoveryItemRenderer(
                             item = item,
-                            isActive = (pagerState.currentPage == page),
-                            isScrolling = pagerState.isScrollInProgress,
+                            // 用 settledPage：页面停稳后才成为激活项，避免滑动过半时
+                            // 播放器在两个页面之间来回抢占用/释放、反复 prepare 解码器。
+                            isActive = (settledPage == page),
+                            isScrolling = isPagerScrolling,
                             isFullScreen = isFullScreen,
                             bottomPadding = finalBottomPadding,
                             onToggleFullScreen = { onFullScreenChange(!isFullScreen) },
@@ -464,8 +481,12 @@ fun DiscoveryVideoRenderer(
         }
     }
 
-    LaunchedEffect(isActive, isScrolling) {
-        if (isActive && !isScrolling) exoPlayer?.play() else exoPlayer?.pause()
+    // 核心修复：播放条件必须并入「App 是否在前台」。
+    // 原来只看 isActive/isScrolling，按 Home 键或熄屏后这些条件依然成立，
+    // 视频音频会继续播放（耗电，隐私场景下也很尴尬）。
+    val isAppVisible = rememberIsAppVisible()
+    LaunchedEffect(isActive, isScrolling, isAppVisible) {
+        if (isActive && !isScrolling && isAppVisible) exoPlayer?.play() else exoPlayer?.pause()
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -707,19 +728,20 @@ fun DiscoveryModeTab(
 
 /**
  * Shares a discovery item using a system share intent.
+ *
+ * 统一走 [ShareUtils]：MIME 由真实文件类型推导，并写入 ClipData 保证读权限随 Intent 授予。
  */
 private fun shareDiscoveryItem(
     context: Context,
     item: DiscoveryItem,
     chooserTitle: String,
 ) {
-    val file = item.file
-    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
-    val intent =
-        Intent(Intent.ACTION_SEND).apply {
-            type = if (item is DiscoveryItem.Image) "image/*" else "video/*"
-            putExtra(Intent.EXTRA_STREAM, uri)
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
-    context.startActivity(Intent.createChooser(intent, chooserTitle))
+    val mimeType = if (item is DiscoveryItem.Image) "image/*" else "video/*"
+    val chooser = ShareUtils.createShareChooser(context, item.file, chooserTitle, mimeType)
+    if (chooser == null) {
+        Toast.makeText(context, context.getString(R.string.toast_share_nothing_available), Toast.LENGTH_SHORT).show()
+        return
+    }
+    runCatching { context.startActivity(chooser) }
+        .onFailure { Toast.makeText(context, context.getString(R.string.toast_share_nothing_available), Toast.LENGTH_SHORT).show() }
 }
