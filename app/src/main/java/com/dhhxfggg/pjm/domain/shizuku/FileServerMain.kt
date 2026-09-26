@@ -1,6 +1,7 @@
 package com.dhhxfggg.pjm.domain.shizuku
 
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * PJM 内置特权服务入口（app_process 启动）。
@@ -83,6 +84,9 @@ object FileServerMain {
                     )
             }?.forEach { it.delete() }
 
+        // 请求去重：保证同一个请求只会被处理一次（见 RequestDispatcher 说明）
+        val dispatcher = RequestDispatcher()
+
         while (true) {
             try {
                 val reqFiles =
@@ -90,6 +94,11 @@ object FileServerMain {
                         .listFiles { f -> f.isFile && isRequestFileName(f.name) }
                         ?.sortedBy { it.name }
                 reqFiles?.forEach { reqFile ->
+                    // 去重：已在处理中的请求直接跳过。
+                    // 大文件复制耗时超过一个轮询周期时，旧实现会为同一个请求再起一个线程，
+                    // 两个线程同时写同一目标文件 → 文件被截断为 0 → 客户端报「复制失败」。
+                    // 详见 [RequestDispatcher]。
+                    if (!dispatcher.tryAcquire(reqFile.name)) return@forEach
                     // 核心修复：每请求一个线程处理（并发），
                     // 避免删除大目录（10G+）的 deleteRecursively 阻塞整个服务，导致其他命令全部超时。
                     Thread {
@@ -99,7 +108,10 @@ object FileServerMain {
                             println("PJM privileged server: handle error: ${e.message}")
                             System.out.flush()
                         } finally {
+                            // 顺序要紧：先删请求文件，再释放认领。
+                            // 反过来的话，删除与释放之间的一轮轮询会重新认领同一个请求。
                             reqFile.delete()
+                            dispatcher.release(reqFile.name)
                         }
                     }.start()
                 }
@@ -155,6 +167,45 @@ object FileServerMain {
             }
         }
         return out to false
+    }
+
+    /**
+     * 请求分发器：保证**同一个请求只会被处理一次**。
+     *
+     * ## 为什么必须有它（一个真实 bug 的修复）
+     * 主循环每 100ms 重新列出请求目录。旧实现只靠「处理完就删掉请求文件」来去重，
+     * 但**大文件复制要花很久**，处理线程删掉文件之前，下一轮会再次看到同一个请求，
+     * 于是**又起一个线程处理它**。两个线程同时写同一个目标文件：
+     *
+     *  - 第二次 `outputStream()` 会把目标文件**截断为 0**；
+     *  - 先完成的线程执行 `destFile.length()`，于是响应变成 `OK\t0`；
+     *  - 客户端判定「复制了 0 字节」→ 当作失败 → 报
+     *    「复制视频流失败（特权服务未就绪或超时）」→ **视频永远无法导入**。
+     *
+     * 文件越大复制越久、被重复处理的窗口越大，所以 4K / 1080P60 这类
+     * 大码率视频最容易失败 —— 与线上观察完全一致。
+     *
+     * 更危险的是：两个线程交错写入，最终长度可能**看起来正确**，
+     * 但内容已经损坏 —— 那会产出「导入成功却打不开」的坏文件。
+     *
+     * 抽成独立类是为了可测：并发时序在真机上极难稳定复现。
+     */
+    internal class RequestDispatcher {
+        private val inFlight = ConcurrentHashMap.newKeySet<String>()
+
+        /**
+         * 尝试认领一个请求。返回 false 表示**已在处理中**，本次必须跳过。
+         * 原子操作（基于 Set.add），因此并发轮询下也只会有一个成功。
+         */
+        fun tryAcquire(name: String): Boolean = inFlight.add(name)
+
+        /** 处理结束（请求文件已删除后）调用，允许该名字将来被重新认领。 */
+        fun release(name: String) {
+            inFlight.remove(name)
+        }
+
+        /** 当前在处理的请求数（诊断用） */
+        val inFlightCount: Int get() = inFlight.size
     }
 
     /**

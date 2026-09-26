@@ -9,6 +9,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * 批量遍历（`walk` 指令）的解析与遍历测试。
@@ -22,6 +23,59 @@ import java.io.File
 class BiliWalkTest {
     @get:Rule
     val tmp = TemporaryFolder()
+
+    // ---------- 请求去重（真实 bug 的回归测试） ----------
+
+    /**
+     * 回归测试：**同一个请求绝不能被处理两次**。
+     *
+     * 线上现象：某个视频老是导入失败，报「复制视频流失败（特权服务未就绪或超时）」。
+     * 根因是大文件复制耗时超过一个轮询周期，服务端为同一个请求起了两个线程，
+     * 两个线程同时写同一目标文件 —— 第二次 open 把文件截断为 0，先完成的线程
+     * 于是执行 `destFile.length()` 得到 0，响应变成 `OK\t0`；客户端判定
+     * 「复制了 0 字节」→ 当作失败。文件越大越容易中，所以 4K/1080P60 最常失败。
+     */
+    @Test
+    fun requestDispatcher_neverDispatchesSameRequestTwice() {
+        val d = FileServerMain.RequestDispatcher()
+
+        assertTrue("首次应认领成功", d.tryAcquire("req_123_456.txt"))
+        assertFalse("处理中不得重复认领", d.tryAcquire("req_123_456.txt"))
+        assertFalse("再多轮询也不得重复认领", d.tryAcquire("req_123_456.txt"))
+        assertEquals(1, d.inFlightCount)
+    }
+
+    @Test
+    fun requestDispatcher_allowsReacquireAfterRelease() {
+        val d = FileServerMain.RequestDispatcher()
+        d.tryAcquire("req_1_1.txt")
+        d.release("req_1_1.txt")
+        assertTrue("释放后应可重新认领（同名请求可能再次到来）", d.tryAcquire("req_1_1.txt"))
+    }
+
+    @Test
+    fun requestDispatcher_tracksDifferentRequestsIndependently() {
+        val d = FileServerMain.RequestDispatcher()
+        assertTrue(d.tryAcquire("req_1_a.txt"))
+        assertTrue("不同请求互不影响", d.tryAcquire("req_2_b.txt"))
+        assertEquals(2, d.inFlightCount)
+        d.release("req_1_a.txt")
+        assertFalse("释放其中一个不应影响另一个", d.tryAcquire("req_2_b.txt"))
+    }
+
+    /** 并发认领时只能有一个成功 —— 这正是旧实现缺失的原子性 */
+    @Test
+    fun requestDispatcher_isAtomicUnderConcurrency() {
+        val d = FileServerMain.RequestDispatcher()
+        val winners = AtomicInteger(0)
+        val threads =
+            (1..32).map {
+                Thread { if (d.tryAcquire("req_same.txt")) winners.incrementAndGet() }
+            }
+        threads.forEach { it.start() }
+        threads.forEach { it.join() }
+        assertEquals("32 个线程并发认领同一请求，只能有一个成功", 1, winners.get())
+    }
 
     // ---------- 响应解析 ----------
 
