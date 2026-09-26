@@ -21,6 +21,13 @@ object EmbeddedPrivilegedIo {
     private const val REQ_PREFIX = "req_"
     private const val RESP_PREFIX = "resp_"
 
+    /**
+     * 请求临时文件的前缀。**刻意不以 `req_` 开头** —— 服务端按 `req_*.txt` 判定
+     * 待处理请求，若临时文件也叫 `req_<seq>.tmp`，会被服务端当成半成品请求处理并删除，
+     * 随后的 renameTo 就失败了，客户端只能空等到超时。
+     */
+    private const val TMP_PREFIX = "tmp_"
+
     /** 等待响应超时（毫秒）：普通命令 15s；删除/复制大文件（GB 级）用长超时 180s */
     private const val RESPONSE_TIMEOUT = 15000L
     private const val DELETE_RESPONSE_TIMEOUT = 180000L
@@ -64,9 +71,13 @@ object EmbeddedPrivilegedIo {
 
             try {
                 // 写请求（原子）
-                val tmpReq = File(dir, "${REQ_PREFIX}$seq.tmp")
-                tmpReq.writeText(AUTH_TOKEN + "\n" + args.joinToString("\t") + "\n")
-                if (tmpReq.renameTo(reqFile)) tmpReq.delete() else reqFile.writeText(AUTH_TOKEN + "\n" + args.joinToString("\t") + "\n")
+                // 临时文件名**刻意不以 `req_` 开头**：服务端按 `req_*.txt` 判定请求，
+                // 若临时文件也叫 `req_xxx.tmp`，服务端会把半成品当请求处理并把它删掉，
+                // 导致随后的 renameTo 失败、客户端空等 15 秒超时。（服务端也已收紧判定）
+                val tmpReq = File(dir, "$TMP_PREFIX$seq")
+                val body = AUTH_TOKEN + "\n" + args.joinToString("\t") + "\n"
+                tmpReq.writeText(body)
+                if (tmpReq.renameTo(reqFile)) tmpReq.delete() else reqFile.writeText(body)
 
                 // 等待响应
                 val deadline = System.currentTimeMillis() + timeoutMs
@@ -154,14 +165,77 @@ object EmbeddedPrivilegedIo {
     }
 
     /**
-     * 递归收集目录下所有文件路径。
+     * 递归收集目录下所有文件，返回 **路径 → 字节数**。
+     *
+     * ## 为什么返回 size（重要）
+     * 旧实现返回 `List<String>`，把已经从服务端拿到的 size **丢掉了**。
+     * 调用方（BiliBridge 要按体积挑出最大的视频/音频 m4s）只能**逐个文件**
+     * 再调一次 `listFiles` 去查体积 —— 那是一次完整的 IPC，而每次 IPC 的下限是
+     * [POLL_INTERVAL]（100ms）。实测 903 个文件的目录因此多花了 258 次往返。
+     *
+     * 手里已有的信息就不要再跨进程问第二遍。
+     *
+     * ## 实现
+     * 优先走服务端 `walk` 指令 —— **整棵树一次 IPC**。如果树大到一次响应装不下
+     * （服务端返回 ERR，见 `WALK_MAX_ENTRIES`），退回逐目录遍历；回退路径同样保留 size。
      */
     suspend fun walkFiles(
         context: Context,
         path: String,
         maxDepth: Int = 8,
-    ): List<String> {
-        val results = mutableListOf<String>()
+    ): Map<String, Long> {
+        val batch = walkOnce(context, path, maxDepth)
+        if (batch != null) return batch
+        return walkPerDirectory(context, path, maxDepth)
+    }
+
+    /** 走 `walk` 指令一次拿全树；服务端不支持或树太大时返回 null（交由回退处理） */
+    private suspend fun walkOnce(
+        context: Context,
+        path: String,
+        maxDepth: Int,
+    ): Map<String, Long>? {
+        val resp = exec(context, "walk", path, maxDepth.toString()) ?: return null
+        if (!resp.startsWith("OK\t")) {
+            PjmLogger.w(TAG, "walk 未成功，退回逐目录遍历: ${resp.take(120)}")
+            return null
+        }
+        val payload = resp.removePrefix("OK\t")
+        return parseWalkResponse(payload)
+    }
+
+    /**
+     * 解析 `walk` 响应体：每行一项 `F<NUL>绝对路径<NUL>字节数`。
+     *
+     * 抽出来是为了可测 —— 分隔符嵌套是最容易写错且真机上不易发现的地方。
+     *
+     * ## 为什么用 NUL 而不是 `|`
+     * `|` 是合法文件名字符，路径里出现它就会被切错且**不会报错**（只会静默给出
+     * 错误路径 + 0 大小）。NUL 是 POSIX 文件名中唯一不可能出现的字节。
+     *
+     * 容错策略：**跳过**格式不符的项，而不是整体失败。一项坏掉不应让整次扫描落空。
+     */
+    internal fun parseWalkResponse(payload: String): Map<String, Long> {
+        if (payload.isEmpty()) return emptyMap()
+        val result = HashMap<String, Long>(payload.length / 48 + 16)
+        payload.lineSequence().forEach { line ->
+            if (line.isEmpty()) return@forEach
+            // 需要 F / 路径 / 大小 三段；目录项（D）在 walk 里不会出现，出现也忽略
+            val p = line.split('\u0000')
+            if (p.size >= 3 && p[0] == "F") {
+                result[p[1]] = p[2].toLongOrNull() ?: 0L
+            }
+        }
+        return result
+    }
+
+    /** 回退路径：逐目录遍历（每个目录一次 IPC）。同样返回 size，不再让调用方重复查询。 */
+    private suspend fun walkPerDirectory(
+        context: Context,
+        path: String,
+        maxDepth: Int,
+    ): Map<String, Long> {
+        val results = LinkedHashMap<String, Long>()
 
         suspend fun walk(
             p: String,
@@ -174,7 +248,7 @@ object EmbeddedPrivilegedIo {
                 if (e.isDirectory) {
                     walk(full, depth + 1)
                 } else {
-                    results.add(full)
+                    results[full] = e.size
                 }
             }
         }

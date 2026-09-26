@@ -260,20 +260,24 @@ object ShizukuBridge {
         }
 
     /**
-     * 递归查找目录下所有文件（shell 身份，用于扫描 B 站缓存）。
+     * 递归查找目录下所有文件，返回 **路径 → 字节数**（shell 身份，用于扫描 B 站缓存）。
+     *
+     * 返回 size 是刻意为之：调用方要按体积挑文件，若只给路径，
+     * 它就只能逐个文件再查一遍体积 —— 每次都是一轮 IPC。详见
+     * [EmbeddedPrivilegedIo.walkFiles]。
      */
     suspend fun walkFiles(
         context: Context,
         path: String,
         maxDepth: Int = 8,
-    ): List<String> =
+    ): Map<String, Long> =
         withContext(Dispatchers.IO) {
             val ctx = appContext ?: context
             // 内置模式优先
             if (EmbeddedPrivilegedIo.isAvailable(ctx)) {
                 return@withContext EmbeddedPrivilegedIo.walkFiles(ctx, path, maxDepth)
             }
-            val results = mutableListOf<String>()
+            val results = LinkedHashMap<String, Long>()
 
             suspend fun walk(
                 p: String,
@@ -286,7 +290,7 @@ object ShizukuBridge {
                     if (e.isDirectory) {
                         walk(full, depth + 1)
                     } else {
-                        results.add(full)
+                        results[full] = e.size
                     }
                 }
             }

@@ -191,9 +191,12 @@ object BiliBridge {
             PjmLogger.i(TAG, "Shizuku 扫描: $base", traceId = traceId)
             onProgress("正在遍历缓存目录...")
 
-            // 递归收集所有文件
+            // 递归收集所有文件（路径 → 体积）。
+            // 体积由遍历一次带回：旧实现在这里只拿路径，然后再对每个 m4s
+            // 单独 listFiles 查一次体积 —— 129 个条目 / 258 个 m4s 就是 258 次额外 IPC，
+            // 每次下限 100ms，是"导入未合并视频卡住"的主因。
             val allFiles = ShizukuBridge.walkFiles(context, base, maxDepth = 6)
-            val entryFiles = allFiles.filter { it.endsWith("entry.json") }
+            val entryFiles = allFiles.keys.filter { it.endsWith("entry.json") }
             onProgress("发现 ${entryFiles.size} 个缓存条目...")
 
             entryFiles.forEachIndexed { entryIndex, entryPath ->
@@ -209,20 +212,15 @@ object BiliBridge {
                             ?: json.optJSONObject("ep")?.optString("index_title")?.let { sanitizeBiliTitle(it, "") }
 
                     // 收集同目录树下的 m4s（取体积最大的两个作为视频/音频）
+                    // 体积直接取自遍历结果，不再逐文件回查。
                     val folder = entryPath.substringBeforeLast('/')
                     val m4sFiles =
                         allFiles
-                            .filter {
-                                it.startsWith(folder) &&
-                                    (it.endsWith(".m4s") || it.endsWith("0.m4s") || it.endsWith("1.m4s"))
-                            }.mapNotNull { path ->
-                                val size =
-                                    ShizukuBridge
-                                        .listFiles(context, path.substringBeforeLast('/'))
-                                        ?.find { it.name == path.substringAfterLast('/') }
-                                        ?.size ?: 0L
-                                path to size
-                            }.sortedByDescending { it.second }
+                            .filter { (p, _) ->
+                                p.startsWith(folder) && p.endsWith(".m4s")
+                            }.entries
+                            .map { it.key to it.value }
+                            .sortedByDescending { it.second }
 
                     if (m4sFiles.size >= 2) {
                         val videoPath = m4sFiles[0].first

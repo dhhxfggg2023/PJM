@@ -34,8 +34,19 @@ object FileServerMain {
     private const val REQ_PREFIX = "req_"
     private const val RESP_PREFIX = "resp_"
 
+    /** 客户端写请求用的临时文件前缀（与 EmbeddedPrivilegedIo.TMP_PREFIX 保持一致） */
+    private const val TMP_PREFIX = "tmp_"
+
     /** 轮询间隔（毫秒） */
     private const val POLL_INTERVAL = 100L
+
+    /**
+     * `walk` 单次响应允许返回的最大文件数。
+     *
+     * 超过就返回 `ERR` 而不是**静默截断** —— 截断会让调用方拿到一份"看起来完整、
+     * 实际缺文件"的列表，那种错误比慢得多更糟。调用方收到 ERR 会退回逐目录遍历。
+     */
+    private const val WALK_MAX_ENTRIES = 20000
 
     @JvmStatic
     fun main(args: Array<String>) {
@@ -59,18 +70,24 @@ object FileServerMain {
         System.out.flush()
         if (!ioDir.exists()) ioDir.mkdirs()
 
-        // 启动时清理残留请求/响应文件。
+        // 启动时清理残留请求/响应/临时文件。
         // 核心修复：只删本协议自己的文件。旧实现是 `listFiles()?.forEach { it.delete() }`，
         // 会把该目录下的**所有**文件删光 —— 一旦传错目录就是一次数据破坏。
         ioDir
-            .listFiles { f -> f.isFile && (f.name.startsWith(REQ_PREFIX) || f.name.startsWith(RESP_PREFIX)) }
-            ?.forEach { it.delete() }
+            .listFiles { f ->
+                f.isFile &&
+                    (
+                        f.name.startsWith(REQ_PREFIX) ||
+                            f.name.startsWith(RESP_PREFIX) ||
+                            f.name.startsWith(TMP_PREFIX)
+                    )
+            }?.forEach { it.delete() }
 
         while (true) {
             try {
                 val reqFiles =
                     ioDir
-                        .listFiles { f -> f.isFile && f.name.startsWith(REQ_PREFIX) }
+                        .listFiles { f -> f.isFile && isRequestFileName(f.name) }
                         ?.sortedBy { it.name }
                 reqFiles?.forEach { reqFile ->
                     // 核心修复：每请求一个线程处理（并发），
@@ -96,6 +113,66 @@ object FileServerMain {
             }
         }
     }
+
+    /**
+     * 递归遍历目录树，返回（每项形如 `F<NUL>绝对路径<NUL>字节数`）以及是否因超限被截断。
+     *
+     * 抽成独立函数是为了可测：这段逻辑跑在 shell 进程里，真机上很难触发边界情况。
+     *
+     * ## 为什么字段分隔符用 NUL 而不是 `|`
+     * `|` 是**合法文件名字符**。用 `|` 分隔时，路径里一旦出现 `|` 就会被切错，
+     * 而且不会报错 —— 只会静默给出错误的路径和 0 大小。NUL（U+0000）是 POSIX
+     * 文件名中**唯一保证不可能出现**的字节，因此不会与内容冲突。
+     * 项与项之间用换行分隔。
+     *
+     * 用显式栈而非递归 —— B 站缓存目录层级深、目录多，递归有爆栈风险。
+     *
+     * @return `first` 为条目列表；`second` 为 true 表示达到 [WALK_MAX_ENTRIES] 被截断，
+     *   调用方此时**必须**报错而不是使用这份不完整的列表。
+     */
+    internal fun walkTree(
+        root: File,
+        maxDepth: Int,
+    ): Pair<List<String>, Boolean> {
+        val out = ArrayList<String>(1024)
+        val stack = ArrayDeque<Pair<File, Int>>()
+        stack.addLast(root to 0)
+        while (stack.isNotEmpty()) {
+            val (dir, depth) = stack.removeLast()
+            if (depth > maxDepth) continue
+            val children = dir.listFiles() ?: continue
+            for (c in children) {
+                try {
+                    if (c.isDirectory) {
+                        stack.addLast(c to depth + 1)
+                    } else {
+                        if (out.size >= WALK_MAX_ENTRIES) return out to true
+                        out.add("F\u0000${c.absolutePath}\u0000${c.length()}")
+                    }
+                } catch (_: Exception) {
+                    // 单个条目读不到（权限/竞态）不应中断整棵树
+                }
+            }
+        }
+        return out to false
+    }
+
+    /**
+     * 判断文件名是否是一个**待处理的请求**。
+     *
+     * ## 为什么必须同时要求 `.txt` 结尾（这是一个真实 bug 的修复）
+     * 客户端写请求是「先写临时文件、再 rename」以保证原子性，临时文件叫
+     * `req_<seq>.tmp`。旧实现只判断 `startsWith(REQ_PREFIX)`，于是：
+     *
+     *  1. 服务端把**尚未写完的临时文件**当成请求处理了；
+     *  2. 处理完照例删除请求文件 —— 把客户端的临时文件删掉了；
+     *  3. 客户端的 `renameTo` 因此失败，退回非原子写入；
+     *  4. 而服务端早已把响应写到了 `resp_<seq>.tmp.txt`（**没有任何人读这个文件**）；
+     *  5. 客户端等满 15 秒超时 → 文件操作**静默失败**。
+     *
+     * 只认 `.txt` 结尾即可根除：临时文件永远匹配不上，恰好写完的请求才被处理。
+     */
+    internal fun isRequestFileName(name: String): Boolean = name.startsWith(REQ_PREFIX) && name.endsWith(".txt")
 
     private fun handleRequest(
         reqFile: File,
@@ -180,6 +257,21 @@ object FileServerMain {
                             "OK\t${f.readText(Charsets.UTF_8)}"
                         } else {
                             "ERR\tread failed"
+                        }
+                    }
+                    "walk" -> {
+                        val rootPath = parts.getOrNull(1) ?: ""
+                        val maxDepth = parts.getOrNull(2)?.toIntOrNull() ?: 8
+                        val root = File(rootPath)
+                        if (!root.exists() || !root.isDirectory) {
+                            "OK\t"
+                        } else {
+                            val (items, truncated) = walkTree(root, maxDepth)
+                            if (truncated) {
+                                "ERR\twalk too large (>$WALK_MAX_ENTRIES)"
+                            } else {
+                                "OK\t${items.joinToString("\n")}"
+                            }
                         }
                     }
                     "ping" -> "OK\tpong"
