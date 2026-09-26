@@ -61,6 +61,7 @@ import com.dhhxfggg.pjm.R
 import com.dhhxfggg.pjm.domain.util.DiscoveryPlayerPool
 import com.dhhxfggg.pjm.domain.util.ShareUtils
 import com.dhhxfggg.pjm.ui.component.PjmDeleteConfirmDialog
+import com.dhhxfggg.pjm.ui.component.PjmEmptyState
 import com.dhhxfggg.pjm.ui.component.rememberIsAppVisible
 import com.dhhxfggg.pjm.ui.theme.rememberIconPack
 import com.dhhxfggg.pjm.ui.viewmodel.DiscoveryItem
@@ -155,9 +156,24 @@ fun DiscoveryScreen(
                 .fillMaxSize()
                 .background(color = if (isFullScreen) Color.Black else Color.Transparent),
     ) {
-        if (uiState.items.isEmpty()) {
+        if (uiState.items.isEmpty() && uiState.isLoading) {
+            // 还在加载：显示转圈
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = MaterialTheme.colorScheme.primary, strokeWidth = 3.dp)
+            }
+        } else if (uiState.items.isEmpty()) {
+            // 核心修复：加载完成但确实没有内容。
+            // 原实现只有上面那个分支 —— 库为空时转圈会**永远转下去**，
+            // 用户会以为卡住了，实际是根本没东西可看。
+            Box(
+                modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                PjmEmptyState(
+                    icon = iconPack.stateEmpty,
+                    title = stringResource(R.string.discovery_empty_title),
+                    description = stringResource(R.string.discovery_empty_hint),
+                )
             }
         } else {
             VerticalPager(

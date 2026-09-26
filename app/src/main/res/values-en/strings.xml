@@ -104,6 +104,8 @@
     <string name="cat_others_display">Others</string>
     <string name="empty_vault_msg">No encrypted items yet</string>
     <string name="empty_vault_hint">Share files to PJM and they will be imported automatically</string>
+    <string name="discovery_empty_title">Nothing here yet</string>
+    <string name="discovery_empty_hint">Share photos or videos to PJM and they will show up here</string>
 
     <!-- Dialogs -->
     <string name="dialog_delete_title">Confirm Deletion</string>

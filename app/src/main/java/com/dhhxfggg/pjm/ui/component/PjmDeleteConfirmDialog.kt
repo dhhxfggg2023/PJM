@@ -31,6 +31,8 @@ import com.dhhxfggg.pjm.data.model.FileEntity
 import com.dhhxfggg.pjm.domain.util.FileUtils
 import com.dhhxfggg.pjm.domain.util.ThumbnailCache
 import com.dhhxfggg.pjm.domain.util.VaultManager
+import com.dhhxfggg.pjm.ui.component.DangerConfirmButton
+import com.dhhxfggg.pjm.ui.component.TextActionButton
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -75,15 +77,21 @@ fun PjmDeleteConfirmDialog(
         icon = icon,
         title = title,
         confirmButton = {
-            Button(
-                onClick = { onConfirm(selected.toList()) },
+            // 统一按钮体系：危险确认用实心红胶囊（DangerConfirmButton），
+            // 与「删除入口」(DangerActionButton，淡红) 形成明确的强度递进 ——
+            // 「你点了删除」和「你确认真的要删」必须看起来不一样。
+            DangerConfirmButton(
+                text = confirmText ?: stringResource(R.string.action_delete_selected, selected.size),
                 enabled = selected.isNotEmpty(),
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-            ) {
-                Text(confirmText ?: stringResource(R.string.action_delete_selected, selected.size))
-            }
+                onClick = { onConfirm(selected.toList()) },
+            )
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } },
+        dismissButton = {
+            TextActionButton(
+                text = stringResource(R.string.action_cancel),
+                onClick = onDismiss,
+            )
+        },
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
             // 已选统计 + 全选/取消全选
