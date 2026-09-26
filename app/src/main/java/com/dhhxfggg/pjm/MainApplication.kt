@@ -1,6 +1,7 @@
 package com.dhhxfggg.pjm
 
 import android.app.Application
+import android.widget.Toast
 import androidx.core.content.edit
 import coil3.ImageLoader
 import coil3.PlatformContext
@@ -13,6 +14,7 @@ import coil3.video.VideoFrameDecoder
 import com.dhhxfggg.pjm.data.db.FileDao
 import com.dhhxfggg.pjm.data.db.ViewHistoryDao
 import com.dhhxfggg.pjm.domain.shizuku.ShizukuBridge
+import com.dhhxfggg.pjm.domain.util.IntegritySweeper
 import com.dhhxfggg.pjm.domain.util.PjmLogger
 import com.dhhxfggg.pjm.domain.util.SettingsManager
 import com.dhhxfggg.pjm.domain.util.ThumbnailSyncManager
@@ -27,6 +29,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import okio.Path.Companion.toPath
 
 /**
@@ -145,6 +148,24 @@ class MainApplication :
         applicationScope.launch(VaultManager.PjmDispatchers.IO) {
             runCatching { VaultManager.cleanupStaleTempFiles(this@MainApplication) }
                 .onFailure { e -> PjmLogger.w("MainApplication", "容器临时文件清理跳过: ${e.message}") }
+        }
+
+        // 每日完整性抽查：几十 GB 长期放在闪存上，静默损坏是真实存在的。
+        // 每 24 小时抽查一批（500 个）文件的哈希，轮流推进、后台静默，
+        // **只读 + 只报告，绝不改动任何文件**（详见 IntegritySweeper）。
+        // 只有发现问题时才提示，且提示只说明数量与去处，不弹窗打断。
+        applicationScope.launch(VaultManager.PjmDispatchers.IO) {
+            runCatching {
+                val entry = EntryPointAccessors.fromApplication(this@MainApplication, MainAppEntryPoint::class.java)
+                val report = IntegritySweeper.sweepIfDue(this@MainApplication, entry.fileDao())
+                if (report != null && (report.missing > 0 || report.corrupted > 0)) {
+                    val n = report.missing + report.corrupted
+                    withContext(Dispatchers.Main) {
+                        val text = getString(R.string.toast_integrity_sweep_found, n)
+                        Toast.makeText(this@MainApplication, text, Toast.LENGTH_LONG).show()
+                    }
+                }
+            }.onFailure { e -> PjmLogger.w("MainApplication", "完整性抽查跳过: ${e.message}") }
         }
 
         // 一次性命名迁移：把旧命名规则的加密容器统一为最新规范

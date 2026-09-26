@@ -106,6 +106,7 @@
     <string name="empty_vault_hint">Share files to PJM and they will be imported automatically</string>
     <string name="discovery_empty_title">Nothing here yet</string>
     <string name="discovery_empty_hint">Share photos or videos to PJM and they will show up here</string>
+    <string name="toast_integrity_sweep_found">Integrity sweep found %1$d abnormal file(s). See exported logs for details.</string>
 
     <!-- Dialogs -->
     <string name="dialog_delete_title">Confirm Deletion</string>

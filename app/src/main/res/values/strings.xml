@@ -106,6 +106,7 @@
     <string name="empty_vault_hint">把文件「分享」到 PJM 即可自动入库</string>
     <string name="discovery_empty_title">这里还没有内容</string>
     <string name="discovery_empty_hint">把图片或视频分享到 PJM，这里就会出现</string>
+    <string name="toast_integrity_sweep_found">完整性抽查发现 %1$d 个文件异常，详见「导出日志」</string>
 
     <!-- Dialogs -->
     <string name="dialog_delete_title">确认删除</string>

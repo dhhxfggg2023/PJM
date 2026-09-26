@@ -33,8 +33,11 @@ object VaultScanner {
      * `contentHash` 列被两种语义复用：普通文件存 MD5（32 位十六进制），
      * 视频存「时长|宽|高|dHash」感知指纹。加前缀后完整性检查才能区分二者，
      * 否则每次查重之后做完整性检查都会把所有视频误判为「已损坏」。
+     *
+     * 声明为 **internal** 是为了让 [IntegritySweeper] 共用同一常量 ——
+     * 判定「能否按 MD5 比对」时必须用它，字面量抄第二遍迟早会漂移。
      */
-    private const val VIDEO_FP_PREFIX = "fp:"
+    internal const val VIDEO_FP_PREFIX = "fp:"
 
     /** 是否为感知指纹（而非 MD5）。同时兼容加前缀之前写入的历史数据。 */
     private fun isPerceptualFingerprint(hash: String?): Boolean = hash != null && hash.startsWith(VIDEO_FP_PREFIX)
