@@ -148,6 +148,18 @@ fun DiscoveryScreen(
         }
     }
 
+    // 逐张记录"真的看过"：只有翻到并停稳的那一张才算，未翻到的条目不受牵连。
+    //
+    // 用 settledPage（页面停稳）而不是 currentPage：翻页动画期间被划过的那几张
+    // 并没有真正停留观看，过早计入等于重复了"取批即算看过"的老毛病。
+    // 去重集合按 mode 重建（切分类时才丢），同一个路径只写一次库。
+    val viewedPaths = remember(uiState.mode) { mutableSetOf<String>() }
+    LaunchedEffect(settledPage, uiState.items.size) {
+        val shown = uiState.items.getOrNull(settledPage) ?: return@LaunchedEffect
+        val path = shown.entity.relativePath
+        if (viewedPaths.add(path)) viewModel.markViewed(path)
+    }
+
     val finalBottomPadding = if (isFullScreen) 0.dp else bottomPadding
 
     Box(

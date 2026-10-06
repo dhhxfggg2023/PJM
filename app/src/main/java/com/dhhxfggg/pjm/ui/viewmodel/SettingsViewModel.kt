@@ -22,6 +22,29 @@ import javax.inject.Inject
 import kotlin.time.Duration.Companion.milliseconds
 
 /**
+ * 随机抽取图片后的处理方式。
+ */
+enum class RandomShareMode {
+    /** 加密打包成单个 `.pjm` 容器存入 PJM 库（好友解密后得到盲盒） */
+    PACKAGE_PJM,
+
+    /** 直接把抽取到的源图片交给系统分享（不打包、不改字节） */
+    DIRECT_FILES,
+}
+
+/**
+ * 直接分享源文件的结果。
+ *
+ * @param paths    抽取到的源文件绝对路径（交给系统分享用）
+ * @param skipped  抽到但文件已不在磁盘上的数量（据实告知用户，而不是静默少发）
+ */
+@Immutable
+data class RandomPickResult(
+    val paths: List<String>,
+    val skipped: Int,
+)
+
+/**
  * UI State for the Settings Screen.
  */
 @Immutable
@@ -268,7 +291,7 @@ class SettingsViewModel
                 }
                 VaultManager.updateProgress(0.05f, app.getString(R.string.status_random_pick), taskId = VaultManager.TASK_ENCRYPT)
                 // 从 PJM 图片库（images 分类）随机取 count 张（不足则取全部）
-                val entities = fileDao.getRandomFilesByCategory(VaultManager.CAT_IMAGES, count.coerceIn(1, 500))
+                val entities = fileDao.getRandomFilesByCategory(VaultManager.CAT_IMAGES, count.coerceIn(1, MAX_RANDOM_PICK))
                 if (entities.isEmpty()) {
                     VaultManager.clearProgress(VaultManager.TASK_ENCRYPT)
                     Toast.makeText(app, app.getString(R.string.toast_random_pick_empty), Toast.LENGTH_LONG).show()
@@ -327,6 +350,42 @@ class SettingsViewModel
                 delay(1500)
                 VaultManager.clearProgress(VaultManager.TASK_ENCRYPT)
                 VaultManager.endOperation(VaultManager.TASK_ENCRYPT)
+            }
+        }
+
+        /**
+         * 随机抽取图片并**直接分享源文件**（不打包成 .pjm）。
+         *
+         * 与 [randomPickAndEncrypt] 的差别只在最后一步：这里不动文件字节，
+         * 把抽到的原图逐个交给系统分享。抽到但磁盘上已不存在的会被跳过，
+         * 数量经 [onPicked] 据实回报，避免"以为发了 N 张、实际少了"。
+         *
+         * 分享动作由调用方（Activity/Compose）执行 —— ViewModel 不持有启动 Activity 的职责。
+         */
+        fun randomPickForDirectShare(
+            count: Int,
+            onPicked: (RandomPickResult) -> Unit = {},
+        ) {
+            viewModelScope.launch {
+                val entities =
+                    runCatching {
+                        fileDao.getRandomFilesByCategory(VaultManager.CAT_IMAGES, count.coerceIn(1, MAX_RANDOM_PICK))
+                    }.getOrDefault(emptyList())
+                if (entities.isEmpty()) {
+                    Toast.makeText(app, app.getString(R.string.toast_random_pick_empty), Toast.LENGTH_LONG).show()
+                    onPicked(RandomPickResult(emptyList(), 0))
+                    return@launch
+                }
+                val files =
+                    entities.mapNotNull { entity ->
+                        VaultManager.getFileFromEntity(app, entity).takeIf { it.exists() }
+                    }
+                if (files.isEmpty()) {
+                    Toast.makeText(app, app.getString(R.string.toast_random_pick_empty), Toast.LENGTH_LONG).show()
+                    onPicked(RandomPickResult(emptyList(), entities.size))
+                    return@launch
+                }
+                onPicked(RandomPickResult(files.map { it.absolutePath }, entities.size - files.size))
             }
         }
 
@@ -466,5 +525,15 @@ class SettingsViewModel
                     VaultManager.endOperation(VaultManager.TASK_INTEGRITY)
                 }
             }
+        }
+
+        companion object {
+            /**
+             * 随机抽取的数量上限。
+             *
+             * 直发源文件时上限不宜太大：接收方（微信/QQ）对一次性多图有各自的限制，
+             * 界面上的快捷档位（5/10/20/50）也正好与之对齐。
+             */
+            const val MAX_RANDOM_PICK = 50
         }
     }

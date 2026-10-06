@@ -144,12 +144,8 @@ class DatabaseMigrationTest {
             assertEquals(5, viewHistoryDao.getUnviewedPathsByCategory(cat).size)
 
             // 标记前两张已看
-            viewHistoryDao.markViewedAll(
-                listOf(
-                    ViewHistoryEntity("$cat/img_1.jpg", 100L),
-                    ViewHistoryEntity("$cat/img_2.jpg", 200L),
-                ),
-            )
+            viewHistoryDao.markViewed(ViewHistoryEntity("$cat/img_1.jpg", 100L))
+            viewHistoryDao.markViewed(ViewHistoryEntity("$cat/img_2.jpg", 200L))
 
             val unviewed = viewHistoryDao.getUnviewedPathsByCategory(cat)
             assertEquals(3, unviewed.size)

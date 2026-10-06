@@ -1,5 +1,6 @@
 package com.dhhxfggg.pjm.ui.screen
 
+import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
@@ -28,6 +29,7 @@ import com.dhhxfggg.pjm.R
 import com.dhhxfggg.pjm.data.model.FileEntity
 import com.dhhxfggg.pjm.data.model.Settings
 import com.dhhxfggg.pjm.domain.util.PjmLogger
+import com.dhhxfggg.pjm.domain.util.ShareUtils
 import com.dhhxfggg.pjm.domain.util.UpdateChecker
 import com.dhhxfggg.pjm.domain.util.UpdateController
 import com.dhhxfggg.pjm.domain.util.VaultManager
@@ -35,6 +37,7 @@ import com.dhhxfggg.pjm.ui.component.PjmAeroDialog
 import com.dhhxfggg.pjm.ui.component.PjmDuplicateCompareDialog
 import com.dhhxfggg.pjm.ui.component.PjmFolderPickerDialog
 import com.dhhxfggg.pjm.ui.viewmodel.MainViewModel
+import com.dhhxfggg.pjm.ui.viewmodel.RandomShareMode
 import com.dhhxfggg.pjm.ui.viewmodel.SettingsViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -61,6 +64,8 @@ fun SettingsScreen(
     mainViewModel: MainViewModel = hiltViewModel(),
 ) {
     val context = LocalContext.current
+    // 直接分享源文件需要 Activity 才能 startActivity（Context 可能不是 Activity）
+    val activity = context as? Activity
     val scope = rememberCoroutineScope()
     val uiState by settingsViewModel.uiState.collectAsState()
     val settings = uiState.settings
@@ -483,6 +488,7 @@ fun SettingsScreen(
 
     if (showRandomShareDialog) {
         var count by remember { mutableStateOf(10) }
+        var shareMode by remember { mutableStateOf(RandomShareMode.PACKAGE_PJM) }
         PjmAeroDialog(
             onDismissRequest = { showRandomShareDialog = false },
             title = stringResource(R.string.dialog_title_random_share),
@@ -490,7 +496,13 @@ fun SettingsScreen(
                 Button(
                     onClick = {
                         showRandomShareDialog = false
-                        settingsViewModel.randomPickAndEncrypt(count)
+                        when (shareMode) {
+                            RandomShareMode.PACKAGE_PJM -> settingsViewModel.randomPickAndEncrypt(count)
+                            RandomShareMode.DIRECT_FILES ->
+                                settingsViewModel.randomPickForDirectShare(count) { result ->
+                                    shareRandomPickedFiles(activity, result.paths, result.skipped)
+                                }
+                        }
                     },
                 ) { Text(stringResource(R.string.action_start_random)) }
             },
@@ -498,6 +510,34 @@ fun SettingsScreen(
         ) {
             Column(Modifier.fillMaxWidth()) {
                 Text(stringResource(R.string.dialog_msg_random_share), style = MaterialTheme.typography.bodySmall)
+                Spacer(Modifier.height(16.dp))
+                Text(stringResource(R.string.label_random_mode), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(8.dp))
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                    SegmentedButton(
+                        selected = shareMode == RandomShareMode.PACKAGE_PJM,
+                        onClick = { shareMode = RandomShareMode.PACKAGE_PJM },
+                        shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                    ) { Text(stringResource(R.string.mode_random_package)) }
+                    SegmentedButton(
+                        selected = shareMode == RandomShareMode.DIRECT_FILES,
+                        onClick = { shareMode = RandomShareMode.DIRECT_FILES },
+                        shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                    ) { Text(stringResource(R.string.mode_random_direct)) }
+                }
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text =
+                        stringResource(
+                            if (shareMode == RandomShareMode.PACKAGE_PJM) {
+                                R.string.hint_random_package
+                            } else {
+                                R.string.hint_random_direct
+                            },
+                        ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 Spacer(Modifier.height(16.dp))
                 Text(stringResource(R.string.label_random_count), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(8.dp))
@@ -523,7 +563,7 @@ fun SettingsScreen(
                             .filter { it.isDigit() }
                             .take(3)
                             .toIntOrNull()
-                            ?.coerceIn(1, 500) ?: count
+                            ?.coerceIn(1, SettingsViewModel.MAX_RANDOM_PICK) ?: count
                     },
                     modifier = Modifier.fillMaxWidth(),
                     label = { Text(stringResource(R.string.label_random_count)) },
@@ -749,4 +789,67 @@ fun SettingsScreen(
             settingsViewModel.importBiliMergedVideos(selected)
         })
     }
+}
+
+/**
+ * 把随机抽取到的源文件交给系统分享。
+ *
+ * 与"打包成 .pjm"的区别只在最后一步：这里不改动文件字节，接收方拿到的是原始图片。
+ * 读权限通过 [ShareUtils]（FileProvider + ClipData）授予，直接传 `file://` 在
+ * Android 7+ 会抛 FileUriExposedException。
+ *
+ * 抽到但已不在磁盘上的会先被告知，避免"以为发了 N 张、实际少了"。
+ */
+private fun shareRandomPickedFiles(
+    activity: Activity?,
+    filePaths: List<String>,
+    skipped: Int,
+) {
+    if (activity == null || filePaths.isEmpty()) return
+    if (skipped > 0) {
+        val skippedToast =
+            Toast.makeText(
+                activity,
+                activity.getString(R.string.toast_random_share_skipped, skipped),
+                Toast.LENGTH_SHORT,
+            )
+        skippedToast.show()
+    }
+    val (uris, failed) = ShareUtils.toShareUris(activity, filePaths.map(::File))
+    if (failed.isNotEmpty()) {
+        val partialToast =
+            Toast.makeText(
+                activity,
+                activity.getString(R.string.toast_share_partial_failed, failed.size),
+                Toast.LENGTH_SHORT,
+            )
+        partialToast.show()
+    }
+    val chooser =
+        ShareUtils.createShareChooser(
+            activity,
+            uris,
+            activity.getString(R.string.chooser_title_share_content),
+        )
+    if (chooser == null) {
+        val nothingToast =
+            Toast.makeText(
+                activity,
+                activity.getString(R.string.toast_share_nothing_available),
+                Toast.LENGTH_SHORT,
+            )
+        nothingToast.show()
+        return
+    }
+    runCatching { activity.startActivity(chooser) }
+        .onFailure {
+            PjmLogger.e("SettingsScreen", "No activity to handle share", it)
+            val failedToast =
+                Toast.makeText(
+                    activity,
+                    activity.getString(R.string.toast_share_nothing_available),
+                    Toast.LENGTH_SHORT,
+                )
+            failedToast.show()
+        }
 }
