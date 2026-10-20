@@ -122,12 +122,32 @@ PJM 是一个 Android 本地文件保险库应用。它把图片、视频、音�
 
 ## 构建
 
-**环境要求**：JDK 17、Android SDK（compileSdk 37）、NDK 28.x、CMake 3.22+。
+**环境要求**：JDK 17 或更高（实测 JDK 25 可用）、Android SDK（compileSdk 37）、NDK 28.x、CMake 3.22+。
+
+刚克隆下来还需要三步，否则第一条报错会让你以为代码有问题：
+
+1. **指明 SDK 位置**。在项目根目录建一个 `local.properties`（已被 `.gitignore` 排除，不会误提交）：
+
+   ```properties
+   sdk.dir=D\:\\Android\\Sdk
+   ```
+
+   或者设环境变量 `ANDROID_HOME`。两者都没有时的报错是 `SDK location not found`。
+
+2. **手动装 NDK 与 CMake**（AGP 不会自动下载，缺了会在配置阶段失败）：
+
+   ```bash
+   sdkmanager "ndk;28.2.13676358" "cmake;3.22.1"
+   ```
+
+3. **直接构建**，不需要任何密钥：debug 签名由 Android Studio 自动生成；本仓库的 release 目前沿用 debug 签名配置，因此 `assembleRelease` 同样开箱即可出包。
 
 ```bash
 ./gradlew :app:assembleDebug      # 调试包
 ./gradlew :app:assembleRelease    # 发布包
 ```
+
+**维护者注意**：不要提交 `systemProp.gradle.user.home`（Windows 绝对路径会让 Linux/macOS 的构建在项目根建出 `D:` 目录），也不要提交 `gradle/gradle-daemon-jvm.properties` 里的 `toolchainVersion`（它把 Gradle 守护进程钉死到某个 JDK，别人机器上没有时 Gradle 会去 foojay 下载整个 JDK，下不到就直接构建失败）。需要自定义 Gradle 缓存位置时用环境变量 `GRADLE_USER_HOME`。
 
 常用任务：
 
