@@ -88,7 +88,9 @@ class TransferViewModel
 
         private fun localAddresses(): List<String> =
             runCatching {
-                NetworkInterface.getNetworkInterfaces().toList()
+                NetworkInterface
+                    .getNetworkInterfaces()
+                    .toList()
                     .filter { it.isUp && !it.isLoopback }
                     .flatMap { it.inetAddresses.toList() }
                     .filterIsInstance<Inet4Address>()

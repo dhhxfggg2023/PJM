@@ -37,7 +37,10 @@ interface FileRepository {
      * @param daySeed 非空时按「日期种子」固定挑选（同一天封面不变，实现"每日一换"）；
      *                为空时就是原来的随机挑。
      */
-    suspend fun getCoverFile(category: String, daySeed: Int?): FileEntity?
+    suspend fun getCoverFile(
+        category: String,
+        daySeed: Int?,
+    ): FileEntity?
 
     /** 库内文件总数（启动判断用，不加载实体） */
     suspend fun totalFileCount(): Long

@@ -28,7 +28,7 @@ import java.io.File
  */
 internal fun thumbnailSizeFor(gridSpanCount: Int): Int =
     when (gridSpanCount) {
-        1, 2 -> 640
+        1, 2 -> 512
         3, 4 -> 320
         else -> 160
     }

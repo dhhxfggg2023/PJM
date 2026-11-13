@@ -3,6 +3,7 @@ package com.dhhxfggg.pjm.ui.screen
 import android.content.Context
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -10,7 +11,6 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -58,9 +58,9 @@ import com.dhhxfggg.pjm.domain.util.VaultManager
 import com.dhhxfggg.pjm.ui.component.FileCard
 import com.dhhxfggg.pjm.ui.component.PjmAeroDialog
 import com.dhhxfggg.pjm.ui.component.PjmDeleteConfirmDialog
-import com.dhhxfggg.pjm.ui.component.PjmRenameDialog
 import com.dhhxfggg.pjm.ui.component.PjmEmptyState
 import com.dhhxfggg.pjm.ui.component.PjmIconButton
+import com.dhhxfggg.pjm.ui.component.PjmRenameDialog
 import com.dhhxfggg.pjm.ui.component.SelectableFileCard
 import com.dhhxfggg.pjm.ui.theme.rememberIconPack
 import com.dhhxfggg.pjm.ui.viewmodel.CryptoViewModel
@@ -453,7 +453,9 @@ fun FileViewerScreen(
                         scrollFraction = {
                             // 旧算法用「首个可见项 / 最后一项」：滑到底时首个可见项还差一屏，
                             // 进度条永远到不了底。改成按实际可滚动距离算，到底就是 1f。
-                            val visible = gridState.layoutInfo.visibleItemsInfo.size.coerceAtLeast(1)
+                            val visible =
+                                gridState.layoutInfo.visibleItemsInfo.size
+                                    .coerceAtLeast(1)
                             when {
                                 flattenedItems.size <= 1 -> 0f
                                 !gridState.canScrollForward -> 1f
@@ -461,7 +463,7 @@ fun FileViewerScreen(
                                     (
                                         gridState.firstVisibleItemIndex.toFloat() /
                                             (flattenedItems.size - visible).coerceAtLeast(1)
-                                        ).coerceIn(0f, 1f)
+                                    ).coerceIn(0f, 1f)
                             }
                         },
                         onScrubToFraction = { f ->
@@ -547,7 +549,9 @@ fun FileViewerScreen(
                         totalItems = flattenedItems.size,
                         scrollActive = listState.isScrollInProgress,
                         scrollFraction = {
-                            val visible = listState.layoutInfo.visibleItemsInfo.size.coerceAtLeast(1)
+                            val visible =
+                                listState.layoutInfo.visibleItemsInfo.size
+                                    .coerceAtLeast(1)
                             when {
                                 flattenedItems.size <= 1 -> 0f
                                 !listState.canScrollForward -> 1f
@@ -555,7 +559,7 @@ fun FileViewerScreen(
                                     (
                                         listState.firstVisibleItemIndex.toFloat() /
                                             (flattenedItems.size - visible).coerceAtLeast(1)
-                                        ).coerceIn(0f, 1f)
+                                    ).coerceIn(0f, 1f)
                             }
                         },
                         onScrubToFraction = { f ->
@@ -814,7 +818,6 @@ private fun BoxScope.QuickScrollScrubber(
                             // requiredWidthIn：气泡挂在 26dp 宽的滑条里，普通 widthIn 会被父约束压成
                             // 几十 dp，只剩一个字（之前一直显示"2"就是这个原因）
                             .requiredWidthIn(max = 160.dp),
-
                     shape = RoundedCornerShape(12.dp),
                     color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.96f),
                     shadowElevation = 4.dp,

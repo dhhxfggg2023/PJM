@@ -3,7 +3,6 @@ package com.dhhxfggg.pjm.domain.transfer
 import com.dhhxfggg.pjm.data.model.FileEntity
 import java.io.BufferedOutputStream
 import java.io.File
-import java.io.IOException
 import java.io.OutputStream
 import java.net.ServerSocket
 import java.net.Socket
@@ -125,11 +124,18 @@ class VaultTransferServer(
         body.append("li{margin:2px 0;font-size:13px}.muted{color:#888;font-size:12px}")
         body.append("</style></head><body>")
         body.append("<h2>PJM 文件传输</h2>")
-        body.append("<p class='muted'>共 ").append(filtered.size).append(" 个文件 · ").append(formatSize(totalBytes)).append("</p>")
+        body
+            .append("<p class='muted'>共 ")
+            .append(filtered.size)
+            .append(" 个文件 · ")
+            .append(formatSize(totalBytes))
+            .append("</p>")
         body.append("<form method='get' action='/'>")
         body.append("<select name='category'><option value=''>全部分类</option>")
         listOf("images" to "图片", "videos" to "视频", "bili_videos" to "B站视频", "audios" to "音频", "texts" to "文本", "pjm" to "PJM 容器", "others" to "其它").forEach { (key, label) ->
-            body.append("<option value='").append(key).append("'"); if (key == category) body.append(" selected"); body.append(">").append(label).append("</option>")
+            body.append("<option value='").append(key).append("'")
+            if (key == category) body.append(" selected")
+            body.append(">").append(label).append("</option>")
         }
         body.append("</select> ")
         body.append("<input type='date' name='from' value='").append(from).append("'> ")
@@ -137,7 +143,11 @@ class VaultTransferServer(
         body.append("<button type='submit'>筛选</button></form><ul>")
         filtered.take(20000).forEach { entity ->
             body.append("<li><a href='/file?path=").append(urlEncode(entity.relativePath)).append("'>")
-            body.append(escape(displayName(entity))).append("</a> <span class='muted'>").append(formatSize(entity.size)).append("</span></li>")
+            body
+                .append(escape(displayName(entity)))
+                .append("</a> <span class='muted'>")
+                .append(formatSize(entity.size))
+                .append("</span></li>")
         }
         body.append("</ul></body></html>")
         writeText(out, 200, "text/html; charset=utf-8", body.toString())
@@ -181,7 +191,16 @@ class VaultTransferServer(
         header.append("Content-Type: application/octet-stream\r\n")
         header.append("Accept-Ranges: bytes\r\n")
         header.append("Content-Length: ").append(contentLength).append("\r\n")
-        if (partial) header.append("Content-Range: bytes ").append(start).append('-').append(end).append('/').append(length).append("\r\n")
+        if (partial) {
+            header
+                .append("Content-Range: bytes ")
+                .append(start)
+                .append('-')
+                .append(end)
+                .append('/')
+                .append(length)
+                .append("\r\n")
+        }
         header.append("Content-Disposition: attachment; filename*=UTF-8''").append(urlEncode(displayName(entity))).append("\r\n")
         header.append("Connection: close\r\n\r\n")
         out.write(header.toString().toByteArray(Charsets.UTF_8))
@@ -231,10 +250,19 @@ class VaultTransferServer(
 
     private fun urlDecode(value: String): String = runCatching { URLDecoder.decode(value, "UTF-8") }.getOrDefault(value)
 
-    private fun urlEncode(value: String): String = runCatching { java.net.URLEncoder.encode(value, "UTF-8").replace("+", "%20") }.getOrDefault(value)
+    private fun urlEncode(value: String): String =
+        runCatching {
+            java.net.URLEncoder
+                .encode(value, "UTF-8")
+                .replace("+", "%20")
+        }.getOrDefault(value)
 
     private fun escape(value: String): String =
-        value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
+        value
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("\"", "&quot;")
 
     private fun parseDate(raw: String): Long? {
         if (raw.isBlank()) return null

@@ -14,11 +14,6 @@ import kotlinx.coroutines.flow.Flow
 @Dao
 interface FileDao {
     /**
-     * Retrieves all files within a specific category, ordered by modification date descending.
-     * @param category The folder/category name to filter by.
-     * @return A [Flow] emitting the list of files whenever the database changes.
-     */
-    /**
      * 按天聚合入库数量，给首页的热力图用。
      *
      * importedAt 为 0 的老记录退回 lastModified；按本地时区取日期。
@@ -29,6 +24,11 @@ interface FileDao {
     )
     suspend fun getImportCountsByDay(): List<ImportDayCount>
 
+    /**
+     * Retrieves all files within a specific category, ordered by modification date descending.
+     * @param category The folder/category name to filter by.
+     * @return A [Flow] emitting the list of files whenever the database changes.
+     */
     @Query("SELECT * FROM files WHERE category = :category ORDER BY lastModified DESC")
     fun getFilesByCategory(category: String): Flow<List<FileEntity>>
 

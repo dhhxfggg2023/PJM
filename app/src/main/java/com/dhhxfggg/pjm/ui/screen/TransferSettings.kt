@@ -60,8 +60,9 @@ internal fun TransferSettings(
                     )
                 }
                 Text(
-                    text = "USB 连接：电脑执行 adb forward tcp:" + state.port + " tcp:" + state.port +
-                        "，再打开 http://127.0.0.1:" + state.port + "/",
+                    text =
+                        "USB 连接：电脑执行 adb forward tcp:" + state.port + " tcp:" + state.port +
+                            "，再打开 http://127.0.0.1:" + state.port + "/",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),

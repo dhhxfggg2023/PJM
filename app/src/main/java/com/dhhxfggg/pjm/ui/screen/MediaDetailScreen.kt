@@ -12,8 +12,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -38,8 +38,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
@@ -921,8 +921,6 @@ private fun AudioViewer(
         }
         ViewerTopBar(title = "", onBack = onBack, modifier = Modifier.align(Alignment.TopCenter))
     }
-
-
 }
 
 // ---------------- 文本 ----------------
@@ -966,6 +964,8 @@ private fun TextViewer(
 
     var rawText by remember { mutableStateOf<String?>(null) }
     var pages by remember { mutableStateOf<List<List<String>>?>(null) }
+    // 整本还没排完时给个明确提示：不然用户只看到页码在涨，以为卡住了
+    var layoutDone by remember { mutableStateOf(false) }
     var chapters by remember { mutableStateOf<List<Pair<String, Int>>>(emptyList()) }
     var fontSize by remember { mutableFloatStateOf(prefs.getFloat("font_size", 17f)) }
     var lineSpacing by remember { mutableFloatStateOf(prefs.getFloat("line_spacing", 1.8f)) }
@@ -987,6 +987,7 @@ private fun TextViewer(
     LaunchedEffect(rawText, fontSize, lineSpacing, marginDp, configuration.screenWidthDp, configuration.screenHeightDp) {
         val body = rawText ?: return@LaunchedEffect
         pages = null
+        layoutDone = false
         val paragraphs =
             body
                 .lineSequence()
@@ -1024,6 +1025,7 @@ private fun TextViewer(
             chapters = cache.chapters.map { (paragraphIndex, title) -> title to cache.pageOf(paragraphIndex) }
             val savedPage = prefs.getInt(positionKey, 0)
             if (savedPage in cachedPages.indices) pagerState.scrollToPage(savedPage)
+            layoutDone = true
             return@LaunchedEffect
         }
 
@@ -1087,6 +1089,7 @@ private fun TextViewer(
         pages = result
         chapters = chapterEntries
         writePageCache(cacheFile, paragraphs.size, pageStarts, chapterParagraphs)
+        layoutDone = true
         if (!restored && saved in result.indices) pagerState.scrollToPage(saved)
     }
 
@@ -1229,7 +1232,8 @@ private fun TextViewer(
                                 Text(
                                     text =
                                         (pagerState.currentPage + 1).toString() + "/" + pageList.size +
-                                            "  " + ((pagerState.currentPage + 1) * 100 / pageList.size) + "%",
+                                            "  " + ((pagerState.currentPage + 1) * 100 / pageList.size) + "%" +
+                                            (if (layoutDone) "" else " · 排版中"),
                                     color = Color.White.copy(alpha = 0.8f),
                                     fontSize = 12.sp,
                                 )

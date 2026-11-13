@@ -39,7 +39,6 @@ import com.dhhxfggg.pjm.domain.util.VaultManager
 import com.dhhxfggg.pjm.ui.component.PjmAeroDialog
 import com.dhhxfggg.pjm.ui.component.PjmDuplicateCompareDialog
 import com.dhhxfggg.pjm.ui.component.PjmFolderPickerDialog
-import com.dhhxfggg.pjm.ui.theme.PjmBackgroundBackdrop
 import com.dhhxfggg.pjm.ui.viewmodel.RandomShareMode
 import com.dhhxfggg.pjm.ui.viewmodel.SettingsViewModel
 import com.dhhxfggg.pjm.ui.viewmodel.TakeoverViewModel
@@ -270,7 +269,7 @@ fun SettingsScreen(
                                 SettingsPage.Discovery -> "发现页"
                                 SettingsPage.AppsTakeover -> stringResource(R.string.settings_title_app_takeover)
                                 SettingsPage.Audio -> stringResource(R.string.settings_title_audio_playback)
-                    SettingsPage.Transfer -> "传输到电脑"
+                                SettingsPage.Transfer -> "传输到电脑"
                                 SettingsPage.Maintenance -> stringResource(R.string.settings_cat_maintenance)
                                 null -> stringResource(R.string.settings_title)
                             },

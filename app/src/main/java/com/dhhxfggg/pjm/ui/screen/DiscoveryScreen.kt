@@ -255,8 +255,6 @@ fun DiscoveryScreen(
                                 viewModel.loadMoreItems()
                             },
                         )
-
-
                     }
                 }
             }

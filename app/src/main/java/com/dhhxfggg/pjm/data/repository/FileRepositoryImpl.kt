@@ -117,7 +117,10 @@ class FileRepositoryImpl
             return picked
         }
 
-        override suspend fun getCoverFile(category: String, daySeed: Int?): FileEntity? {
+        override suspend fun getCoverFile(
+            category: String,
+            daySeed: Int?,
+        ): FileEntity? {
             if (daySeed == null) return getRandomFileByCategory(category)
             val count = fileDao.getCountByCategory(category)
             if (count <= 0) return null
