@@ -207,6 +207,24 @@ object ImageFingerprintCache {
         }
     }
 
+    /** 32×32 灰度是否已落盘且大小正确（只做 stat，不读内容）。 */
+    fun hasGray32(
+        context: Context,
+        entity: FileEntity,
+    ): Boolean {
+        val f = gray32File(context, entity)
+        return f.exists() && f.length() == 1024L
+    }
+
+    /** 验证签名是否已落盘（只做 stat + 长度判断，不读取内容）。 */
+    fun hasVerifySignature(
+        context: Context,
+        entity: FileEntity,
+    ): Boolean {
+        val f = verifySigFile(context, entity)
+        return f.exists() && f.length() > VERIFY_SIG_HEADER
+    }
+
     /** 解析验证签名头部，返回 (width, height)；非法返回 null */
     private fun sigDims(sig: ByteArray): Pair<Int, Int>? {
         if (sig.size < VERIFY_SIG_HEADER) return null
@@ -380,7 +398,7 @@ object ImageFingerprintCache {
      * 纯内存验证：比例取自指纹（原图宽高），像素取自 64 宽灰度签名。
      * 数学上与 [verifyByDecoding] 等价 —— 后者也是各缩到 64 宽后逐像素比亮度。
      */
-    private fun verifyBySignature(
+    internal fun verifyBySignature(
         fp1: ImageFingerprint,
         sig1: ByteArray,
         fp2: ImageFingerprint,

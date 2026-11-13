@@ -264,6 +264,7 @@ object BiliBridge {
      *
      * @return 清理的文件夹数量
      */
+
     internal suspend fun cleanupEmptyBiliDirs(
         context: Context,
         onProgress: (String) -> Unit = {},
@@ -279,6 +280,13 @@ object BiliBridge {
         if (cleaned > 0) PjmLogger.i(TAG, "无音视频残留文件夹清理完成，共 $cleaned 个", traceId = traceId)
         return cleaned
     }
+
+    /** 路径是否位于已知 B 站包名的 download 目录内（目录清理的安全边界）。 */
+    private fun isInsideBiliDownload(path: String): Boolean =
+        BILI_PKGS.any { pkg ->
+            val root = "/storage/emulated/0/Android/data/$pkg/download"
+            path == root || path.startsWith("$root/")
+        }
 
     /** 判断文件是否为音视频（B站 m4s 碎片 / 常规视频 / 常规音频） */
     private fun isMediaFileName(name: String): Boolean {
@@ -300,6 +308,8 @@ object BiliBridge {
         onProgress: (String) -> Unit,
         label: String,
     ): Int {
+        // 纵深防御：即使调用方漏判，也只允许清理 B 站下载目录内的树
+        if (!isInsideBiliDownload(base)) return 0
         var cleaned = 0
         // 1) 收集 base 下所有子目录（不含 base 本身）
         val dirs = mutableListOf<String>()
@@ -423,7 +433,12 @@ object BiliBridge {
                     if (base.exists() || ShizukuBridge.exists(context, selectedPath)) {
                         scanMergedShizukuDir(context, selectedPath, results, onProgress, maxDepth = 0)
                         // 核心新增：已合并视频扫描同样顺手清理所选目录下不含音视频的残留文件夹
-                        cleanupDirsWithoutMedia(context, selectedPath, onProgress, "已合并扫描")
+                        // 核心修复（数据安全）：只有当选中的目录确实位于 B 站下载目录内时才清理。
+                        // 原实现对任意 selectedPath 递归删除"不含音视频"的目录 —— 用户若选了
+                        // Download 或存储根目录，会把文档、工程、其他应用数据整树删掉。
+                        if (isInsideBiliDownload(selectedPath)) {
+                            cleanupDirsWithoutMedia(context, selectedPath, onProgress, "已合并扫描")
+                        }
                         if (results.isNotEmpty()) return@withContext results.distinctBy { it.uri.toString() }
                     }
                 }

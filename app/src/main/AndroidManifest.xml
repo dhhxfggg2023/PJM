@@ -11,6 +11,13 @@
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <!-- 应用接管：长期观察 MediaStore 的观察者服务（不属于 dataSync，避免 6 小时配额掐断） -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- 应用接管：引导用户关闭电池优化，否则后台进程会被 ROM 冻结 -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" tools:ignore="QueryAllPackagesPermission" />
 
@@ -72,6 +79,43 @@
         </activity>
 
         <service android:name=".domain.service.VaultService" android:enabled="true" android:exported="false" android:foregroundServiceType="dataSync" />
+
+        <!-- 应用接管：观察 MediaStore，把被接管应用新保存的文件搬进 PJM。
+             specialUse 而非 dataSync —— 它不传输数据，只是常驻观察，没有 6 小时配额。 -->
+        <service
+            android:name=".domain.service.AudioPlaybackService"
+            android:exported="true"
+            android:foregroundServiceType="mediaPlayback">
+            <intent-filter>
+                <action android:name="androidx.media3.session.MediaSessionService" />
+            </intent-filter>
+        </service>
+
+        <service
+            android:name=".domain.service.TakeoverService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="media_takeover_watcher" />
+        </service>
+
+        <!-- 应用接管的兜底定时任务（15 分钟）：国产 ROM 冻结后台进程时靠它唤醒 -->
+        <service
+            android:name=".domain.service.TakeoverJobService"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
+
+        <!-- 重启后恢复应用接管（部分 ROM 会拦截开机广播，届时由下次启动 App 兜底拉起） -->
+        <receiver
+            android:name=".domain.service.TakeoverBootReceiver"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
 
         <!-- Shizuku：以 shell/root 身份运行的文件桥接服务 -->
         <provider

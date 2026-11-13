@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * 多任务并发进度模型 + 全局信号中心。
@@ -25,13 +26,15 @@ object VaultTasks {
     // 多任务并发进度 id：不同任务可并行（各自进度条独立显示），同任务防连点
     const val TASK_DEFAULT = "default"
     const val TASK_DELETE = "delete"
-    const val TASK_DUPLICATES_EXACT = "duplicates_exact"
-    const val TASK_DUPLICATES_PERCEPTUAL = "duplicates_perceptual"
+
+    // 查重是【一个】任务，同一条进度条贯穿四个阶段。
+    // 历史实现拆成 duplicates_exact / duplicates_perceptual 两个 taskId，UI 上会并排出现
+    // 两条进度条，且第二条从 0% 重新起跳 —— 用户看到"第一条刚满、又归零重来一遍"。
+    const val TASK_DUPLICATES = "duplicates"
     const val TASK_SYNC = "sync"
     const val TASK_STORE = "store"
     const val TASK_ENCRYPT = "encrypt"
     const val TASK_EXTRACT = "extract"
-    const val TASK_EXPORT = "export"
     const val TASK_BILI_SCAN = "bili_scan"
     const val TASK_BILI_SCAN_MERGED = "bili_scan_merged"
     const val TASK_BILI_IMPORT = "bili_import"
@@ -125,7 +128,11 @@ object VaultTasks {
         isActive: Boolean = true,
         isError: Boolean = false,
         isIndeterminate: Boolean = false,
+        stages: List<Float>? = null,
     ) {
+        // stages 传 null 表示「沿用该任务上一次的分段边界」：
+        // 调用方只在任务起步时传一次，之后每帧进度更新不必重复构造列表。
+        val previous = _activeTasks.value.firstOrNull { it.taskId == taskId }
         val task =
             OperationTask(
                 taskId = taskId,
@@ -134,6 +141,7 @@ object VaultTasks {
                 isActive = isActive,
                 isError = isError,
                 isIndeterminate = isIndeterminate,
+                stages = stages ?: previous?.stages ?: emptyList(),
             )
         _activeTasks.update { list ->
             if (list.any { it.taskId == taskId }) {
@@ -165,7 +173,13 @@ object VaultTasks {
         _activeTasks.update { list -> list.filterNot { it.taskId == taskId } }
     }
 
+    /** 数据变更版本号：任何入库/删除/刷新都会 +1，供内存缓存判断是否过期 */
+    private val dataVersion = AtomicLong(0)
+
+    fun currentDataVersion(): Long = dataVersion.get()
+
     fun triggerRefresh() {
+        dataVersion.incrementAndGet()
         _refreshSignal.tryEmit(Unit)
     }
 

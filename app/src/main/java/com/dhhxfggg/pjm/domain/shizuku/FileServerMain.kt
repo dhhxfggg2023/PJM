@@ -31,6 +31,9 @@ object FileServerMain {
     /** 简单鉴权令牌 */
     private const val AUTH_TOKEN = "pjm_privileged_v1"
 
+    /** 特权服务允许操作的根（共享存储）；其余路径（/data、/system 等）一律拒绝。 */
+    private const val SHARED_ROOT = "/storage/emulated/0"
+
     /** 请求/响应文件名前缀 */
     private const val REQ_PREFIX = "req_"
     private const val RESP_PREFIX = "resp_"
@@ -244,6 +247,11 @@ object FileServerMain {
         val parts = lines[1].split("\t")
         val cmd = parts.getOrNull(0) ?: return
         val seq = reqFile.name.removePrefix(REQ_PREFIX).removeSuffix(".txt")
+        // 核心加固（特权边界）：服务以 shell 身份运行，命令里的绝对路径必须限制在
+        // 共享存储内；copy 的落地目录只允许应用自己的 external-files 目录。
+        // 这样即使旧系统（API 24–29）有应用能往请求目录写文件，也无法借 shell 读写
+        // /data、/system 或把文件写到任意位置。
+        val externalRoot = ioDir.parentFile?.parentFile ?: ioDir
 
         val resp =
             try {
@@ -251,7 +259,9 @@ object FileServerMain {
                     "list" -> {
                         val path = parts.getOrNull(1) ?: ""
                         val dir = File(path)
-                        if (!dir.exists() || !dir.isDirectory) {
+                        if (!isSharedStoragePath(path)) {
+                            "ERR\tpath not allowed"
+                        } else if (!dir.exists() || !dir.isDirectory) {
                             "OK\t"
                         } else {
                             val items =
@@ -272,7 +282,11 @@ object FileServerMain {
                         val src = parts.getOrNull(1) ?: ""
                         val dest = parts.getOrNull(2) ?: ""
                         val srcFile = File(src)
-                        if (!srcFile.exists() || !srcFile.isFile) {
+                        if (!isSharedStoragePath(src)) {
+                            "ERR\tsource not allowed"
+                        } else if (!isInsidePath(dest, externalRoot)) {
+                            "ERR\tdestination not allowed"
+                        } else if (!srcFile.exists() || !srcFile.isFile) {
                             "ERR\tsource not found"
                         } else {
                             val destFile = File(dest)
@@ -290,7 +304,9 @@ object FileServerMain {
                     "delete" -> {
                         val path = parts.getOrNull(1) ?: ""
                         val f = File(path)
-                        if (!f.exists()) {
+                        if (!isSharedStoragePath(path)) {
+                            "ERR\tpath not allowed"
+                        } else if (!f.exists()) {
                             "OK\ttrue"
                         } else {
                             val ok = if (f.isDirectory) f.deleteRecursively() else f.delete()
@@ -299,12 +315,14 @@ object FileServerMain {
                     }
                     "exists" -> {
                         val path = parts.getOrNull(1) ?: ""
-                        "OK\t${File(path).exists()}"
+                        if (!isSharedStoragePath(path)) "ERR\tpath not allowed" else "OK\t${File(path).exists()}"
                     }
                     "read" -> {
                         val path = parts.getOrNull(1) ?: ""
                         val f = File(path)
-                        if (f.exists() && f.isFile && f.length() < 4L * 1024 * 1024) {
+                        if (!isSharedStoragePath(path)) {
+                            "ERR\tpath not allowed"
+                        } else if (f.exists() && f.isFile && f.length() < 4L * 1024 * 1024) {
                             "OK\t${f.readText(Charsets.UTF_8)}"
                         } else {
                             "ERR\tread failed"
@@ -314,7 +332,9 @@ object FileServerMain {
                         val rootPath = parts.getOrNull(1) ?: ""
                         val maxDepth = parts.getOrNull(2)?.toIntOrNull() ?: 8
                         val root = File(rootPath)
-                        if (!root.exists() || !root.isDirectory) {
+                        if (!isSharedStoragePath(rootPath)) {
+                            "ERR\tpath not allowed"
+                        } else if (!root.exists() || !root.isDirectory) {
                             "OK\t"
                         } else {
                             val (items, truncated) = walkTree(root, maxDepth)
@@ -342,4 +362,22 @@ object FileServerMain {
             respFile.writeText(resp + "\n")
         }
     }
+
+    /** 只允许共享存储（/storage/emulated/0）内的路径。 */
+    private fun isSharedStoragePath(path: String): Boolean =
+        runCatching {
+            val canonical = File(path).canonicalPath
+            canonical == SHARED_ROOT || canonical.startsWith(SHARED_ROOT + "/")
+        }.getOrDefault(false)
+
+    /** 是否位于指定目录内（用于限制 copy 的落地目录）。 */
+    private fun isInsidePath(
+        path: String,
+        root: File,
+    ): Boolean =
+        runCatching {
+            val canonical = File(path).canonicalPath
+            val rootPath = root.canonicalPath
+            canonical == rootPath || canonical.startsWith(rootPath + "/")
+        }.getOrDefault(false)
 }

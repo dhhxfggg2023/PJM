@@ -73,8 +73,13 @@ class FileUtilsTest {
         assertEquals("images", FileUtils.getCategory("a.jpg"))
         assertEquals("videos", FileUtils.getCategory("b.mp4"))
         assertEquals("audios", FileUtils.getCategory("c.mp3"))
-        assertEquals("others", FileUtils.getCategory("d.txt"))
+        // 文本已从「其他」独立成「文本」分类（配合小说式阅读器）
+        assertEquals("texts", FileUtils.getCategory("d.txt"))
+        assertEquals("texts", FileUtils.getCategory("e.md"))
+        assertEquals("texts", FileUtils.getCategory("f.json"))
+        assertEquals("texts", FileUtils.getCategory("g.log"))
         assertEquals("others", FileUtils.getCategory("noext"))
+        assertEquals("others", FileUtils.getCategory("h.docx"))
     }
 
     // ---------- shouldCompress ----------

@@ -2,7 +2,6 @@ package com.dhhxfggg.pjm.domain.util
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.media.MediaScannerConnection
 import android.net.Uri
 import android.system.Os
 import com.dhhxfggg.pjm.R
@@ -54,10 +53,20 @@ data class IngestionSummary(
  * PJM Industrial Asset Manager.
  * 门面：对外保留统一入口；纯逻辑已下沉至 VaultPaths / VaultNaming 等对象。
  */
+
 object VaultManager {
     private const val TAG = "VaultManager"
     private const val VAULT_ROOT = VaultPaths.VAULT_ROOT
     private val mutex = Mutex()
+
+    /**
+     * 数据库写入互斥（核心修复）：全量同步用 replaceAll（clearAll + 插入），
+     * 与导入/打包的 upsert 并发时，clearAll 的窗口会把刚入库的行删掉
+     * （文件仍在磁盘，但界面上暂时看不见）。所有写入串行化，代价可以忽略。
+     */
+    internal val dbWriteMutex = Mutex()
+
+    internal suspend fun <T> withDbWriteLock(block: suspend () -> T): T = dbWriteMutex.withLock { block() }
 
     object PjmDispatchers {
         val IO = Executors.newFixedThreadPool(8).asCoroutineDispatcher()
@@ -92,19 +101,18 @@ object VaultManager {
     const val CAT_IMAGES = VaultCategories.CAT_IMAGES
     const val CAT_VIDEOS = VaultCategories.CAT_VIDEOS
     const val CAT_AUDIOS = VaultCategories.CAT_AUDIOS
+    const val CAT_TEXTS = VaultCategories.CAT_TEXTS
     const val CAT_OTHERS = VaultCategories.CAT_OTHERS
     val CATEGORIES = VaultCategories.CATEGORIES
 
     // ===== 多任务并发进度 + 全局信号：委托 VaultTasks（门面转发，外部调用点不变） =====
     const val TASK_DEFAULT = VaultTasks.TASK_DEFAULT
     const val TASK_DELETE = VaultTasks.TASK_DELETE
-    const val TASK_DUPLICATES_EXACT = VaultTasks.TASK_DUPLICATES_EXACT
-    const val TASK_DUPLICATES_PERCEPTUAL = VaultTasks.TASK_DUPLICATES_PERCEPTUAL
+    const val TASK_DUPLICATES = VaultTasks.TASK_DUPLICATES
     const val TASK_SYNC = VaultTasks.TASK_SYNC
     const val TASK_STORE = VaultTasks.TASK_STORE
     const val TASK_ENCRYPT = VaultTasks.TASK_ENCRYPT
     const val TASK_EXTRACT = VaultTasks.TASK_EXTRACT
-    const val TASK_EXPORT = VaultTasks.TASK_EXPORT
     const val TASK_BILI_SCAN = VaultTasks.TASK_BILI_SCAN
     const val TASK_BILI_SCAN_MERGED = VaultTasks.TASK_BILI_SCAN_MERGED
     const val TASK_BILI_IMPORT = VaultTasks.TASK_BILI_IMPORT
@@ -137,7 +145,8 @@ object VaultManager {
         isActive: Boolean = true,
         isError: Boolean = false,
         isIndeterminate: Boolean = false,
-    ) = VaultTasks.updateProgress(progress, message, taskId, isActive, isError, isIndeterminate)
+        stages: List<Float>? = null,
+    ) = VaultTasks.updateProgress(progress, message, taskId, isActive, isError, isIndeterminate, stages)
 
     fun clearProgress(taskId: String = "default") = VaultTasks.clearProgress(taskId)
 
@@ -165,8 +174,13 @@ object VaultManager {
     ): PjmResult<FileEntity> =
         withContext(PjmDispatchers.IO) {
             val category = overrideCategory ?: FileUtils.getCategory(fileName)
-            val targetFile = getNextVaultPath(context, category, fileName)
+            // 命名和入库时间用同一个时间戳：图片物理名/显示名都按它来
+            val importedAt = System.currentTimeMillis()
+            val targetFile = getNextVaultPath(context, category, fileName, importedAt)
             val tempFile = File(context.cacheDir, "digest_${UUID.randomUUID()}.tmp")
+            // 已知大小时先查空间：原实现只在加密/解压路径检查，入库直接写盘，
+            // 分享进来的超大文件（或恶意 .pjm 条目）可以把 filesDir 写满。
+            if (expectedSize > 0) ensureDiskSpace(context, expectedSize)
             try {
                 FileOutputStream(tempFile).use { fos ->
                     if (expectedSize > 0) {
@@ -181,7 +195,20 @@ object VaultManager {
                         val buffer = acquireBuffer()
                         try {
                             var n: Int
-                            while (inputStream.read(buffer).also { n = it } != -1) fos.write(buffer, 0, n)
+                            var writtenTotal = 0L
+                            var nextDiskCheck = 16L * 1024 * 1024
+                            while (inputStream.read(buffer).also { n = it } != -1) {
+                                fos.write(buffer, 0, n)
+                                writtenTotal += n
+                                // 长度未知的流（ZIP entry / 分享 URI）：边写边看剩余空间，
+                                // 避免恶意或异常数据把 filesDir 写满导致系统级故障。
+                                if (writtenTotal >= nextDiskCheck) {
+                                    nextDiskCheck += 16L * 1024 * 1024
+                                    if (context.filesDir.usableSpace < 64L * 1024 * 1024) {
+                                        throw IOException("Not enough storage while ingesting " + fileName)
+                                    }
+                                }
+                            }
                         } finally {
                             releaseBuffer(buffer)
                         }
@@ -209,11 +236,9 @@ object VaultManager {
                     tempFile.delete()
                 }
 
-                // 核心加固：强制刷新系统媒体库，确保删除弹窗能识别到入库后的文件
-                // 我们需要等待扫描完成，或者至少确保它被触发
-                MediaScannerConnection.scanFile(context, arrayOf(targetFile.absolutePath), null) { path, uri ->
-                    PjmLogger.d(TAG, "Media scan completed for $path -> $uri")
-                }
+                // 注意：这里**不要**再调用 MediaScannerConnection.scanFile。
+                // 保险库位于应用私有目录，媒体库不可能收录它（实测每次都回调 uri=null），
+                // 每入库一个文件就白白多一次跨进程扫描 + 一条日志。
 
                 PjmResult.Success(
                     FileEntity(
@@ -221,15 +246,22 @@ object VaultManager {
                         name = fileName,
                         size = targetFile.length(),
                         category = category,
-                        lastModified = System.currentTimeMillis(),
+                        lastModified = importedAt,
                         isImage = FileUtils.isImageFile(fileName),
                         extension = FileUtils.getFileExtension(fileName),
                         contentHash = null,
+                        importedAt = importedAt,
                     ),
                 )
             } catch (e: Exception) {
                 tempFile.delete()
                 PjmResult.Failure("Ingest failed", exception = e)
+            } finally {
+                // 核心修复：本函数消费完输入流后必须关闭它。
+                // BiliSettingsController 的两处调用（contentResolver 流、merge 临时文件的
+                // inputStream）原来都不关闭 —— 批量导入上百个视频后 fd 耗尽（EMFILE）。
+                // 调用方即使再 close 一次也无害（InputStream.close 约定幂等）。
+                runCatching { inputStream.close() }
             }
         }
 
@@ -267,7 +299,16 @@ object VaultManager {
                     if (f.isFile && isTransientFile(f) && shredFile(f)) removed++
                 }
             }
-            if (removed > 0) PjmLogger.i(TAG, "已清理 $removed 个残留的容器临时文件")
+            // 特权文件服务/Shizuku 会把解密后的音视频复制到 getExternalFilesDir/tmp 供 shell 读取。
+            // 这些副本不属于保险库、也没有任何清理路径，会长期留在外部私有目录。
+            context.getExternalFilesDir(null)?.let { ext ->
+                File(ext, "tmp").listFiles()?.forEach { f ->
+                    if (f.isFile && (f.name.startsWith("embedded_") || f.name.startsWith("shizuku_"))) {
+                        if (shredFile(f)) removed++
+                    }
+                }
+            }
+            if (removed > 0) PjmLogger.i(TAG, "已清理 $removed 个残留临时文件")
             removed
         }
 
@@ -275,7 +316,8 @@ object VaultManager {
         context: Context,
         category: String,
         originalName: String,
-    ): File = VaultPaths.getNextVaultPath(context, category, originalName)
+        importedAt: Long = System.currentTimeMillis(),
+    ): File = VaultPaths.getNextVaultPath(context, category, originalName, importedAt)
 
     suspend fun extractPjmToVault(
         context: Context,
@@ -291,7 +333,7 @@ object VaultManager {
         try {
             CryptoUtils.decryptPjmToEntries(context, listOf(Uri.fromFile(file))) { name, input ->
                 digestFileToEntity(context, name, input).onSuccess {
-                    fileDao.upsert(it)
+                    fileDao.upsertLocked(it)
                     count++
                     VaultManager.updateProgress(
                         0.1f + 0.8f * (count / 100f).coerceAtMost(1f),
@@ -455,16 +497,22 @@ object VaultManager {
                         }
                     FileEntity(
                         relativePath = relativePath,
-                        name = f.name,
+                        // 核心修复：重建索引绝不能把 name 改回磁盘文件名。
+                        // 命名规范里磁盘名是 UUID / PJM_时间，而 name 存的是"导入时的原名"，
+                        // 之前这里写 f.name，一次「修复/找回文件」就把全库原名清成 UUID，
+                        // 库里的文件从此全变成看不出是什么的乱码名。
+                        name = old?.name?.takeIf { it.isNotBlank() } ?: f.name,
                         size = size,
                         category = c,
                         lastModified = lastModified,
                         isImage = FileUtils.isImageFile(f.name),
                         extension = FileUtils.getFileExtension(f.name),
                         contentHash = carriedHash,
+                        // 入库时间同理：丢了就只能退回文件时间，图片的 PJM_时间 命名会跟着漂
+                        importedAt = old?.importedAt ?: 0L,
                     )
                 }
-            fileDao.replaceAll(entities)
+            withDbWriteLock { fileDao.replaceAll(entities) }
         }
     }
 
@@ -582,15 +630,6 @@ object VaultManager {
         onProgress: (Float) -> Unit,
     ): List<DuplicateGroup> = VaultScanner.findSimilarImages(context, fileDao, onProgress)
 
-    // ===== 数据库备份 / 打包导出：委托 VaultPackager（门面转发） =====
-    suspend fun backupDatabase(context: Context) = VaultPackager.backupDatabase(context)
-
-    suspend fun exportVaultToPjmModule(
-        context: Context,
-        fileDao: FileDao,
-        onProgress: (Float) -> Unit = {},
-    ): Result<Int> = VaultPackager.exportVaultToPjmModule(context, fileDao, onProgress)
-
     suspend fun packUrisWithSplitting(
         context: Context,
         uris: List<Uri>,
@@ -640,6 +679,10 @@ data class OperationTask(
     val isActive: Boolean = false,
     val isError: Boolean = false,
     val isIndeterminate: Boolean = false, // 不确定进度（如扫描遍历），UI 显示无限循环条而非百分比
+    // 阶段边界（累计百分比，升序，最后一项为 1f）。非空时 UI 把一条进度条切成若干彩色分段：
+    // 已完成的分段各自着色，用户一眼看出「现在处在哪个阶段、还剩哪些阶段」。
+    // 空列表 = 普通单色进度条（大多数任务）。
+    val stages: List<Float> = emptyList(),
 )
 
 /**
@@ -655,3 +698,11 @@ data class DuplicateGroup(
     val members: List<FileEntity>,
     val recommendedDelete: Set<String>,
 )
+
+/**
+ * 带全局写锁的 upsert 扩展（核心修复）：全量同步的 replaceAll 与导入/打包的写入串行，
+ * 避免 clearAll 窗口把刚入库的行删掉。
+ */
+internal suspend fun FileDao.upsertLocked(entity: FileEntity) = VaultManager.withDbWriteLock { upsert(entity) }
+
+internal suspend fun FileDao.upsertAllLocked(entities: List<FileEntity>) = VaultManager.withDbWriteLock { upsertAll(entities) }

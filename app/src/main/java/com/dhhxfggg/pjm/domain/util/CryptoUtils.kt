@@ -195,6 +195,7 @@ object CryptoUtils {
         context: Context,
         inputUris: List<Uri>,
         outputPath: String,
+        isCancelled: () -> Boolean = { false },
         onProgress: (Float) -> Unit = {},
     ): Result<Unit> =
         withContext(VaultManager.PjmDispatchers.Crypto) {
@@ -276,6 +277,8 @@ object CryptoUtils {
                             var processedBytes = 0L
                             try {
                                 for (uri in inputUris) {
+                                    // 用户点进度条 × 时尽快停下（每个文件边界检查一次）
+                                    if (isCancelled()) throw kotlinx.coroutines.CancellationException("encrypt cancelled")
                                     val fileName = FileUtils.getFileName(context, uri)
                                     val entry = ZipArchiveEntry(fileName)
                                     zos.setLevel(if (FileUtils.shouldCompress(fileName)) Deflater.BEST_SPEED else Deflater.NO_COMPRESSION)

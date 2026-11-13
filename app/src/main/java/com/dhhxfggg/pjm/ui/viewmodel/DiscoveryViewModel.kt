@@ -10,7 +10,9 @@ import com.dhhxfggg.pjm.data.db.FileDao
 import com.dhhxfggg.pjm.data.db.ViewHistoryDao
 import com.dhhxfggg.pjm.data.model.FileEntity
 import com.dhhxfggg.pjm.data.model.ViewHistoryEntity
+import com.dhhxfggg.pjm.data.repository.FileRepository
 import com.dhhxfggg.pjm.domain.util.PjmLogger
+import com.dhhxfggg.pjm.domain.util.SettingsManager
 import com.dhhxfggg.pjm.domain.util.VaultManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
@@ -41,10 +43,13 @@ class DiscoveryViewModel
         private val application: Application,
         private val fileDao: FileDao,
         private val viewHistoryDao: ViewHistoryDao,
+        private val repository: FileRepository,
+        private val settingsManager: SettingsManager,
     ) : AndroidViewModel(application) {
         private val _items = MutableStateFlow<List<DiscoveryItem>>(emptyList())
         private val _discoveryMode = MutableStateFlow(DiscoveryMode.BILI_VIDEOS)
         private val _isLoading = MutableStateFlow(value = false)
+        private val _audioCover = MutableStateFlow<String?>(null)
 
         /**
          * Combined UI state for the discovery feature.
@@ -54,8 +59,9 @@ class DiscoveryViewModel
                 _items,
                 _discoveryMode,
                 _isLoading,
-            ) { items, mode, loading ->
-                DiscoveryUiState(items, mode, loading)
+                _audioCover,
+            ) { items, mode, loading, audioCover ->
+                DiscoveryUiState(items, mode, loading, audioCover)
             }.stateIn(
                 scope = viewModelScope,
                 started = SharingStarted.WhileSubscribed(5000),
@@ -72,16 +78,64 @@ class DiscoveryViewModel
 
         private val idGenerator = AtomicLong(0)
 
+        /** 批次代际：切分类/重新加载会作废在途批次，避免旧分类结果混入新列表 */
+        private var loadGeneration = 0
+
         init {
             viewModelScope.launch {
+                // 先用设置里的默认分类确定模式，再建队列/取内容：
+                // 否则会先按 B站 建队列并加载一批，界面先闪一下 B站 才切到用户设的分类。
+                val defaultMode =
+                    runCatching { settingsManager.settings.first().discoveryDefaultMode }
+                        .getOrDefault("bili_videos")
+                        .toDiscoveryMode()
+                if (defaultMode != _discoveryMode.value) _discoveryMode.value = defaultMode
+
                 // 播种"本次会话交出过什么"：重建（离开该页再回来）后，
                 // 已经看过的不该再被推一遍。
                 runCatching { viewHistoryDao.getViewedPathsByCategory(_discoveryMode.value.value) }
                     .onSuccess { queue.seedServed(it) }
                     .onFailure { PjmLogger.e("DiscoveryViewModel", "恢复浏览记录失败", it) }
                 loadMoreItems()
+
+                // 底部 Tab 用 saveState/restoreState 导航，发现页的 ViewModel 不会被重建，
+                // 只在这里读一次设置根本不够：用户在设置里改了默认分类，这个实例还在，
+                // 页面永远停在老分类上。所以持续监听「默认分类」这一个字段，变了就切过去。
+                // drop(1) 丢掉上面已经用过的当前值，其它设置的变化不会打断正在看的内容。
+                settingsManager.settings
+                    .map { it.discoveryDefaultMode }
+                    .drop(1)
+                    .distinctUntilChanged()
+                    .collect { name ->
+                        val mode = name.toDiscoveryMode()
+                        if (mode != _discoveryMode.value) setMode(mode)
+                    }
             }
         }
+
+        /**
+         * 每次进入发现页都把"默认分类"重新应用一次。
+         *
+         * 之前的做法是只在 VM 初始化时读一次，用户手动切到别的分类、离开再回来，
+         * 页面还是停在手动切过去的那个分类上 —— 看起来就是"默认分类只生效一次"。
+         */
+        fun applyDefaultMode() {
+            viewModelScope.launch {
+                val mode =
+                    runCatching { settingsManager.settings.first().discoveryDefaultMode }
+                        .getOrDefault("bili_videos")
+                        .toDiscoveryMode()
+                if (mode != _discoveryMode.value) setMode(mode)
+            }
+        }
+
+        private fun String.toDiscoveryMode(): DiscoveryMode =
+            when (this) {
+                "images" -> DiscoveryMode.IMAGES
+                "videos" -> DiscoveryMode.VIDEOS
+                "audios" -> DiscoveryMode.AUDIOS
+                else -> DiscoveryMode.BILI_VIDEOS
+            }
 
         /**
          * 记录"这一张真的被看了"。
@@ -117,6 +171,9 @@ class DiscoveryViewModel
                 // 只丢弃"已排队"的部分；浏览历史与分类无关，故意保留，
                 // 免得切回来时把刚看过的内容重播一遍。
                 queue.dropPending()
+                // 作废在途批次：否则旧分类的结果会在切换后追加进新列表
+                loadGeneration++
+                _isLoading.value = false
                 loadMoreItems()
             }
         }
@@ -130,6 +187,11 @@ class DiscoveryViewModel
          */
         private suspend fun takeBatch(limit: Int): List<FileEntity> {
             var paths = queue.nextBatch(limit)
+            if (paths.isEmpty() && !queue.isRoundComplete()) {
+                // 快速划过的页被标记 served 却从未上屏：放开占位让它们重新入队，否则本轮无法收尾
+                queue.forgetServed()
+                paths = queue.nextBatch(limit)
+            }
             if (paths.isEmpty() && queue.isRoundComplete() && queue.restartNextRound()) {
                 paths = queue.nextBatch(limit)
             }
@@ -143,23 +205,23 @@ class DiscoveryViewModel
          */
         fun loadMoreItems() {
             if (_isLoading.value) return
+            val generation = ++loadGeneration
+            val mode = _discoveryMode.value
             _isLoading.value = true
             viewModelScope.launch {
                 try {
-                    val limit = 10
-
-                    val entities: List<FileEntity> =
-                        withContext(Dispatchers.IO) { takeBatch(limit) }
-
-                    // 队列已空且库中无文件 → 无内容可展示
-                    if (entities.isEmpty()) {
-                        _isLoading.value = false
-                        return@launch
+                    // 音频默认封面：从图片库随机抽一张。只取一次，整轮播放期间不变。
+                    if (mode == DiscoveryMode.AUDIOS && _audioCover.value == null) {
+                        _audioCover.value =
+                            withContext(Dispatchers.IO) {
+                                repository.getRandomFileByCategory(VaultManager.CAT_IMAGES)?.relativePath
+                            }
                     }
+                    val entities: List<FileEntity> = withContext(Dispatchers.IO) { takeBatch(10) }
+                    // 切分类后旧批次直接丢弃，绝不追加进新模式的列表
+                    if (generation != loadGeneration || _discoveryMode.value != mode) return@launch
+                    if (entities.isEmpty()) return@launch
 
-                    // 生成条目移到 IO 线程：视频需校验有效性（时长 > 0），
-                    // 过滤损坏/黑屏视频（0 字节、元数据无法解析、时长 0s），避免发现页出现无法播放的内容。
-                    // 无效视频已从队列弹出，本轮不会再撞上。
                     val newBatch: List<DiscoveryItem> =
                         withContext(Dispatchers.IO) {
                             entities.mapNotNull { entity ->
@@ -167,20 +229,21 @@ class DiscoveryViewModel
                                 if (!file.exists()) return@mapNotNull null
                                 val isVideo = entity.category == VaultManager.CAT_BILI_VIDEOS || entity.category == VaultManager.CAT_VIDEOS
                                 if (isVideo && !hasValidVideoDuration(file)) return@mapNotNull null
+                                if (entity.category == VaultManager.CAT_AUDIOS && file.length() <= 0L) return@mapNotNull null
                                 val id = idGenerator.incrementAndGet()
-                                if (entity.category == VaultManager.CAT_IMAGES) {
-                                    DiscoveryItem.Image(id, file, entity)
-                                } else {
-                                    DiscoveryItem.Video(id, file, entity)
+                                when (entity.category) {
+                                    VaultManager.CAT_IMAGES -> DiscoveryItem.Image(id, file, entity)
+                                    VaultManager.CAT_AUDIOS -> DiscoveryItem.Audio(id, file, entity)
+                                    else -> DiscoveryItem.Video(id, file, entity)
                                 }
                             }
                         }
 
-                    _items.value += newBatch
+                    _items.update { it + newBatch }
                 } catch (e: Exception) {
                     PjmLogger.e("DiscoveryViewModel", "Load items failed", e)
                 } finally {
-                    _isLoading.value = false
+                    if (generation == loadGeneration) _isLoading.value = false
                 }
             }
         }

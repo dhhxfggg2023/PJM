@@ -11,12 +11,16 @@
     <!-- 派生数据：缩略图 / 感知指纹（可从保险库重建，无需备份） -->
     <exclude domain="file" path="thumbnails/" />
     <exclude domain="file" path="image_fingerprints/" />
-    <!-- 数据库每日备份 -->
+    <!-- 历史数据库备份目录（应用内备份功能已移除，保留排除规则防止旧文件被云备份） -->
     <exclude domain="file" path="backups/" />
     <!-- 运行日志：包含文件名与绝对路径 -->
     <exclude domain="file" path="logs/" />
     <!-- 分享用的规范名副本 -->
     <exclude domain="file" path="pjm_named_share/" />
+    <!-- Coil 磁盘缩略图缓存（从保险库图片派生，仍是隐私内容） -->
+    <exclude domain="file" path="pjm_thumbnail_cache/" />
+    <!-- DataStore 设置（含 B 站根目录 URI 等） -->
+    <exclude domain="file" path="datastore/" />
     <!-- 索引库与设置 -->
     <exclude domain="database" path="." />
     <exclude domain="sharedpref" path="." />

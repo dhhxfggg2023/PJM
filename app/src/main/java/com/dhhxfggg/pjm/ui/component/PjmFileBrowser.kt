@@ -149,6 +149,12 @@ fun PjmFolderPickerDialog(
                 }.sortedBy { it.first.lowercase() }
         }
 
+    // 核心优化：每行都 firstOrNull 扫一遍列表是 O(n²)；预计算一次 name → isDirectory 映射
+    val privilegedByName =
+        remember(privilegedEntries) {
+            privilegedEntries?.associate { it.first.name to it.second }
+        }
+
     val currentPathDisplay =
         currentDocDir?.let { doc ->
             val path = doc.uri.path ?: ""
@@ -301,9 +307,8 @@ fun PjmFolderPickerDialog(
                             // Android 14 的 File API 对 Android/data 下受保护目录 stat 失败，
                             // File.isDirectory 恒为 false，导致 download 等目录被误识别成文件。
                             val privilegedFlag =
-                                if (currentDocDir == null && privilegedAvailable && privilegedEntries != null) {
-                                    val entries = privilegedEntries ?: emptyList()
-                                    entries.firstOrNull { it.first.name == name }?.second
+                                if (currentDocDir == null && privilegedAvailable) {
+                                    privilegedByName?.get(name)
                                 } else {
                                     null
                                 }

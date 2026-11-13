@@ -5,9 +5,11 @@ import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.PredictiveBackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.*
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -16,6 +18,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -36,9 +39,11 @@ import com.dhhxfggg.pjm.domain.util.VaultManager
 import com.dhhxfggg.pjm.ui.component.PjmAeroDialog
 import com.dhhxfggg.pjm.ui.component.PjmDuplicateCompareDialog
 import com.dhhxfggg.pjm.ui.component.PjmFolderPickerDialog
-import com.dhhxfggg.pjm.ui.viewmodel.MainViewModel
+import com.dhhxfggg.pjm.ui.theme.PjmBackgroundBackdrop
 import com.dhhxfggg.pjm.ui.viewmodel.RandomShareMode
 import com.dhhxfggg.pjm.ui.viewmodel.SettingsViewModel
+import com.dhhxfggg.pjm.ui.viewmodel.TakeoverViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -49,6 +54,10 @@ internal enum class SettingsPage {
     Appearance,
     Ingestion,
     Bilibili,
+    Discovery,
+    AppsTakeover,
+    Audio,
+    Transfer,
     Maintenance,
 }
 
@@ -61,7 +70,6 @@ fun SettingsScreen(
     onBack: () -> Unit,
     bottomPadding: Dp = 0.dp,
     settingsViewModel: SettingsViewModel = hiltViewModel(),
-    mainViewModel: MainViewModel = hiltViewModel(),
 ) {
     val context = LocalContext.current
     // 直接分享源文件需要 Activity 才能 startActivity（Context 可能不是 Activity）
@@ -69,16 +77,55 @@ fun SettingsScreen(
     val scope = rememberCoroutineScope()
     val uiState by settingsViewModel.uiState.collectAsState()
     val settings = uiState.settings
+    // 应用接管：主页卡片要显示已接管数量，页面本身也复用同一个 ViewModel
+    val takeoverViewModel: TakeoverViewModel = hiltViewModel()
+    val managedApps by takeoverViewModel.managedApps.collectAsState()
 
     var currentPage by remember { mutableStateOf<SettingsPage?>(null) }
 
-    // 处理物理返回键
-    BackHandler(enabled = currentPage != null) {
-        currentPage = null
+    // 正在显示（或正在滑出）的二级页面：关闭后等滑出动画跑完再撤掉
+    var lastPage by remember { mutableStateOf<SettingsPage?>(null) }
+
+    // 二级页面开合进度：0 = 完全在屏幕右侧外面，1 = 完全打开。
+    // 只在 graphicsLayer 的 draw 阶段读取，手势过程中不触发任何重组。
+    val pageOpen = remember { Animatable(0f) }
+    LaunchedEffect(currentPage) {
+        if (currentPage != null) {
+            lastPage = currentPage
+            // 打开：从右侧外面滑进来
+            runCatching {
+                pageOpen.snapTo(0f)
+                pageOpen.animateTo(1f, tween(220))
+            }
+        } else {
+            // 关闭：先滑出去再撤掉。即使动画被打断，lastPage 也一定会被清掉，
+            // 所以不存在"卡在某页出不去"的状态。
+            runCatching { pageOpen.animateTo(0f, tween(160)) }
+            if (currentPage == null) lastPage = null
+        }
+    }
+    // 返回键、左上角按钮：同步改状态，不等任何动画
+    val closePage: () -> Unit = { currentPage = null }
+    if (settings.predictiveBackEnabled) {
+        PredictiveBackHandler(enabled = currentPage != null) { progress ->
+            try {
+                progress.collect { event -> pageOpen.snapTo(1f - event.progress) }
+                // 手势提交后这个协程会被系统立刻取消，所以这里只做同步状态切换，
+                // 滑出动画交给上面的 LaunchedEffect
+                currentPage = null
+            } catch (cancel: CancellationException) {
+                // 手势取消：页面滑回打开状态
+                scope.launch {
+                    if (currentPage != null) runCatching { pageOpen.animateTo(1f, tween(160)) }
+                }
+                throw cancel
+            }
+        }
+    } else {
+        BackHandler(enabled = currentPage != null) { closePage() }
     }
 
     // 资源加载
-    val vaultExportedMsg = stringResource(R.string.toast_vault_exported)
     val systemCleanedMsg = stringResource(R.string.toast_system_cleaned)
     val noDuplicatesMsg = stringResource(R.string.toast_no_duplicates)
     val shareLogsTitle = stringResource(R.string.chooser_title_share_logs)
@@ -194,13 +241,13 @@ fun SettingsScreen(
         }
 
     // 对话框状态
-    var showExportConfirm by remember { mutableStateOf(false) }
     var integrityResults by remember { mutableStateOf<Map<String, List<FileEntity>>?>(null) }
     var showBiliAuthExplanation by remember { mutableStateOf(false) }
     var showFactoryResetConfirm by remember { mutableStateOf(false) }
     var showRandomShareDialog by remember { mutableStateOf(false) }
 
-    // 检查更新状态
+    // 检查更新：同一个弹窗承担「检查中 → 结果」两个阶段（见下方弹窗）
+    var showUpdateDialog by remember { mutableStateOf(false) }
     var isCheckingUpdate by remember { mutableStateOf(false) }
     var updateCheckResult by remember { mutableStateOf<UpdateChecker.CheckResult?>(null) }
 
@@ -220,6 +267,10 @@ fun SettingsScreen(
                                 SettingsPage.Appearance -> stringResource(R.string.settings_cat_adaptive)
                                 SettingsPage.Ingestion -> stringResource(R.string.settings_cat_ingestion)
                                 SettingsPage.Bilibili -> stringResource(R.string.settings_cat_bili)
+                                SettingsPage.Discovery -> "发现页"
+                                SettingsPage.AppsTakeover -> stringResource(R.string.settings_title_app_takeover)
+                                SettingsPage.Audio -> stringResource(R.string.settings_title_audio_playback)
+                    SettingsPage.Transfer -> "传输到电脑"
                                 SettingsPage.Maintenance -> stringResource(R.string.settings_cat_maintenance)
                                 null -> stringResource(R.string.settings_title)
                             },
@@ -227,7 +278,7 @@ fun SettingsScreen(
                     )
                 },
                 navigationIcon = {
-                    IconButton(onClick = { if (currentPage == null) onBack() else currentPage = null }) {
+                    IconButton(onClick = { if (currentPage == null) onBack() else closePage() }) {
                         Icon(if (currentPage == null) Lucide.ArrowLeft else Lucide.ChevronLeft, null)
                     }
                 },
@@ -239,127 +290,157 @@ fun SettingsScreen(
         // 核心修复：bottomPadding（BottomNavBar 高度）此前传入但从未使用，
         // 导致设置页底部内容被底部导航遮挡，最下方的功能无法点击。
         Box(modifier = Modifier.padding(padding).fillMaxSize().padding(bottom = bottomPadding)) {
-            AnimatedContent(
-                targetState = currentPage,
-                modifier = Modifier.fillMaxSize(),
-                transitionSpec = {
-                    if (targetState != null) {
-                        slideInHorizontally { it } + fadeIn() togetherWith slideOutHorizontally { -it } + fadeOut()
-                    } else {
-                        slideInHorizontally { -it } + fadeIn() togetherWith slideOutHorizontally { it } + fadeOut()
-                    }
-                },
-                label = "PageNav",
-            ) { page ->
-                when (page) {
-                    null ->
-                        MainCategoryList(
-                            settings = settings,
-                            onNavigate = { currentPage = it },
-                        )
-                    SettingsPage.Appearance ->
-                        AppearanceSettings(
-                            settings = settings,
-                            settingsViewModel = settingsViewModel,
-                            onSelectBg = { bgImagePicker.launch(arrayOf("image/*")) },
-                        )
-                    SettingsPage.Ingestion ->
-                        IngestionSettings(
-                            settings = settings,
-                            settingsViewModel = settingsViewModel,
-                        )
-                    SettingsPage.Bilibili ->
-                        BilibiliSettings(
-                            settings = settings,
-                            settingsViewModel = settingsViewModel,
-                            onOpenPicker = { showPjmFolderPicker = true },
-                            onOpenMergedPicker = { showMergedFolderPicker = true },
-                        )
-                    SettingsPage.Maintenance ->
-                        MaintenanceSettings(
-                            settingsViewModel = settingsViewModel,
-                            mainViewModel = mainViewModel,
-                            onShowExportConfirm = { showExportConfirm = true },
-                            onCheckUpdate = {
-                                if (isCheckingUpdate) return@MaintenanceSettings
-                                isCheckingUpdate = true
-                                updateCheckResult = null
-                                scope.launch {
-                                    val result = UpdateChecker.checkForUpdate(context)
-                                    updateCheckResult = result
-                                    isCheckingUpdate = false
-                                }
+            // 返回手势进行中，下层把「上一页（设置列表）」一起滑进来：
+            // 上层二级页面同时右移并垫上不透明底色，避免两层文字叠在一起。
+            // 列表常驻在下层；平时整体移出屏幕左侧（不可见），手势时跟手滑入。
+            // 注意：这里只读 graphicsLayer 的 draw 阶段状态，不读进组合 —— 否则每个手势事件
+            // 都会重组合整个设置页，拖拽时会掉帧甚至白屏。
+            Box(
+                modifier =
+                    Modifier
+                        .fillMaxSize()
+                        .graphicsLayer {
+                            // 没有二级页面时，列表无条件停在原位（不依赖任何动画进度），
+                            // 这样"设置页一片空白/出不来"从结构上不可能出现
+                            translationX = if (lastPage == null) 0f else -size.width * pageOpen.value
+                        },
+            ) {
+                MainCategoryList(
+                    settings = settings,
+                    settingsViewModel = settingsViewModel,
+                    managedAppCount = managedApps.size,
+                    onNavigate = { currentPage = it },
+                )
+            }
+            // 二级页面：只有真的打开了页面才组合。之前这里还组合了一份设置列表
+            // （AnimatedContent 的 null 分支），返回时两层列表同时滑入 = 同一画面闪两次。
+            // 二级页面层：打开时从右侧滑入，关闭时滑出去再撤掉
+            val shownPage = lastPage
+            if (shownPage != null) {
+                Box(
+                    modifier =
+                        Modifier
+                            .fillMaxSize()
+                            .graphicsLayer {
+                                translationX = size.width * (1f - pageOpen.value)
                             },
-                            onCheckIntegrity = {
-                                scope.launch(VaultManager.PjmDispatchers.IO) {
-                                    settingsViewModel.checkIntegrity { results -> integrityResults = results }
-                                }
-                            },
-                            onExportLogs = { exportPjmLogs(context, shareLogsTitle, exportFailedMsg) },
-                            onClearCache = {
-                                scope.launch(VaultManager.PjmDispatchers.IO) {
-                                    // 核心修复：多任务并发 —— 同任务防连点，其他任务可并行
-                                    if (!VaultManager.tryBeginOperation(VaultManager.TASK_CLEAR_CACHE)) return@launch
-                                    try {
-                                        // 顶部横幅：与其它功能一致的完成提示
-                                        VaultManager.updateProgress(
-                                            0.5f,
-                                            context.getString(R.string.status_clearing_cache),
-                                            taskId = VaultManager.TASK_CLEAR_CACHE,
-                                        )
-                                        // 核心修复：清除缓存【只清临时缓存目录 cacheDir】——
-                                        // 绝不删除 filesDir 下的半永久缓存：
-                                        //   · thumbnails/（视频/图片缩略图）
-                                        //   · pjm_thumbnail_cache/（Coil 磁盘缓存）
-                                        //   · image_fingerprints/（感知指纹 .txt + 灰度 .g32）
-                                        // 这些是耗时生成的数据，删除后需重新解码/计算（用户痛点）。
-                                        context.cacheDir.deleteRecursively()
-                                        VaultManager.updateProgress(1f, systemCleanedMsg, taskId = VaultManager.TASK_CLEAR_CACHE)
-                                        withContext(
-                                            Dispatchers.Main,
-                                        ) { Toast.makeText(context, systemCleanedMsg, Toast.LENGTH_SHORT).show() }
-                                        delay(1200)
-                                        VaultManager.clearProgress(VaultManager.TASK_CLEAR_CACHE)
-                                    } finally {
-                                        VaultManager.endOperation(VaultManager.TASK_CLEAR_CACHE)
+                ) {
+                    // 二级页面自己不再画背景：底下的列表层已经有同一张壁纸，
+                    // 预测性返回拖到一半时两层都画，就会看到"两个同样的自定义背景叠在一起"。
+                    // 这里保持透明，动的是上面这层内容本身。
+                    when (shownPage) {
+                        SettingsPage.Appearance ->
+                            AppearanceSettings(
+                                settings = settings,
+                                settingsViewModel = settingsViewModel,
+                                onSelectBg = { bgImagePicker.launch(arrayOf("image/*")) },
+                            )
+                        SettingsPage.Ingestion ->
+                            IngestionSettings(
+                                settings = settings,
+                                settingsViewModel = settingsViewModel,
+                            )
+                        SettingsPage.Bilibili ->
+                            BilibiliSettings(
+                                settings = settings,
+                                settingsViewModel = settingsViewModel,
+                                onOpenPicker = { showPjmFolderPicker = true },
+                                onOpenMergedPicker = { showMergedFolderPicker = true },
+                            )
+                        SettingsPage.Discovery ->
+                            DiscoverySettings(settings = settings, settingsViewModel = settingsViewModel)
+                        SettingsPage.AppsTakeover ->
+                            AppsTakeoverSettings(takeoverViewModel = takeoverViewModel)
+                        SettingsPage.Transfer ->
+                            TransferSettings()
+                        SettingsPage.Audio ->
+                            AudioPlaybackSettings()
+                        SettingsPage.Maintenance ->
+                            MaintenanceSettings(
+                                settingsViewModel = settingsViewModel,
+                                onCheckUpdate = {
+                                    if (isCheckingUpdate) return@MaintenanceSettings
+                                    // 先显示弹窗，再开始网络检查
+                                    showUpdateDialog = true
+                                    isCheckingUpdate = true
+                                    updateCheckResult = null
+                                    scope.launch {
+                                        val result = UpdateChecker.checkForUpdate(context)
+                                        updateCheckResult = result
+                                        isCheckingUpdate = false
                                     }
-                                }
-                            },
-                            onClearLogs = {
-                                scope.launch(VaultManager.PjmDispatchers.IO) {
-                                    // 核心修复：多任务并发 —— 同任务防连点，其他任务可并行
-                                    if (!VaultManager.tryBeginOperation(VaultManager.TASK_CLEAR_LOGS)) return@launch
-                                    try {
-                                        // 清除日志（与清除缓存分离）
-                                        VaultManager.updateProgress(
-                                            0.5f,
-                                            context.getString(R.string.status_clearing_logs),
-                                            taskId = VaultManager.TASK_CLEAR_LOGS,
-                                        )
-                                        PjmLogger.clear()
-                                        VaultManager.updateProgress(
-                                            1f,
-                                            context.getString(R.string.status_logs_cleared),
-                                            taskId = VaultManager.TASK_CLEAR_LOGS,
-                                        )
-                                        withContext(Dispatchers.Main) {
-                                            Toast
-                                                .makeText(
-                                                    context,
-                                                    context.getString(R.string.status_logs_cleared),
-                                                    Toast.LENGTH_SHORT,
-                                                ).show()
+                                },
+                                onCheckIntegrity = {
+                                    scope.launch(VaultManager.PjmDispatchers.IO) {
+                                        settingsViewModel.checkIntegrity { results -> integrityResults = results }
+                                    }
+                                },
+                                onExportLogs = { exportPjmLogs(context, shareLogsTitle, exportFailedMsg) },
+                                onClearCache = {
+                                    scope.launch(VaultManager.PjmDispatchers.IO) {
+                                        // 核心修复：多任务并发 —— 同任务防连点，其他任务可并行
+                                        if (!VaultManager.tryBeginOperation(VaultManager.TASK_CLEAR_CACHE)) return@launch
+                                        try {
+                                            // 顶部横幅：与其它功能一致的完成提示
+                                            VaultManager.updateProgress(
+                                                0.5f,
+                                                context.getString(R.string.status_clearing_cache),
+                                                taskId = VaultManager.TASK_CLEAR_CACHE,
+                                            )
+                                            // 核心修复：清除缓存【只清临时缓存目录 cacheDir】——
+                                            // 绝不删除 filesDir 下的半永久缓存：
+                                            //   · thumbnails/（视频/图片缩略图）
+                                            //   · pjm_thumbnail_cache/（Coil 磁盘缓存）
+                                            //   · image_fingerprints/（感知指纹 .txt + 灰度 .g32）
+                                            // 这些是耗时生成的数据，删除后需重新解码/计算（用户痛点）。
+                                            context.cacheDir.deleteRecursively()
+                                            VaultManager.updateProgress(1f, systemCleanedMsg, taskId = VaultManager.TASK_CLEAR_CACHE)
+                                            withContext(
+                                                Dispatchers.Main,
+                                            ) { Toast.makeText(context, systemCleanedMsg, Toast.LENGTH_SHORT).show() }
+                                            delay(1200)
+                                            VaultManager.clearProgress(VaultManager.TASK_CLEAR_CACHE)
+                                        } finally {
+                                            VaultManager.endOperation(VaultManager.TASK_CLEAR_CACHE)
                                         }
-                                        delay(1200)
-                                        VaultManager.clearProgress(VaultManager.TASK_CLEAR_LOGS)
-                                    } finally {
-                                        VaultManager.endOperation(VaultManager.TASK_CLEAR_LOGS)
                                     }
-                                }
-                            },
-                            onFactoryReset = { showFactoryResetConfirm = true },
-                            onRandomShare = { showRandomShareDialog = true },
-                        )
+                                },
+                                onClearLogs = {
+                                    scope.launch(VaultManager.PjmDispatchers.IO) {
+                                        // 核心修复：多任务并发 —— 同任务防连点，其他任务可并行
+                                        if (!VaultManager.tryBeginOperation(VaultManager.TASK_CLEAR_LOGS)) return@launch
+                                        try {
+                                            // 清除日志（与清除缓存分离）
+                                            VaultManager.updateProgress(
+                                                0.5f,
+                                                context.getString(R.string.status_clearing_logs),
+                                                taskId = VaultManager.TASK_CLEAR_LOGS,
+                                            )
+                                            PjmLogger.clear()
+                                            VaultManager.updateProgress(
+                                                1f,
+                                                context.getString(R.string.status_logs_cleared),
+                                                taskId = VaultManager.TASK_CLEAR_LOGS,
+                                            )
+                                            withContext(Dispatchers.Main) {
+                                                Toast
+                                                    .makeText(
+                                                        context,
+                                                        context.getString(R.string.status_logs_cleared),
+                                                        Toast.LENGTH_SHORT,
+                                                    ).show()
+                                            }
+                                            delay(1200)
+                                            VaultManager.clearProgress(VaultManager.TASK_CLEAR_LOGS)
+                                        } finally {
+                                            VaultManager.endOperation(VaultManager.TASK_CLEAR_LOGS)
+                                        }
+                                    }
+                                },
+                                onFactoryReset = { showFactoryResetConfirm = true },
+                                onRandomShare = { showRandomShareDialog = true },
+                            )
+                    }
                 }
             }
         }
@@ -425,24 +506,6 @@ fun SettingsScreen(
                 launchSafAuth(pkg)
             },
         )
-    }
-
-    if (showExportConfirm) {
-        PjmAeroDialog(
-            onDismissRequest = { showExportConfirm = false },
-            title = stringResource(R.string.dialog_title_export_vault),
-            confirmButton = {
-                Button(onClick = {
-                    showExportConfirm = false
-                    mainViewModel.startVaultExport { success ->
-                        if (success) Toast.makeText(context, vaultExportedMsg, Toast.LENGTH_SHORT).show()
-                    }
-                }) { Text(stringResource(R.string.action_confirm_export)) }
-            },
-            dismissButton = { TextButton(onClick = { showExportConfirm = false }) { Text(stringResource(R.string.action_cancel)) } },
-        ) {
-            Text(stringResource(R.string.dialog_msg_export_vault), style = MaterialTheme.typography.bodyMedium)
-        }
     }
 
     if (showFactoryResetConfirm) {
@@ -577,49 +640,61 @@ fun SettingsScreen(
         }
     }
 
-    // 检查更新弹窗（检查中 / 结果展示）
-    if (isCheckingUpdate) {
+    // 检查更新：一个弹窗贯穿「检查中 → 结果」。
+    // 先显示（点按钮立刻弹窗、弹窗里转圈），再加载（结果回填到同一个弹窗里）——
+    // 原实现是「检查中弹窗」+「结果弹窗」两个：前者消失、后者弹出，视觉上闪两次窗口。
+    if (showUpdateDialog) {
+        val result = updateCheckResult
         PjmAeroDialog(
-            onDismissRequest = { },
-            title = stringResource(R.string.dialog_title_check_update),
-            icon = { CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp) },
-            confirmButton = {},
-            dismissButton = {},
-        ) {
-            Text(stringResource(R.string.dialog_msg_checking_update), style = MaterialTheme.typography.bodyMedium)
-        }
-    }
-
-    updateCheckResult?.let { result ->
-        PjmAeroDialog(
-            onDismissRequest = { updateCheckResult = null },
+            onDismissRequest = {
+                showUpdateDialog = false
+                // 检查尚未结束时结果到达只更新状态，不再自动弹窗
+                if (!isCheckingUpdate) updateCheckResult = null
+            },
             title =
-                when (result) {
-                    is UpdateChecker.CheckResult.UpdateAvailable -> stringResource(R.string.dialog_title_update_available)
-                    is UpdateChecker.CheckResult.UpToDate -> stringResource(R.string.dialog_title_update_uptodate)
-                    is UpdateChecker.CheckResult.Failed -> stringResource(R.string.dialog_title_update_failed)
+                when {
+                    isCheckingUpdate -> stringResource(R.string.dialog_title_check_update)
+                    result is UpdateChecker.CheckResult.UpdateAvailable -> stringResource(R.string.dialog_title_update_available)
+                    result is UpdateChecker.CheckResult.UpToDate -> stringResource(R.string.dialog_title_update_uptodate)
+                    else -> stringResource(R.string.dialog_title_update_failed)
+                },
+            icon =
+                if (isCheckingUpdate) {
+                    { CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp) }
+                } else {
+                    null
                 },
             confirmButton = {
-                if (result is UpdateChecker.CheckResult.UpdateAvailable) {
-                    Button(onClick = {
-                        updateCheckResult = null
-                        // 核心修复：下载交给进程级的 UpdateController。
-                        // 原来绑在 rememberCoroutineScope() 上，用户一离开设置页协程就被取消，
-                        // 下载静默消失且没有任何提示。
-                        // 横幅的「可用更新」状态与设置页检查结果共用同一条数据。
-                        UpdateController.publishAvailable(result)
-                        UpdateController.startDownload(context)
-                    }) { Text(stringResource(R.string.action_download_install)) }
-                } else {
-                    Button(onClick = { updateCheckResult = null }) { Text(stringResource(R.string.action_dismiss)) }
+                when (result) {
+                    null -> Unit
+                    is UpdateChecker.CheckResult.UpdateAvailable ->
+                        Button(onClick = {
+                            showUpdateDialog = false
+                            updateCheckResult = null
+                            // 下载交给进程级的 UpdateController：离开设置页也不会被取消。
+                            // 横幅的「可用更新」状态与设置页检查结果共用同一条数据。
+                            UpdateController.publishAvailable(result)
+                            UpdateController.startDownload(context)
+                        }) { Text(stringResource(R.string.action_download_install)) }
+
+                    else ->
+                        Button(onClick = {
+                            showUpdateDialog = false
+                            updateCheckResult = null
+                        }) { Text(stringResource(R.string.action_dismiss)) }
                 }
             },
             dismissButton = {
-                TextButton(onClick = { updateCheckResult = null }) { Text(stringResource(R.string.action_cancel)) }
+                TextButton(onClick = {
+                    showUpdateDialog = false
+                    updateCheckResult = null
+                }) { Text(stringResource(R.string.action_cancel)) }
             },
         ) {
-            when (result) {
-                is UpdateChecker.CheckResult.UpdateAvailable -> {
+            when {
+                isCheckingUpdate ->
+                    Text(stringResource(R.string.dialog_msg_checking_update), style = MaterialTheme.typography.bodyMedium)
+                result is UpdateChecker.CheckResult.UpdateAvailable -> {
                     Column(Modifier.fillMaxWidth()) {
                         Text(
                             stringResource(R.string.label_update_current, result.currentVersion),
@@ -654,12 +729,11 @@ fun SettingsScreen(
                         }
                     }
                 }
-                is UpdateChecker.CheckResult.UpToDate -> {
+                result is UpdateChecker.CheckResult.UpToDate ->
                     Text(stringResource(R.string.msg_update_uptodate, result.currentVersion), style = MaterialTheme.typography.bodyMedium)
-                }
-                is UpdateChecker.CheckResult.Failed -> {
+                result is UpdateChecker.CheckResult.Failed ->
                     Text(result.message, style = MaterialTheme.typography.bodyMedium)
-                }
+                else -> Unit
             }
         }
     }

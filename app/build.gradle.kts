@@ -1,5 +1,6 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
+import java.util.Properties
 
 plugins {
     alias(libs.plugins.android.application)
@@ -8,6 +9,16 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ktlint)
 }
+
+// 可选：根目录 keystore.properties 存在时使用正式签名；否则回退 debug 签名（保持现有行为）。
+// 文件格式：storeFile=/绝对路径/release.jks, storePassword=..., keyAlias=..., keyPassword=...
+val keystorePropertiesFile = rootProject.file("keystore.properties")
+val keystoreProperties =
+    Properties().apply {
+        if (keystorePropertiesFile.exists()) {
+            keystorePropertiesFile.inputStream().use { load(it) }
+        }
+    }
 
 android {
     namespace = "com.dhhxfggg.pjm"
@@ -20,8 +31,8 @@ android {
         applicationId = "com.dhhxfggg.pjm"
         minSdk = 24
         targetSdk = 35
-        versionCode = 44
-        versionName = "1.9.8"
+        versionCode = 45
+        versionName = "2.0.0"
 
         ndk {
             abiFilters.addAll(listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64"))
@@ -44,6 +55,14 @@ android {
             enableV3Signing = true
             enableV4Signing = true
         }
+        if (keystorePropertiesFile.exists()) {
+            create("release") {
+                storeFile = file(keystoreProperties.getProperty("storeFile"))
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
+        }
     }
 
     buildTypes {
@@ -53,7 +72,12 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig =
+                if (keystorePropertiesFile.exists()) {
+                    signingConfigs.getByName("release")
+                } else {
+                    signingConfigs.getByName("debug")
+                }
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
@@ -77,6 +101,11 @@ android {
         unitTests {
             isIncludeAndroidResources = true
         }
+    }
+
+    // Room 迁移测试需要把导出的 schema JSON 作为 androidTest assets（MigrationTestHelper 读取）
+    sourceSets {
+        getByName("androidTest").assets.srcDir("$projectDir/schemas")
     }
 }
 
@@ -133,9 +162,15 @@ dependencies {
     implementation(libs.coil.video)
     implementation(libs.coil.network.okhttp)
 
+    // 图片缩放/手势（Telephoto：双指缩放、双击、惯性、与 pager 的嵌套滚动）
+    implementation(libs.telephoto.zoomable)
+    // 官方 zoomable 图片组件（自带 Fit 内容边界计算 + 大图分块采样，避免手搓 contentLocation 出错）
+    implementation(libs.telephoto.zoomable.image.coil3)
+
     // Media3
     implementation(libs.androidx.media3.exoplayer)
     implementation(libs.androidx.media3.ui)
+    implementation(libs.androidx.media3.session)
     implementation(libs.androidx.media3.common)
 
     // 日志
@@ -150,6 +185,12 @@ dependencies {
     testImplementation(libs.robolectric)
     testImplementation(libs.androidx.test.core)
     testImplementation(libs.androidx.room.testing)
+
+    // 仪器化测试（ExampleInstrumentedTest 需要 AndroidJUnit4 + InstrumentationRegistry）
+    androidTestImplementation(libs.androidx.test.core)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.room.testing)
 }
 
 tasks.withType<KotlinCompile>().configureEach {

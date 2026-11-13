@@ -17,6 +17,8 @@ captures/
 *.hprof
 *.keystore
 *.jks
+keystore.properties
+*.jks
 *.p12
 
 # ===== IDE: IntelliJ / Android Studio =====

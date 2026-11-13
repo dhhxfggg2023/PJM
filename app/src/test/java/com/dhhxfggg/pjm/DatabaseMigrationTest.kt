@@ -13,7 +13,6 @@ import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -24,8 +23,9 @@ import org.robolectric.annotation.Config
 /**
  * 数据库迁移 + 浏览历史功能测试。
  *
- * 说明：不用 MigrationTestHelper（其 schema 加载依赖测试 assets，Robolectric 下不稳定），
- * 改为直接对内存库执行迁移 SQL，验证：
+ * 说明：真实 9→10→11 迁移（含 schema 校验与数据保留）由 androidTest 的
+ * `DatabaseMigrationTest`（MigrationTestHelper）覆盖。本文件只在 Robolectric 下验证
+ * 迁移 SQL 的幂等性与浏览历史表的行为，不作为"迁移正确"的证明。验证：
  *  1. v9→v10：迁移后 view_history 表存在且可读写；
  *  2. v10→v11：废弃表（novels/chapters/download_tasks）被删除，且 files/view_history 不受影响；
  *  3. files 表数据不受影响；
@@ -149,8 +149,8 @@ class DatabaseMigrationTest {
 
             val unviewed = viewHistoryDao.getUnviewedPathsByCategory(cat)
             assertEquals(3, unviewed.size)
-            assert(!unviewed.contains("$cat/img_1.jpg"))
-            assert(!unviewed.contains("$cat/img_2.jpg"))
+            assertFalse(unviewed.contains("$cat/img_1.jpg"))
+            assertFalse(unviewed.contains("$cat/img_2.jpg"))
         }
 
     /** 重复标记同一文件应幂等（REPLACE），不会产生重复行 */
@@ -185,6 +185,5 @@ class DatabaseMigrationTest {
             viewHistoryDao.purgeOrphans()
 
             assertEquals("孤儿历史应被清理", 1, viewHistoryDao.getViewedCount())
-            assertNotNull(viewHistoryDao)
         }
 }

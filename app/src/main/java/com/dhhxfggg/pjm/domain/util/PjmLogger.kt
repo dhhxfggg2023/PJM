@@ -24,6 +24,13 @@ object PjmLogger {
     private var businessLogFile: File? = null
     private var errorLogFile: File? = null
 
+    // 日志异步落盘：I 级进队列由单独线程批量写，W/E 仍然同步 hard-sync（崩溃也要留下）。
+    // 之前每条日志都 open/write/close 一次文件，扫描/导入期间会把 IO 和主线程都拖慢。
+    private val pendingLines = java.util.concurrent.ConcurrentLinkedQueue<String>()
+
+    @Volatile
+    private var writerStarted = false
+
     private val logDateFormatter =
         object : ThreadLocal<SimpleDateFormat>() {
             override fun initialValue(): SimpleDateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
@@ -36,6 +43,7 @@ object PjmLogger {
         val logDir = File(context.filesDir, "logs").apply { if (!exists()) mkdirs() }
         businessLogFile = File(logDir, "pjm_business.log")
         errorLogFile = File(logDir, "pjm_error.log")
+        startLogWriter()
 
         i(LOG_TAG, "==================== DIAGNOSTIC ENGINE INITIALIZED ====================")
         i(LOG_TAG, "Model: ${android.os.Build.MODEL}, OS: ${android.os.Build.VERSION.RELEASE}, API: ${android.os.Build.VERSION.SDK_INT}")
@@ -78,8 +86,12 @@ object PjmLogger {
             "E" -> Log.e(safeTag, fullMsg)
         }
 
-        // 2. Persist to Business Log
-        writeToDisk(businessLogFile, logLine, isCritical = (level == "E" || level == "W"))
+        // 2. 持久化：W/E 立即 hard-sync；I 交给后台线程批量写；D 只进 logcat（扫描心跳这类高频日志不落盘）
+        when (level) {
+            "W", "E" -> writeToDisk(businessLogFile, logLine, isCritical = true)
+            "I" -> pendingLines.add(logLine)
+            else -> Unit
+        }
 
         // 3. Persist to Error Log with System Context if it's an error
         if (level == "E") {
@@ -142,6 +154,40 @@ object PjmLogger {
         }
     }
 
+    private fun startLogWriter() {
+        if (writerStarted) return
+        writerStarted = true
+        Thread(
+            {
+                while (true) {
+                    try {
+                        val first = pendingLines.poll()
+                        if (first == null) {
+                            Thread.sleep(80)
+                            continue
+                        }
+                        val batch = StringBuilder(first)
+                        var budget = 64 * 1024
+                        while (budget > 0) {
+                            val next = pendingLines.poll() ?: break
+                            batch.append(next)
+                            budget -= next.length
+                        }
+                        writeToDisk(businessLogFile, batch.toString(), isCritical = false)
+                    } catch (_: InterruptedException) {
+                        return@Thread
+                    } catch (_: Throwable) {
+                        // 写日志失败不能影响主流程
+                    }
+                }
+            },
+            "pjm-log-writer",
+        ).apply {
+            isDaemon = true
+            start()
+        }
+    }
+
     private fun captureSystemContext(): String {
         val runtime = Runtime.getRuntime()
         val usedMem = (runtime.totalMemory() - runtime.freeMemory()) / 1024 / 1024
@@ -198,6 +244,7 @@ object PjmLogger {
     fun getErrorLogFile(): File? = errorLogFile
 
     fun clear() {
+        pendingLines.clear()
         businessLogFile?.delete()
         errorLogFile?.delete()
         businessLogFile?.parentFile?.listFiles()?.forEach { if (it.name.endsWith(".old")) it.delete() }

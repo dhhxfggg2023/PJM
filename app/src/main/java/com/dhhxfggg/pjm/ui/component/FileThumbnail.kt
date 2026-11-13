@@ -1,11 +1,14 @@
 package com.dhhxfggg.pjm.ui.component
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import coil3.compose.AsyncImage
+import coil3.request.CachePolicy
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import coil3.video.VideoFrameDecoder
@@ -13,6 +16,9 @@ import com.dhhxfggg.pjm.data.model.FileEntity
 import com.dhhxfggg.pjm.domain.util.FileUtils
 import com.dhhxfggg.pjm.domain.util.ThumbnailCache
 import com.dhhxfggg.pjm.domain.util.VaultManager
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.File
 
 /**
  * 统一缩略图解码尺寸：网格列数少（卡片大）用高分辨率，列数多（卡片小）用低分辨率。
@@ -54,40 +60,52 @@ internal fun FileThumbnail(
         remember(fileEntity.relativePath) {
             VaultManager.getFileFromEntity(context, fileEntity)
         }
-    if (!file.exists()) return
+    // 不再在组合期 stat 文件：保险库目录里几万个文件，FUSE 上一次 stat 可能要几毫秒，
+    // 滚动时每个新项都做一次会直接把主线程拖慢（实测 jank 25%、90 分位 113ms）。
+    // 文件缺失时 Coil 自己会走 error 分支，露出的就是卡片底色，和原来一致。
 
-    // 视频优先加载半持久化缩略图 jpg（首次由 ViewModel 异步生成）
-    val diskThumb =
-        remember(fileEntity.relativePath) {
-            if (FileUtils.isVideoFile(fileEntity.name)) {
-                ThumbnailCache.getThumbnailFile(context, fileEntity)
-            } else {
-                null
-            }
+    // 视频优先加载半持久化缩略图 jpg（首次由 ViewModel 异步生成）。
+    // 解析缩略图路径要 stat 两次，不能在组合期做成同步 IO —— 挪到 IO 线程异步取。
+    val diskThumb by
+        produceState<File?>(initialValue = null, fileEntity.relativePath) {
+            value =
+                if (FileUtils.isVideoFile(fileEntity.name)) {
+                    withContext(Dispatchers.IO) { ThumbnailCache.getThumbnailFile(context, fileEntity) }
+                } else {
+                    null
+                }
         }
     val fingerprint =
         remember(fileEntity.relativePath) {
             FileUtils.getFileFingerprint(fileEntity)
         }
 
+    // 请求只构建一次：每次重组都 new 一个 Builder 会反复分配对象，也让 Coil 更容易重新发起加载
+    val thumbPath = diskThumb?.absolutePath
     val request =
-        ImageRequest
-            .Builder(context)
-            .size(size)
-            .crossfade(crossfade)
-            .apply {
-                if (diskThumb != null) {
-                    // 持久化缩略图是小文件，直接加载；
-                    // 不写 diskCacheKey，避免缩略图重建后命中旧缓存
-                    data(diskThumb.absolutePath)
-                } else {
-                    data(file.absolutePath)
-                    diskCacheKey(fingerprint)
-                    if (FileUtils.isVideoFile(fileEntity.name)) {
-                        decoderFactory(VideoFrameDecoder.Factory())
+        remember(file.absolutePath, size, crossfade, thumbPath, fingerprint) {
+            ImageRequest
+                .Builder(context)
+                .size(size)
+                .crossfade(crossfade)
+                // 保险库里的文件本来就在本地，Coil 再把它整份复制进磁盘缓存是纯双倍 IO：
+                // 滚动时每个新缩略图都要"读整个 JPEG + 写整个 JPEG"，缓存还会不停淘汰重写。
+                // 直接解码源文件，内存缓存负责同会话的复用。
+                .diskCachePolicy(CachePolicy.DISABLED)
+                .apply {
+                    if (thumbPath != null) {
+                        // 持久化缩略图是小文件，直接加载；
+                        // 不写 diskCacheKey，避免缩略图重建后命中旧缓存
+                        data(thumbPath)
+                    } else {
+                        data(file.absolutePath)
+                        diskCacheKey(fingerprint)
+                        if (FileUtils.isVideoFile(fileEntity.name)) {
+                            decoderFactory(VideoFrameDecoder.Factory())
+                        }
                     }
-                }
-            }.build()
+                }.build()
+        }
 
     AsyncImage(
         model = request,

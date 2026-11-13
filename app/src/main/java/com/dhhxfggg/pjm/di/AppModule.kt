@@ -2,9 +2,10 @@ package com.dhhxfggg.pjm.di
 
 import android.content.Context
 import androidx.room.Room
-import androidx.room.RoomDatabase
 import com.dhhxfggg.pjm.data.db.AppDatabase
 import com.dhhxfggg.pjm.data.db.FileDao
+import com.dhhxfggg.pjm.data.db.ManagedAppDao
+import com.dhhxfggg.pjm.data.db.TakeoverJobDao
 import com.dhhxfggg.pjm.data.db.ViewHistoryDao
 import com.dhhxfggg.pjm.data.repository.FileRepository
 import com.dhhxfggg.pjm.data.repository.FileRepositoryImpl
@@ -50,13 +51,7 @@ abstract class AppModule {
                     "pjm_app_database",
                 ).setJournalMode(androidx.room.RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
                 .addMigrations(*AppDatabase.MIGRATIONS)
-                .addCallback(
-                    object : RoomDatabase.Callback() {
-                        override fun onOpen(db: androidx.sqlite.db.SupportSQLiteDatabase) {
-                            AppDatabase.openDb = db
-                        }
-                    },
-                ).build()
+                .build()
 
         /**
          * 提供数据库访问对象 [FileDao]。
@@ -71,5 +66,19 @@ abstract class AppModule {
         @Provides
         @Singleton
         fun provideViewHistoryDao(database: AppDatabase): ViewHistoryDao = database.viewHistoryDao()
+
+        /**
+         * 提供「应用接管」的 DAO（被接管应用列表）。
+         */
+        @Provides
+        @Singleton
+        fun provideManagedAppDao(database: AppDatabase): ManagedAppDao = database.managedAppDao()
+
+        /**
+         * 提供「应用接管」的 DAO（接管任务记录/失败计数）。
+         */
+        @Provides
+        @Singleton
+        fun provideTakeoverJobDao(database: AppDatabase): TakeoverJobDao = database.takeoverJobDao()
     }
 }

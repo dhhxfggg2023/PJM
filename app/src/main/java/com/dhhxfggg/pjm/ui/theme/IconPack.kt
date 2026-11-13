@@ -31,6 +31,7 @@ interface IconPack {
     val catImages: ImageVector
     val catVideos: ImageVector
     val catAudios: ImageVector
+    val catTexts: ImageVector
     val catOthers: ImageVector
 
     // 动作
@@ -125,6 +126,7 @@ object LucideIconPack : IconPack {
     override val catImages = Lucide.Images
     override val catVideos = Lucide.Film
     override val catAudios = Lucide.Music
+    override val catTexts = Lucide.FileText
     override val catOthers = Lucide.Folder
 
     // ---- 动作 ----

@@ -185,7 +185,7 @@ class BiliSettingsController(
                                 expectedSize = FileUtils.getFileSize(app, item.uri),
                                 overrideCategory = VaultManager.CAT_BILI_VIDEOS,
                             ).onSuccess { entity ->
-                                fileDao.upsert(entity)
+                                fileDao.upsertLocked(entity)
                                 ThumbnailCache.generateVideoThumbnail(app, entity)
                                 importedOk.add(item)
                             }
@@ -339,45 +339,40 @@ class BiliSettingsController(
                                         expectedSize = tempMp4.length(),
                                         overrideCategory = VaultManager.CAT_BILI_VIDEOS,
                                     ).onSuccess { entity ->
-                                        fileDao.upsert(entity)
+                                        fileDao.upsertLocked(entity)
                                         ThumbnailCache.generateVideoThumbnail(app, entity)
 
                                         if (biliAutoDelete) {
                                             try {
-                                                if (item.shizukuParentPath != null) {
-                                                    var deleted = ShizukuBridge.deletePath(app, item.shizukuParentPath)
-                                                    if (!deleted) {
-                                                        PjmLogger.w("BiliController", "Delete retry: ${item.title}")
-                                                        deleted = ShizukuBridge.deletePath(app, item.shizukuParentPath)
+                                                // 核心修复（数据安全）：只删除本条目对应的两个 m4s 源文件，
+                                                // 绝不递归删除父目录 —— 缓存目录里可能还放着用户没勾选的其他条目。
+                                                // 真正的目录清理由 cleanupEmptyBiliDirs 负责（只删整棵树无音视频的目录）。
+                                                val shizukuSources = listOfNotNull(item.shizukuVideoPath, item.shizukuAudioPath)
+                                                if (shizukuSources.isNotEmpty()) {
+                                                    shizukuSources.forEach { p ->
+                                                        runCatching { ShizukuBridge.deletePath(app, p) }
+                                                            .onFailure { PjmLogger.w("BiliController", "Delete failed: " + p) }
                                                     }
-                                                    if (deleted) {
-                                                        PjmLogger.i("BiliController", "Shizuku cleaned Bili source folder: ${item.title}")
-                                                    } else {
-                                                        PjmLogger.e("BiliController", "Delete still failed: ${item.title}")
-                                                        listOfNotNull(item.shizukuVideoPath, item.shizukuAudioPath).forEach { p ->
-                                                            try {
-                                                                ShizukuBridge.deletePath(app, p)
-                                                            } catch (_: Exception) {
+                                                    item.shizukuParentPath?.let { cleanupEmptyBiliParents(app, it) }
+                                                } else if (item.parentFolder.scheme == "file") {
+                                                    listOf(item.videoM4s, item.audioM4s).forEach { u ->
+                                                        runCatching { u.path?.let { File(it).delete() } }
+                                                    }
+                                                    val folderPath = item.parentFolder.path ?: ""
+                                                    cleanupEmptyBiliParents(app, folderPath)
+                                                } else {
+                                                    listOf(item.videoM4s, item.audioM4s).forEach { u ->
+                                                        runCatching {
+                                                            if (DocumentsContract.isDocumentUri(app, u)) {
+                                                                DocumentsContract.deleteDocument(app.contentResolver, u)
+                                                            } else {
+                                                                app.contentResolver.delete(u, null, null)
                                                             }
                                                         }
                                                     }
-                                                    cleanupEmptyBiliParents(app, item.shizukuParentPath)
-                                                } else if (item.parentFolder.scheme == "file") {
-                                                    val folderPath = item.parentFolder.path ?: ""
-                                                    File(folderPath).deleteRecursively()
-                                                    cleanupEmptyBiliParents(app, folderPath)
-                                                } else {
-                                                    val ok =
-                                                        try {
-                                                            DocumentsContract.deleteDocument(app.contentResolver, item.parentFolder)
-                                                            true
-                                                        } catch (_: Exception) {
-                                                            false
-                                                        }
-                                                    if (!ok) PjmLogger.e("BiliController", "SAF delete Bili folder failed: ${item.title}")
                                                 }
                                             } catch (e: Exception) {
-                                                PjmLogger.e("BiliController", "Failed to clean Bili folder", e)
+                                                PjmLogger.e("BiliController", "Failed to clean Bili source files", e)
                                             }
                                         }
                                     }

@@ -2,7 +2,6 @@ package com.dhhxfggg.pjm
 
 import android.app.Application
 import android.widget.Toast
-import androidx.core.content.edit
 import coil3.ImageLoader
 import coil3.PlatformContext
 import coil3.SingletonImageLoader
@@ -13,7 +12,10 @@ import coil3.request.crossfade
 import coil3.video.VideoFrameDecoder
 import com.dhhxfggg.pjm.data.db.FileDao
 import com.dhhxfggg.pjm.data.db.ViewHistoryDao
+import com.dhhxfggg.pjm.domain.service.TakeoverStarter
 import com.dhhxfggg.pjm.domain.shizuku.ShizukuBridge
+import com.dhhxfggg.pjm.domain.util.FileUtils
+import com.dhhxfggg.pjm.domain.util.FrameMonitor
 import com.dhhxfggg.pjm.domain.util.IntegritySweeper
 import com.dhhxfggg.pjm.domain.util.PjmLogger
 import com.dhhxfggg.pjm.domain.util.SettingsManager
@@ -47,7 +49,7 @@ class MainApplication :
          * 核心修复：补上 [CoroutineExceptionHandler]。
          * `SupervisorJob` 只保证「一个子任务失败不影响兄弟任务」，**不会**捕获异常 ——
          * 未捕获的异常会沿作用域冒泡到线程的默认处理器，直接让整个应用崩溃。
-         * 后台补齐缩略图、数据库备份、命名迁移、后台删除等都在这个作用域里跑，
+         * 后台补齐缩略图、命名迁移、后台删除等都在这个作用域里跑，
          * 任何一处漏掉的异常都会变成用户看到的闪退。
          */
         val applicationScope =
@@ -114,6 +116,8 @@ class MainApplication :
         super.onCreate()
         // 核心修复：显式初始化日志引擎，确保文件物理落盘
         PjmLogger.init(this)
+        // 调试版慢帧统计（release 自动禁用），用于定位具体页面的掉帧
+        FrameMonitor.start(this)
 
         // 安装全局崩溃捕获：未捕获异常写入 error 日志，便于事后定位
         PjmLogger.installCrashHandler()
@@ -168,6 +172,26 @@ class MainApplication :
             }.onFailure { e -> PjmLogger.w("MainApplication", "完整性抽查跳过: ${e.message}") }
         }
 
+        // 一次性分类迁移：把「其他」里能当文本读的（txt/md/日志/代码）挪到新的「文本」分类。
+        // 只改数据库标签，不动磁盘文件 —— FileEntity.relativePath 才是定位依据。
+        applicationScope.launch(VaultManager.PjmDispatchers.Database) {
+            runCatching {
+                val prefs = getSharedPreferences("pjm_misc_prefs", MODE_PRIVATE)
+                if (prefs.getBoolean("texts_category_migrated", false)) return@launch
+                val entry = EntryPointAccessors.fromApplication(this@MainApplication, MainAppEntryPoint::class.java)
+                val dao = entry.fileDao()
+                var moved = 0
+                dao.getFilesByCategoryOnce(VaultManager.CAT_OTHERS).forEach { entity ->
+                    if (FileUtils.isTextFile(entity.name)) {
+                        dao.updateCategory(entity.relativePath, VaultManager.CAT_TEXTS)
+                        moved++
+                    }
+                }
+                prefs.edit().putBoolean("texts_category_migrated", true).apply()
+                if (moved > 0) PjmLogger.i("MainApplication", "文本分类迁移完成: " + moved + " 个文件")
+            }.onFailure { e -> PjmLogger.w("MainApplication", "文本分类迁移跳过: " + e.message) }
+        }
+
         // 一次性命名迁移：把旧命名规则的加密容器统一为最新规范
         // `前缀_yyyyMMdd_HHmmss.pjm.N`（如旧式 Export_<毫秒>.pjm.1、X.pjm 单卷缺数字）
         // 使用版本化标志（v2），保证在旧迁移已置位的情况下本次也会执行一次；
@@ -186,15 +210,29 @@ class MainApplication :
             }.onFailure { e -> PjmLogger.w("MainApplication", "PJM 命名迁移跳过: ${e.message}") }
         }
 
-        // 每日自动备份数据库
-        applicationScope.launch(VaultManager.PjmDispatchers.Database) {
-            val prefs = getSharedPreferences("pjm_backup_prefs", MODE_PRIVATE)
-            val lastBackup = prefs.getLong("last_backup_time", 0L)
-            val currentTime = System.currentTimeMillis()
-            if ((currentTime - lastBackup) > 24 * 60 * 60 * 1000L) {
-                VaultManager.backupDatabase(this@MainApplication)
-                prefs.edit { putLong("last_backup_time", currentTime) }
-            }
+        // 一次性清理：应用内数据库备份功能已移除（用户确认不再需要备份），
+        // 删掉历史遗留的 pjm_db_backup_*.db（每个都是整库副本，占空间且永不更新），
+        // 顺手清掉只为该功能存在的 pjm_backup_prefs。目录空了连目录一起删。
+        applicationScope.launch(VaultManager.PjmDispatchers.IO) {
+            runCatching {
+                val backupDir = java.io.File(filesDir, "backups")
+                val stale =
+                    backupDir
+                        .listFiles()
+                        ?.filter { it.isFile && it.name.startsWith("pjm_db_backup_") }
+                        .orEmpty()
+                val reclaimed = stale.sumOf { it.length() }
+                stale.forEach { it.delete() }
+                if (backupDir.exists() && backupDir.listFiles()?.isEmpty() == true) backupDir.delete()
+                java.io.File(filesDir.parentFile, "shared_prefs/pjm_backup_prefs.xml").delete()
+                if (stale.isNotEmpty()) {
+                    PjmLogger.i("MainApplication", "已清理历史数据库备份：${stale.size} 个文件，释放 ${reclaimed / 1024 / 1024} MB")
+                }
+            }.onFailure { e -> PjmLogger.w("MainApplication", "历史备份清理跳过: ${e.message}") }
         }
+
+        // 「应用接管」：被接管列表非空时确保观察者服务在跑。
+        // 冷启动兜底（服务被系统回收/用户强杀后重新拉起）；开机广播会先于这里触发一次。
+        TakeoverStarter.startIfEnabled(this)
     }
 }

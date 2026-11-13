@@ -47,7 +47,7 @@ fun SelectableFileCard(
     fileEntity: FileEntity,
     isSelected: Boolean,
     onClick: () -> Unit,
-    onLongPress: () -> Unit,
+    onLongPress: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
     imageOnly: Boolean = false,
     gridSpanCount: Int = 2,
@@ -108,7 +108,7 @@ fun SelectableFileCard(
                 FileThumbnail(
                     fileEntity = fileEntity,
                     size = thumbnailSizeFor(gridSpanCount),
-                    crossfade = gridSpanCount <= 3,
+                    crossfade = false, // 相册滚动时逐张淡入会持续触发动画，明显掉帧
                     modifier = Modifier.fillMaxSize(),
                 )
 

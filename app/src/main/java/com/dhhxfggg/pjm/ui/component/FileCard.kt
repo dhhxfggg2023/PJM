@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -39,6 +40,10 @@ private fun getIconForExtension(
 
 /**
  * A card component representing a file in the vault.
+ *
+ * 相册网格（imageOnly）刻意不再套 [Card]/[Surface]：Material 卡片每一格都要额外画一层
+ * 阴影 + 圆角裁剪，快速滑动时一屏十几格同时绘制，是掉帧的主要来源。网格里只保留
+ * 「一层圆角底色 + 缩略图」，列表模式才用完整卡片。
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -51,10 +56,93 @@ fun FileCard(
     showThumbnail: Boolean = true,
     imageOnly: Boolean = false,
     gridSpanCount: Int = 2,
+    /** 右上角常驻菜单（分享/重命名/删除）；三个都为空时不显示 */
+    onShare: (() -> Unit)? = null,
+    onRename: (() -> Unit)? = null,
+    onDelete: (() -> Unit)? = null,
 ) {
     val iconPack = rememberIconPack()
 
     val icon = remember(fileEntity.extension, iconPack) { getIconForExtension(fileEntity.extension, iconPack) }
+
+    if (imageOnly) {
+        // 格子越小圆角越小：6 列时一格才 50dp 上下，用 12dp 圆角看着就是个圆
+        val shape =
+            RoundedCornerShape(
+                when {
+                    gridSpanCount >= 5 -> 4.dp
+                    gridSpanCount >= 3 -> 8.dp
+                    else -> 12.dp
+                },
+            )
+        val selectionBorder =
+            if (isSelected) {
+                Modifier.border(2.dp, MaterialTheme.colorScheme.primary, shape)
+            } else {
+                Modifier
+            }
+        Box(
+            modifier =
+                modifier
+                    .fillMaxWidth()
+                    .clip(shape)
+                    .background(
+                        if (isSelected) {
+                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+                        } else {
+                            MaterialTheme.colorScheme.surface
+                        },
+                    ).then(selectionBorder)
+                    .combinedClickable(onClick = onClick, onLongClick = onLongClick),
+            contentAlignment = Alignment.Center,
+        ) {
+            // 非图片/视频没有缩略图，用类型图标兜底（图标一直有，缩略图加载后覆盖在上面）
+            if (!fileEntity.isImage && !FileUtils.isVideoFile(fileEntity.name)) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                    modifier = Modifier.size(if (gridSpanCount >= 6) 24.dp else 40.dp),
+                )
+            }
+            if (showThumbnail) {
+                FileThumbnail(
+                    fileEntity = fileEntity,
+                    size = thumbnailSizeFor(gridSpanCount),
+                    crossfade = false, // 相册滚动时逐张淡入会持续触发动画，明显掉帧
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+            if (isSelected) {
+                Box(
+                    modifier =
+                        Modifier
+                            .fillMaxSize()
+                            .background(Color.Black.copy(alpha = 0.2f)),
+                )
+                Icon(
+                    imageVector = Lucide.CircleCheck,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier =
+                        Modifier
+                            .align(Alignment.TopStart)
+                            .padding(8.dp)
+                            .size(24.dp),
+                )
+            }
+            if (onShare != null || onRename != null || onDelete != null) {
+                CardMoreMenu(
+                    iconPack = iconPack,
+                    onShare = onShare,
+                    onRename = onRename,
+                    onDelete = onDelete,
+                    modifier = Modifier.align(Alignment.TopEnd).padding(4.dp),
+                )
+            }
+        }
+        return
+    }
 
     Card(
         modifier =
@@ -63,12 +151,6 @@ fun FileCard(
                 .combinedClickable(
                     onClick = onClick,
                     onLongClick = onLongClick,
-                ).then(
-                    if (isSelected) {
-                        Modifier.border(2.dp, MaterialTheme.colorScheme.primary, MaterialTheme.shapes.medium)
-                    } else {
-                        Modifier
-                    },
                 ),
         elevation = CardDefaults.cardElevation(defaultElevation = if (gridSpanCount >= 6) 0.dp else 1.dp),
         colors =
@@ -81,33 +163,36 @@ fun FileCard(
                     },
             ),
     ) {
-        if (imageOnly) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Box(
-                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center,
+                modifier =
+                    Modifier
+                        .size(64.dp)
+                        .clip(MaterialTheme.shapes.small),
             ) {
                 Surface(
                     color = MaterialTheme.colorScheme.secondaryContainer,
                     modifier = Modifier.fillMaxSize(),
                 ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = icon,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                            modifier = Modifier.size(if (gridSpanCount >= 6) 24.dp else 48.dp),
-                        )
-                    }
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                        modifier = Modifier.size(32.dp),
+                    )
                 }
-
                 if (showThumbnail) {
                     FileThumbnail(
                         fileEntity = fileEntity,
-                        size = thumbnailSizeFor(gridSpanCount),
-                        crossfade = gridSpanCount <= 3,
+                        size = 256,
+                        crossfade = false,
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
-
                 if (isSelected) {
                     Box(
                         modifier =
@@ -119,80 +204,107 @@ fun FileCard(
                         imageVector = Lucide.CircleCheck,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary,
-                        modifier =
-                            Modifier
-                                .align(Alignment.TopStart)
-                                .padding(8.dp)
-                                .size(24.dp),
+                        modifier = Modifier.size(32.dp),
                     )
                 }
-
-                // 核心修复：根据用户要求，网格模式（imageOnly）下彻底移除所有文字覆盖层（包括时间/名字）
             }
-        } else {
-            Row(
-                modifier = Modifier.padding(12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(
-                    contentAlignment = Alignment.Center,
-                    modifier =
-                        Modifier
-                            .size(64.dp)
-                            .clip(MaterialTheme.shapes.small),
-                ) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.secondaryContainer,
-                        modifier = Modifier.fillMaxSize(),
-                    ) {
-                        Icon(
-                            imageVector = icon,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                            modifier = Modifier.size(32.dp),
-                        )
-                    }
-                    if (showThumbnail) {
-                        FileThumbnail(
-                            fileEntity = fileEntity,
-                            size = 256,
-                            crossfade = false,
-                            modifier = Modifier.fillMaxSize(),
-                        )
-                    }
-                    if (isSelected) {
-                        Box(
-                            modifier =
-                                Modifier
-                                    .fillMaxSize()
-                                    .background(Color.Black.copy(alpha = 0.2f)),
-                        )
-                        Icon(
-                            imageVector = Lucide.CircleCheck,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(32.dp),
-                        )
-                    }
-                }
-                Spacer(modifier = Modifier.width(16.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = FileUtils.formatFileTime(fileEntity.lastModified),
-                        style = MaterialTheme.typography.titleMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        color = if (isSelected) MaterialTheme.colorScheme.primary else Color.Unspecified,
-                    )
-                    Text(
-                        text = FileUtils.formatFileSize(fileEntity.size),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                if (isSelected) {
-                    Checkbox(checked = true, onCheckedChange = { onClick() })
-                }
+            Spacer(modifier = Modifier.width(16.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                // 列表里必须能看见文件名：只给日期和大小根本认不出是哪个文件
+                Text(
+                    text = FileUtils.normalizedDisplayName(fileEntity),
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    color = if (isSelected) MaterialTheme.colorScheme.primary else Color.Unspecified,
+                )
+                Text(
+                    text = FileUtils.formatFileTime(fileEntity.lastModified) + " · " + FileUtils.formatFileSize(fileEntity.size),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (isSelected) {
+                Checkbox(checked = true, onCheckedChange = { onClick() })
+            }
+            if (onShare != null || onRename != null || onDelete != null) {
+                CardMoreMenu(
+                    iconPack = iconPack,
+                    onShare = onShare,
+                    onRename = onRename,
+                    onDelete = onDelete,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 卡片右上角的「⋮」常驻菜单。
+ *
+ * 分享/删除原来挂在长按上，跟"长按加速"打架；重命名也没有入口。
+ * 现在统一收到这个菜单里，长按专心留给加速。
+ */
+@Composable
+private fun CardMoreMenu(
+    iconPack: com.dhhxfggg.pjm.ui.theme.IconPack,
+    onShare: (() -> Unit)?,
+    onRename: (() -> Unit)?,
+    onDelete: (() -> Unit)?,
+    modifier: Modifier = Modifier,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box(modifier = modifier) {
+        IconButton(
+            onClick = { expanded = true },
+            modifier =
+                Modifier
+                    .size(32.dp)
+                    .background(
+                        MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
+                        androidx.compose.foundation.shape.CircleShape,
+                    ),
+        ) {
+            Icon(
+                imageVector = iconPack.actionMore,
+                contentDescription = "更多",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp),
+            )
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            if (onShare != null) {
+                DropdownMenuItem(
+                    text = { Text("分享") },
+                    leadingIcon = { Icon(iconPack.actionShare, contentDescription = null) },
+                    onClick = {
+                        expanded = false
+                        onShare()
+                    },
+                )
+            }
+            if (onRename != null) {
+                DropdownMenuItem(
+                    text = { Text("重命名") },
+                    leadingIcon = { Icon(iconPack.actionRename, contentDescription = null) },
+                    onClick = {
+                        expanded = false
+                        onRename()
+                    },
+                )
+            }
+            if (onDelete != null) {
+                HorizontalDivider()
+                DropdownMenuItem(
+                    text = { Text("删除", color = MaterialTheme.colorScheme.error) },
+                    leadingIcon = { Icon(iconPack.actionDelete, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
+                    onClick = {
+                        expanded = false
+                        onDelete()
+                    },
+                )
             }
         }
     }

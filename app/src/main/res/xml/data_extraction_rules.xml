@@ -13,6 +13,8 @@
         <exclude domain="file" path="backups/" />
         <exclude domain="file" path="logs/" />
         <exclude domain="file" path="pjm_named_share/" />
+        <exclude domain="file" path="pjm_thumbnail_cache/" />
+        <exclude domain="file" path="datastore/" />
         <exclude domain="database" path="." />
         <exclude domain="sharedpref" path="." />
     </cloud-backup>
@@ -23,6 +25,8 @@
         <exclude domain="file" path="backups/" />
         <exclude domain="file" path="logs/" />
         <exclude domain="file" path="pjm_named_share/" />
+        <exclude domain="file" path="pjm_thumbnail_cache/" />
+        <exclude domain="file" path="datastore/" />
         <exclude domain="database" path="." />
         <exclude domain="sharedpref" path="." />
     </device-transfer>

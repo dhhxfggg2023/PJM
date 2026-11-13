@@ -40,6 +40,10 @@ class SettingsManager
             val KEY_BILI_ROOT_URI = stringPreferencesKey(Settings.KEY_BILI_ROOT_URI)
             val KEY_BILI_AUTO_DELETE = booleanPreferencesKey(Settings.KEY_BILI_AUTO_DELETE)
             val KEY_BILI_MERGED_AUTO_DELETE = booleanPreferencesKey(Settings.KEY_BILI_MERGED_AUTO_DELETE)
+            val KEY_PREDICTIVE_BACK = booleanPreferencesKey(Settings.KEY_PREDICTIVE_BACK)
+            val KEY_DISCOVERY_DEFAULT_MODE = stringPreferencesKey(Settings.KEY_DISCOVERY_DEFAULT_MODE)
+            val KEY_COVER_ENABLED = booleanPreferencesKey(Settings.KEY_COVER_ENABLED)
+            val KEY_COVER_REFRESH = stringPreferencesKey(Settings.KEY_COVER_REFRESH)
 
             fun getSettingsFlow(context: Context): Flow<Settings.AppSettings> =
                 context.dataStore.data.map { preferences ->
@@ -59,6 +63,10 @@ class SettingsManager
                         biliRootUri = preferences[KEY_BILI_ROOT_URI],
                         biliAutoDelete = preferences[KEY_BILI_AUTO_DELETE] ?: false,
                         biliMergedAutoDelete = preferences[KEY_BILI_MERGED_AUTO_DELETE] ?: false,
+                        predictiveBackEnabled = preferences[KEY_PREDICTIVE_BACK] ?: true,
+                        discoveryDefaultMode = preferences[KEY_DISCOVERY_DEFAULT_MODE] ?: "bili_videos",
+                        coverEnabled = preferences[KEY_COVER_ENABLED] ?: true,
+                        coverRefresh = preferences[KEY_COVER_REFRESH] ?: "each",
                     )
                 }
         }

@@ -7,7 +7,6 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
@@ -35,6 +34,13 @@ class ThumbnailSyncManager
         private val fileDao: FileDao,
     ) {
         private var syncJob: Job? = null
+
+        /** 上次清扫孤儿指纹的时间（全量图片集合构建不便宜，限频） */
+        private var lastFingerprintSweepAt = 0L
+
+        private companion object {
+            const val FINGERPRINT_SWEEP_INTERVAL_MS = 30L * 60 * 1000
+        }
 
         /** 解码并发限制（避免与浏览列表解码抢 IO） */
         private val decodeSemaphore = Semaphore(3)
@@ -80,17 +86,21 @@ class ThumbnailSyncManager
          */
         private suspend fun syncOnce(): Boolean {
             if (VaultManager.isOperationActive) return false
-            val all =
+
+            // 缩略图只对视频有意义：图片由 Coil 直接解码并走它自己的磁盘缓存，
+            // ThumbnailCache 里的图片缩略图从来没有读取方。
+            // 旧实现每轮都把 4 万张图逐条 stat、还生成没人读的图片缩略图 —— 纯浪费 IO。
+            val videos =
                 try {
-                    fileDao.getAllFiles().first()
+                    fileDao.getFilesByCategoryOnce(VaultManager.CAT_VIDEOS) +
+                        fileDao.getFilesByCategoryOnce(VaultManager.CAT_BILI_VIDEOS)
                 } catch (_: Exception) {
                     return false
                 }
-            val media = all.filter { FileUtils.isImageFile(it.name) || FileUtils.isVideoFile(it.name) }
 
-            // 1) 清理孤儿缩略图：磁盘上存在但库中已无对应文件（源文件已删除/移动）
+            // 1) 清理孤儿缩略图（只保留视频对应的）
             try {
-                val validNames = media.map { ThumbnailCache.thumbName(it) }.toHashSet()
+                val validNames = videos.map { ThumbnailCache.thumbName(it) }.toHashSet()
                 ThumbnailCache.thumbDir(context).listFiles()?.forEach { f ->
                     if (f.name !in validNames) {
                         try {
@@ -102,20 +112,21 @@ class ThumbnailSyncManager
             } catch (_: Exception) {
             }
 
-            // 1b) 清理孤儿感知指纹（.txt / .g32）。
-            // 核心修复：指纹目录此前【完全没有】清扫 —— 文件改名、外部删除、删除实体后
-            // 指纹会永久残留。数量随使用时间单调增长，且里面含有旧版 32 位哈希键的遗留文件。
-            // 仅在库非空时执行，避免数据库尚未就绪时把整个缓存误删。
-            if (all.isNotEmpty()) {
+            // 1b) 清理孤儿感知指纹：需要遍历全部图片构建路径集合，半小时最多一次
+            val now = System.currentTimeMillis()
+            if (now - lastFingerprintSweepAt > FINGERPRINT_SWEEP_INTERVAL_MS) {
+                lastFingerprintSweepAt = now
                 try {
-                    val images = all.filter { FileUtils.isImageFile(it.name) }
-                    val validNames = HashSet<String>(images.size * 2)
-                    images.forEach { validNames.addAll(ImageFingerprintCache.fingerprintFileNames(it)) }
-                    ImageFingerprintCache.fingerprintDir(context).listFiles()?.forEach { f ->
-                        if (f.name !in validNames) {
-                            try {
-                                f.delete()
-                            } catch (_: Exception) {
+                    val images = fileDao.getFilesByCategoryOnce(VaultManager.CAT_IMAGES)
+                    if (images.isNotEmpty()) {
+                        val validNames = HashSet<String>(images.size * 2)
+                        images.forEach { validNames.addAll(ImageFingerprintCache.fingerprintFileNames(it)) }
+                        ImageFingerprintCache.fingerprintDir(context).listFiles()?.forEach { f ->
+                            if (f.name !in validNames) {
+                                try {
+                                    f.delete()
+                                } catch (_: Exception) {
+                                }
                             }
                         }
                     }
@@ -123,8 +134,8 @@ class ThumbnailSyncManager
                 }
             }
 
-            // 2) 找出缺失缩略图的实体（半永久缓存命中则跳过 —— 不重复生成）
-            val missing = media.filter { !ThumbnailCache.hasThumbnail(context, it) }
+            // 2) 只找缺缩略图的视频（几十到一千，不再是四万）
+            val missing = videos.filter { !ThumbnailCache.hasThumbnail(context, it) }
             if (missing.isEmpty()) return false
 
             // 3) 分批生成；期间若用户操作抢占则让位，下一轮继续
@@ -134,11 +145,7 @@ class ThumbnailSyncManager
                 decodeSemaphore.withPermit {
                     withContext(Dispatchers.IO) {
                         try {
-                            if (FileUtils.isVideoFile(entity.name)) {
-                                ThumbnailCache.generateVideoThumbnail(context, entity)
-                            } else {
-                                ThumbnailCache.generateImageThumbnail(context, entity)
-                            }
+                            ThumbnailCache.generateVideoThumbnail(context, entity)
                         } catch (_: Exception) {
                         }
                     }

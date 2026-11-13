@@ -5,6 +5,8 @@ import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.dhhxfggg.pjm.data.model.FileEntity
+import com.dhhxfggg.pjm.data.model.ManagedAppEntity
+import com.dhhxfggg.pjm.data.model.TakeoverJobEntity
 import com.dhhxfggg.pjm.data.model.ViewHistoryEntity
 
 /**
@@ -22,8 +24,8 @@ import com.dhhxfggg.pjm.data.model.ViewHistoryEntity
  * 无法补写；当前所有在网安装的数据库均为 v9。自 v9 起启用严格迁移策略。
  */
 @Database(
-    entities = [FileEntity::class, ViewHistoryEntity::class],
-    version = 11,
+    entities = [FileEntity::class, ViewHistoryEntity::class, ManagedAppEntity::class, TakeoverJobEntity::class],
+    version = 14,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -31,15 +33,11 @@ abstract class AppDatabase : RoomDatabase() {
 
     abstract fun viewHistoryDao(): ViewHistoryDao
 
-    companion object {
-        /**
-         * 当前打开的底层 SQLite 连接引用。
-         * 由 AppModule 的 RoomDatabase.Callback.onOpen 写入，
-         * 供备份前执行 PRAGMA wal_checkpoint(TRUNCATE) 使用，确保备份文件完整。
-         */
-        @Volatile
-        var openDb: SupportSQLiteDatabase? = null
+    abstract fun managedAppDao(): ManagedAppDao
 
+    abstract fun takeoverJobDao(): TakeoverJobDao
+
+    companion object {
         /**
          * v9 → v10：新增浏览历史表（发现页“没看过优先”）。
          * 仅新增表，不触及既有 files 表，对用户数据零影响。
@@ -80,8 +78,68 @@ abstract class AppDatabase : RoomDatabase() {
             }
 
         /**
+         * v11 → v12：「应用接管」功能新增两张表。
+         *
+         * 同样是纯新增，不触及 files / view_history 任何一行：
+         * - managed_apps：被接管的应用（包名主键）
+         * - takeover_jobs：每个被接管文件的处理记录（uri 唯一索引，天然去重）
+         *
+         * SQL 与 Room 为实体生成的 schema 必须逐字一致（列顺序/类型/默认值/索引名），
+         * 否则 appendMigrations 校验会失败。构造表后由 androidTest 的
+         * DatabaseMigrationTest 用真实迁移链路验证。
+         */
+        private val MIGRATION_11_12 =
+            object : Migration(11, 12) {
+                override fun migrate(db: SupportSQLiteDatabase) {
+                    db.execSQL(
+                        "CREATE TABLE IF NOT EXISTS `managed_apps` (" +
+                            "`packageName` TEXT NOT NULL, " +
+                            "`displayName` TEXT NOT NULL, " +
+                            "`addedAt` INTEGER NOT NULL, " +
+                            "PRIMARY KEY(`packageName`))",
+                    )
+                    db.execSQL(
+                        "CREATE TABLE IF NOT EXISTS `takeover_jobs` (" +
+                            "`uri` TEXT NOT NULL, " +
+                            "`status` TEXT NOT NULL, " +
+                            "`createdAt` INTEGER NOT NULL, " +
+                            "PRIMARY KEY(`uri`))",
+                    )
+                }
+            }
+
+        /**
+         * v12 → v13：files 表新增"入库时间"。
+         *
+         * 老数据没有独立入库时间，用最后修改时间回填（历史上入库时就写的 lastModified=当时时间，
+         * 所以回填值就是真实入库时间）。之后新入库的文件两列都写，互不影响。
+         */
+        private val MIGRATION_12_13 =
+            object : Migration(12, 13) {
+                override fun migrate(db: SupportSQLiteDatabase) {
+                    db.execSQL("ALTER TABLE `files` ADD COLUMN `importedAt` INTEGER NOT NULL DEFAULT 0")
+                    db.execSQL("UPDATE `files` SET `importedAt` = `lastModified` WHERE `importedAt` = 0")
+                }
+            }
+
+        /**
+         * v13 → v14：分类列表复合索引 (category, lastModified)。
+         * 打开分类的查询是 WHERE category=? ORDER BY lastModified DESC，只有单列索引时
+         * SQLite 要把 4 万多行读出来再排序；复合索引直接按顺序取，只是加索引不改数据。
+         */
+        private val MIGRATION_13_14 =
+            object : Migration(13, 14) {
+                override fun migrate(db: SupportSQLiteDatabase) {
+                    db.execSQL(
+                        "CREATE INDEX IF NOT EXISTS `index_files_category_lastModified` ON `files` (`category`, `lastModified`)",
+                    )
+                }
+            }
+
+        /**
          * 显式迁移注册表。
          */
-        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_9_10, MIGRATION_10_11)
+        val MIGRATIONS: Array<Migration> =
+            arrayOf(MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14)
     }
 }

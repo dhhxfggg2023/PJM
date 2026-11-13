@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.dhhxfggg.pjm.R
 import com.dhhxfggg.pjm.data.model.FileEntity
 import com.dhhxfggg.pjm.data.model.Settings
+import com.dhhxfggg.pjm.data.repository.CategoryListCache
 import com.dhhxfggg.pjm.data.repository.FileRepository
 import com.dhhxfggg.pjm.domain.util.OperationTask
 import com.dhhxfggg.pjm.domain.util.SettingsManager
@@ -16,7 +17,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import javax.inject.Inject
 import kotlin.time.Duration.Companion.milliseconds
 
@@ -52,6 +55,28 @@ class MainViewModel
     ) : AndroidViewModel(app) {
         private val _categoryCovers = MutableStateFlow<Map<String, FileEntity?>>(emptyMap())
 
+        init {
+            // 预热分类列表：主界面点进任何一个分类前就查好，切换时直接命中缓存，几乎是瞬间打开。
+            // 顺序按使用频率排：图片最大也最常用，先查；其余分类量很小。
+            viewModelScope.launch(Dispatchers.IO) {
+                // 首屏先让人用起来：读完 4 万张图的列表要建几万个对象，会带来一次明显 GC。
+                // 等界面稳定 1.2s 再预热，冷启动的点击/转场就不会被抢 CPU。
+                delay(1200)
+                listOf(
+                    VaultManager.CAT_IMAGES,
+                    VaultManager.CAT_VIDEOS,
+                    VaultManager.CAT_BILI_VIDEOS,
+                    VaultManager.CAT_TEXTS,
+                    VaultManager.CAT_AUDIOS,
+                    VaultManager.CAT_OTHERS,
+                ).forEach { category ->
+                    runCatching {
+                        CategoryListCache.put(category, repository.getFilesByCategory(category).first())
+                    }
+                }
+            }
+        }
+
         /**
          * Combined UI state flow for the Main Screen.
          */
@@ -85,8 +110,9 @@ class MainViewModel
 
         private fun initializeVault() {
             viewModelScope.launch(Dispatchers.IO) {
-                val dbFiles = repository.allFiles.first()
-                if (dbFiles.isEmpty()) {
+                // 只查一行 COUNT 判断空库：原来 allFiles.first() 会把 4 万多条实体全读进内存，
+                // 每次冷启动都白白分配一次（还触发 GC）
+                if (repository.totalFileCount() == 0L) {
                     // 核心修复：启动找回独立任务 id —— 与其他任务并发时互不干扰
                     val hasLock = VaultManager.tryBeginOperation(VaultManager.TASK_INIT)
                     try {
@@ -110,6 +136,14 @@ class MainViewModel
                 }
                 refreshCovers()
             }
+            // 设置里改了「库封面」开关或更换节奏，回到首页立刻按新设置重算（不用杀进程）
+            viewModelScope.launch {
+                settingsManager.settings
+                    .map { it.coverEnabled to it.coverRefresh }
+                    .distinctUntilChanged()
+                    .drop(1)
+                    .collect { refreshCovers() }
+            }
         }
 
         /**
@@ -120,39 +154,36 @@ class MainViewModel
          */
         fun refreshCovers() {
             viewModelScope.launch(Dispatchers.IO) {
+                val config = runCatching { settingsManager.settings.first() }.getOrNull()
+                // 设置里关掉库封面：首页只显示分类图标，连一次全库随机查询都不做
+                if (config != null && !config.coverEnabled) {
+                    _categoryCovers.value = emptyMap()
+                    return@launch
+                }
+                // 每日一换：拿「日期」当随机种子，同一天重启多少次封面都不变；
+                // 每次一换（默认）：保持原来的随机挑一张。
+                val daySeed =
+                    if (config?.coverRefresh == "daily") {
+                        SimpleDateFormat("yyyyMMdd", Locale.US).format(Date()).toInt()
+                    } else {
+                        null
+                    }
                 val covers = mutableMapOf<String, FileEntity?>()
                 VaultManager.CATEGORIES.forEach { category ->
-                    // 核心修复：恢复“随机更换封面”彩蛋（原误改为固定最新文件导致无变化）
-                    covers[category] = repository.getRandomFileByCategory(category)
+                    // 图片/视频自己就能当封面；文本、音频、PJM 容器、其他没有缩略图，
+                    // 从图片库随机抽一张当封面 —— 首页不再是一排灰色图标。
+                    val source =
+                        if (category == VaultManager.CAT_IMAGES ||
+                            category == VaultManager.CAT_VIDEOS ||
+                            category == VaultManager.CAT_BILI_VIDEOS
+                        ) {
+                            category
+                        } else {
+                            VaultManager.CAT_IMAGES
+                        }
+                    covers[category] = repository.getCoverFile(source, daySeed)
                 }
                 _categoryCovers.value = covers
-            }
-        }
-
-        /**
-         * Start the process of exporting the entire vault as an encrypted archive.
-         *
-         * @param onComplete Callback invoked when the export process completes, with a success boolean.
-         */
-        fun startVaultExport(onComplete: (Boolean) -> Unit) {
-            // 核心修复：多任务并发 —— 同任务（导出）防连点，其他任务可并行
-            if (!VaultManager.tryBeginOperation(VaultManager.TASK_EXPORT)) return
-
-            viewModelScope.launch {
-                VaultManager.updateProgress(0f, app.getString(R.string.status_exporting_vault), taskId = VaultManager.TASK_EXPORT)
-                val result =
-                    repository.exportVault { progress ->
-                        VaultManager.updateProgress(
-                            progress,
-                            app.getString(R.string.status_exporting_vault),
-                            taskId = VaultManager.TASK_EXPORT,
-                        )
-                    }
-                VaultManager.clearProgress(VaultManager.TASK_EXPORT)
-                VaultManager.endOperation(VaultManager.TASK_EXPORT)
-                withContext(Dispatchers.Main) {
-                    onComplete(result.isSuccess)
-                }
             }
         }
     }

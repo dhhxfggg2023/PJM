@@ -1,6 +1,8 @@
 package com.dhhxfggg.pjm
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -20,6 +22,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -33,6 +36,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.core.content.IntentCompat
 import androidx.lifecycle.lifecycleScope
 import coil3.compose.AsyncImage
@@ -45,6 +49,7 @@ import com.composables.icons.lucide.LockKeyholeOpen
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.ShieldCheck
 import com.composables.icons.lucide.X
+import com.dhhxfggg.pjm.domain.service.TakeoverNotifications
 import com.dhhxfggg.pjm.domain.util.*
 import com.dhhxfggg.pjm.ui.component.EnhancedPasswordInput
 import com.dhhxfggg.pjm.ui.component.PjmAeroDialog
@@ -53,6 +58,13 @@ import com.dhhxfggg.pjm.ui.navigation.AppNavHost
 import com.dhhxfggg.pjm.ui.navigation.Screen
 import com.dhhxfggg.pjm.ui.screen.PermissionScreen
 import com.dhhxfggg.pjm.ui.theme.AppTheme
+import com.dhhxfggg.pjm.ui.theme.PresetAmber
+import com.dhhxfggg.pjm.ui.theme.PresetBiliPink
+import com.dhhxfggg.pjm.ui.theme.PresetDustyBlue
+import com.dhhxfggg.pjm.ui.theme.PresetForest
+import com.dhhxfggg.pjm.ui.theme.PresetLavender
+import com.dhhxfggg.pjm.ui.theme.PresetRose
+import com.dhhxfggg.pjm.ui.theme.PresetSage
 import com.dhhxfggg.pjm.ui.viewmodel.CryptoViewModel
 import com.dhhxfggg.pjm.ui.viewmodel.SettingsViewModel
 import dagger.hilt.android.AndroidEntryPoint
@@ -75,6 +87,10 @@ class MainActivity : ComponentActivity() {
     private var isShieldActive by mutableStateOf(true)
 
     private var deletePendingUris by mutableStateOf<List<Uri>?>(null)
+
+    // 权限门：Android 11+ 的「所有文件访问」允许用户跳过（保险库本身不需要它）
+    private var permissionBypassed by mutableStateOf(false)
+    private lateinit var permissionLauncher: ActivityResultLauncher<Array<String>>
     private var deleteCandidateUris: List<Uri>? = null // 核心修复：增加候选池，防止系统/自定义弹窗冲突
     private lateinit var deleteResultLauncher: ActivityResultLauncher<IntentSenderRequest>
 
@@ -107,7 +123,12 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
+        permissionLauncher =
+            registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+                checkPermissionsInternal()
+            }
         checkPermissionsInternal()
+        requestMissingPermissions()
         handleIntent(intent)
 
         setContent {
@@ -168,7 +189,7 @@ class MainActivity : ComponentActivity() {
 
             AppTheme(settings = settings) {
                 Surface(modifier = Modifier.fillMaxSize(), color = Color.Transparent) {
-                    if (permissionsGrantedState) {
+                    if (permissionsGrantedState || permissionBypassed) {
                         Box(modifier = Modifier.fillMaxSize()) {
                             // 终极隐私加固：当处于后台或隐私盾开启时，直接在内容层应用高强度模糊
                             Box(modifier = Modifier.fillMaxSize().blur(radius = contentBlur)) {
@@ -190,6 +211,7 @@ class MainActivity : ComponentActivity() {
                                             progress = task.progress,
                                             message = task.message,
                                             isIndeterminate = task.isIndeterminate,
+                                            stages = task.stages,
                                             onCancel = { VaultManager.requestCancelTask(task.taskId) },
                                         )
                                     }
@@ -266,7 +288,17 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     } else {
-                        PermissionScreen(onOpenSettings = { PermissionManager.openPermissionSettings(this@MainActivity) })
+                        PermissionScreen(
+                            onOpenSettings = { PermissionManager.openPermissionSettings(this@MainActivity) },
+                            // Android 11+ 只把「所有文件访问」当作可选能力：本地保险库本身不需要它。
+                            // Android 10 及以下是运行时权限，由 requestMissingPermissions() 直接弹系统框。
+                            onSkip =
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                                    { permissionBypassed = true }
+                                } else {
+                                    null
+                                },
+                        )
                     }
                 }
             }
@@ -355,6 +387,9 @@ class MainActivity : ComponentActivity() {
                     } else if (uri.scheme == "file") {
                         val path = uri.path
                         if (path != null && File(path).delete()) deletedCount++
+                    } else if (uri.scheme == "content") {
+                        // 普通 media/content URI：让 provider 自己删（MediaStore 等允许时返回删除行数）
+                        deletedCount += contentResolver.delete(uri, null, null)
                     }
                 } catch (e: Exception) {
                     PjmLogger.e("MainActivity", "Delete failed for $uri", e)
@@ -363,6 +398,12 @@ class MainActivity : ComponentActivity() {
             if (deletedCount > 0) {
                 withContext(Dispatchers.Main) {
                     Toast.makeText(this@MainActivity, getString(R.string.toast_cleaned_originals, deletedCount), Toast.LENGTH_SHORT).show()
+                }
+            } else {
+                // 核心修复：普通 content:// 既不是 document 也不是 file 时，旧实现什么都不做、
+                // 连提示都没有，用户以为已删除。现在明确告知需要手动删除。
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@MainActivity, getString(R.string.toast_delete_original_manual), Toast.LENGTH_LONG).show()
                 }
             }
         }
@@ -400,6 +441,7 @@ class MainActivity : ComponentActivity() {
         progress: Float,
         message: String,
         isIndeterminate: Boolean = false,
+        stages: List<Float> = emptyList(),
         onCancel: (() -> Unit)? = null,
     ) {
         val animatedProgress by animateFloatAsState(targetValue = progress, label = "SmoothProg")
@@ -444,11 +486,79 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 Spacer(Modifier.height(8.dp))
-                if (isIndeterminate) {
-                    // 不确定进度：无限循环线性条
-                    LinearProgressIndicator(Modifier.fillMaxWidth())
-                } else {
-                    LinearProgressIndicator(progress = { animatedProgress }, Modifier.fillMaxWidth())
+                when {
+                    isIndeterminate ->
+                        // 不确定进度：无限循环线性条
+                        LinearProgressIndicator(Modifier.fillMaxWidth())
+
+                    stages.size >= 2 ->
+                        // 分阶段任务：一条进度条切成彩色分段，依次点亮，进度只会向前
+                        StagedProgressBar(progress = animatedProgress, stages = stages)
+
+                    else ->
+                        LinearProgressIndicator(progress = { animatedProgress }, Modifier.fillMaxWidth())
+                }
+            }
+        }
+    }
+
+    /**
+     * 分阶段进度条：把一条进度条按 [stages] 的累计边界切成若干彩色分段。
+     *
+     * 轨道色表示尚未完成，各分段按自身完成比例填充自己的颜色 ——
+     * 用户看到「精确查重 / 图片指纹 / 候选比对 / 分组收尾」依次点亮，
+     * 而不是对着一条单色进度条猜现在卡在哪。
+     */
+    @Composable
+    private fun StagedProgressBar(
+        progress: Float,
+        stages: List<Float>,
+        modifier: Modifier = Modifier,
+    ) {
+        // 分阶段配色：色相彼此拉开（蓝 / 橙 / 玫红 / 绿 / 紫 / 粉 / 深绿），
+        // 相邻阶段一眼能区分；任务阶段多于 7 个时循环使用。
+        val colors =
+            listOf(
+                PresetDustyBlue,
+                PresetAmber,
+                PresetRose,
+                PresetSage,
+                PresetLavender,
+                PresetBiliPink,
+                PresetForest,
+            )
+        Box(
+            modifier =
+                modifier
+                    .fillMaxWidth()
+                    .height(6.dp)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.75f)),
+        ) {
+            Row(Modifier.fillMaxSize()) {
+                stages.forEachIndexed { index, boundary ->
+                    val start = if (index == 0) 0f else stages[index - 1]
+                    val end = boundary.coerceIn(start, 1f)
+                    val span = end - start
+                    if (span > 0f) {
+                        // 段与段之间留 1dp 缝隙，让「分类」在视觉上是硬的边界而不是渐变的色块
+                        Box(
+                            Modifier
+                                .weight(span)
+                                .fillMaxHeight()
+                                .padding(end = if (index == stages.lastIndex) 0.dp else 1.dp),
+                        ) {
+                            val filled = ((progress - start) / span).coerceIn(0f, 1f)
+                            if (filled > 0f) {
+                                Box(
+                                    Modifier
+                                        .fillMaxWidth(filled)
+                                        .fillMaxHeight()
+                                        .background(colors[index % colors.size]),
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -518,6 +628,17 @@ class MainActivity : ComponentActivity() {
 
     private fun handleIntent(intent: Intent?) {
         if (intent == null) return
+        // 「应用接管」删除失败通知：把「已入库但原文件没删掉」的 uri 送回原来的删除确认弹窗，
+        // 由用户走系统删除流程重试（后台服务自己拿不到授权弹窗，只能借前台这一步）。
+        val takeoverFailedUris = intent.getStringArrayExtra(TakeoverNotifications.EXTRA_FAILED_URIS)
+        if (!takeoverFailedUris.isNullOrEmpty()) {
+            val uris = takeoverFailedUris.mapNotNull { raw -> runCatching { Uri.parse(raw) }.getOrNull() }.take(20)
+            if (uris.isNotEmpty()) {
+                deletePendingUris = uris
+                PjmLogger.i("MainActivity", "接管失败通知：${uris.size} 个原文件待处理")
+                return
+            }
+        }
         if (intent.getStringExtra("shortcutId") ==
             "cabinet"
         ) {
@@ -531,7 +652,11 @@ class MainActivity : ComponentActivity() {
                 Intent.ACTION_VIEW -> intent.data?.let { listOf(it) }
                 else -> null
             } ?: return
-        uris.forEach {
+        // 核心加固：外部 Intent 是不可信输入 —— 限制数量与 scheme，避免被第三方
+        // 利用 MANAGE_EXTERNAL_STORAGE 触发批量导入/填满存储（confused deputy）。
+        val safeUris = uris.take(200).filter { it.scheme == "content" || it.scheme == "file" }
+        if (safeUris.isEmpty()) return
+        safeUris.forEach {
             try {
                 if (it.authority !=
                     "$packageName.fileprovider"
@@ -544,27 +669,49 @@ class MainActivity : ComponentActivity() {
         // 拆分 PJM 与其他文件：
         // - PJM 加密包（含 .pjm.N 分卷）→ 自动解密并导入，无需确认
         // - 其他文件 → 弹出选择（合并入库 / 打包加密）
-        // 核心修复：分享器（微信/QQ 等）常不提供正确的 DISPLAY_NAME，
-        // 仅按文件名识别会漏判。对名字不像 pjm 的 URI 再做内容级魔数检测兜底。
-        val (pjmUris, otherUris) = uris.partition { FileUtils.isPjmFile(FileUtils.getFileName(this, it)) }
-        if (pjmUris.isNotEmpty()) {
-            Toast.makeText(this, getString(R.string.toast_pjm_archive_detected), Toast.LENGTH_SHORT).show()
-            cryptoViewModel.handleStore(pjmUris)
-        }
-        if (otherUris.isNotEmpty()) {
-            lifecycleScope.launch {
-                val (detectedPjm, rest) = otherUris.partition { CryptoUtils.isPjmUri(this@MainActivity, it) }
-                if (detectedPjm.isNotEmpty()) {
-                    Toast.makeText(this@MainActivity, getString(R.string.toast_pjm_archive_detected), Toast.LENGTH_SHORT).show()
-                    cryptoViewModel.handleStore(detectedPjm)
+        //
+        // 核心修复：所有判定合并到【一次】handleStore 调用。
+        // 原实现先按文件名送走一批 pjm，再异步按魔数送走第二批 —— 同一次分享可能触发
+        // 两次 VaultService.startStore，而第二个会被同 taskId 的防连点直接忽略：
+        // 第二批文件静默不入库，用户毫无感知。
+        lifecycleScope.launch {
+            val (allPjm, rest) =
+                withContext(Dispatchers.IO) {
+                    val (namedPjm, remaining) =
+                        safeUris.partition { FileUtils.isPjmFile(FileUtils.getFileName(this@MainActivity, it)) }
+                    val (detectedPjm, others) =
+                        remaining.partition { CryptoUtils.isPjmUri(this@MainActivity, it) }
+                    (namedPjm + detectedPjm) to others
                 }
-                if (rest.isNotEmpty()) shareGatewayUris = rest
+            if (allPjm.isNotEmpty()) {
+                Toast.makeText(this@MainActivity, getString(R.string.toast_pjm_archive_detected), Toast.LENGTH_SHORT).show()
+                cryptoViewModel.handleStore(allPjm)
             }
+            if (rest.isNotEmpty()) shareGatewayUris = rest
         }
     }
 
     private fun checkPermissionsInternal() {
         permissionsGrantedState = PermissionManager.checkPermissions(this)
+    }
+
+    /**
+     * 主动请求缺失的运行时权限（核心修复）。
+     * 原实现从不调用 requestPermissions：Android 7~10 上 READ/WRITE_EXTERNAL_STORAGE
+     * 永远拿不到，权限页又只有一个"打开设置"按钮，等于把整个应用锁死。
+     * Android 13+ 的 POST_NOTIFICATIONS 同样从未请求，前台服务进度通知因此不显示。
+     */
+    private fun requestMissingPermissions() {
+        if (!PermissionManager.checkPermissions(this) && Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            permissionLauncher.launch(PermissionManager.REQUIRED_PERMISSIONS)
+            return
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            permissionLauncher.launch(arrayOf(Manifest.permission.POST_NOTIFICATIONS))
+        }
     }
 }
 

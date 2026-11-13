@@ -18,9 +18,8 @@
     <string name="action_extract_now">Extract Now</string>
     <string name="action_close">Close</string>
     <string name="action_shred_now">Shred Now</string>
-    <string name="action_export_vault">One-tap Full Export</string>
-    <string name="action_confirm_export">Confirm Export</string>
     <string name="action_grant_now">Grant Now</string>
+    <string name="action_skip_permission">Continue with local vault only</string>
     <string name="action_open_settings">Go to Settings</string>
     <string name="action_dismiss">Dismiss</string>
     <string name="action_repair_now">Repair Now</string>
@@ -55,11 +54,11 @@
     <string name="status_recovering_files">Recovering previous files...</string>
     <string name="status_recovering_assets">Recovering assets...</string>
     <string name="status_recovery_complete">Recovery Complete</string>
-    <string name="status_exporting_vault">Packing for export...</string>
     <string name="status_analyzing_duplicates">Analyzing duplicate content...</string>
     <string name="status_calculating_fingerprints">Calculating content fingerprints...</string>
     <string name="status_calculating_image_fingerprints">Calculating perceptual image fingerprints...</string>
     <string name="status_comparing_images">Comparing image content...</string>
+    <string name="status_grouping_duplicates">Grouping duplicates...</string>
     <string name="status_syncing_fast">Fast syncing...</string>
     <string name="status_indexing_files">Indexing files...</string>
     <string name="status_sync_complete">Sync Complete</string>
@@ -122,9 +121,6 @@
     <string name="dialog_title_shred_confirm">Security Shred Confirm</string>
     <string name="dialog_delete_msg_single">Are you sure you want to permanently shred this item?</string>
     <string name="dialog_delete_msg_batch">Are you sure you want to shred the selected %1$d files?</string>
-    <string name="dialog_title_export_vault">Encrypt &amp; Export</string>
-    <string name="dialog_msg_export_vault">Are you sure you want to encrypt and export the entire vault? This will generate PJM split volumes.</string>
-    <string name="toast_vault_exported">Full vault exported</string>
     <string name="toast_ingest_summary">Import complete: %1$d imported · %2$d skipped</string>
     <string name="toast_ingest_summary_failed">Import complete: %1$d imported · %2$d skipped · %3$d failed</string>
     <string name="toast_encrypt_volumes">Encryption complete: %1$d volumes generated</string>
@@ -308,8 +304,6 @@
     <string name="settings_title_import_unmerged">Import Unmerged Videos</string>
     <string name="settings_desc_import_unmerged">Pick a folder, detect and merge separated Bilibili m4s streams</string>
     <string name="toast_auth_records_destroyed">All authorization records destroyed</string>
-    <string name="settings_title_export_pjm_volumes">Export vault to PJM volumes</string>
-    <string name="settings_desc_export_pjm_volumes">Pack all private assets into encrypted backup files</string>
     <string name="settings_title_check_update">Check for Updates</string>
     <string name="settings_desc_check_update">Check GitHub for a newer release</string>
     <string name="settings_desc_clear_cache_only_tmp">Only clears temp cache, keeps thumbnails</string>
@@ -363,6 +357,7 @@
     <string name="action_confirm_delete">Delete</string>
     <string name="action_keep_original">Keep originals</string>
     <string name="dialog_msg_delete_original_count">Stored successfully. Delete %1$d original file(s) on the device to free space?</string>
+    <string name="toast_delete_original_manual">Could not delete the source file automatically. Please delete it manually.</string>
     <string name="toast_cleaned_originals">Cleaned %1$d original file(s)</string>
     <string name="content_desc_cancel_task">Cancel task</string>
     <string name="fast_seek_forward">Forward +%1$ds</string>
@@ -383,4 +378,38 @@
 
     <!-- Archive extraction -->
     <string name="status_archive_failed">Extraction failed, stored as a plain file instead: %1$s</string>
+    <!-- App takeover (MediaStore watcher: newly saved files are encrypted into the vault, then the original is deleted) -->
+    <string name="settings_cat_app_takeover">App takeover</string>
+    <string name="settings_title_app_takeover">Take over saved media</string>
+    <string name="settings_desc_app_takeover_summary">%1$d app(s) taken over</string>
+    <string name="settings_desc_app_takeover_off">No apps taken over</string>
+    <string name="takeover_section_intro">How it works</string>
+    <string name="takeover_section_apps">Taken-over apps</string>
+    <string name="takeover_section_failures">Needs your attention</string>
+    <string name="takeover_explanation">New files these apps save to your gallery/downloads are moved into PJM (the app\'s private storage): saved into the vault first, then the original on the phone is deleted. Only files saved after you add an app are handled; existing gallery content is left alone. If deleting an original fails, a notification lets you retry.</string>
+    <string name="takeover_requires_android10">App takeover requires Android 10 or newer (the system must record which app wrote each file).</string>
+    <string name="takeover_empty_hint">No apps taken over yet. Once added, images, videos and files these apps save are stored in PJM and removed from the gallery/downloads folder.</string>
+    <string name="takeover_add_app">Add app</string>
+    <string name="takeover_add_app_desc">Lists only apps you installed, never system apps</string>
+    <string name="takeover_remove_app">Stop taking over</string>
+    <string name="takeover_failure_delete_count">%1$d file(s) are safely in the vault, but the originals could not be deleted (tap the failure notification to retry).</string>
+    <string name="takeover_failure_import_count">%1$d import(s) failed: the originals are still in the gallery, nothing was lost.</string>
+    <string name="takeover_clear_failures">Clear failure records</string>
+    <string name="takeover_picker_title">Choose apps to take over</string>
+    <string name="takeover_picker_hint">Select apps, then confirm. Apps already taken over are not listed.</string>
+    <string name="takeover_picker_loading">Loading installed apps…</string>
+    <string name="takeover_picker_empty">No apps available to add</string>
+    <string name="takeover_picker_add">Add selected (%1$d)</string>
+    <string name="takeover_channel_service">App takeover (running)</string>
+    <string name="takeover_channel_service_desc">Persistent notice for the takeover service, silent</string>
+    <string name="takeover_channel_failure">Takeover failures</string>
+    <string name="takeover_channel_failure_desc">Alerts when a file is in the vault but its original cannot be deleted</string>
+    <string name="takeover_service_title">PJM app takeover</string>
+    <string name="takeover_service_text">Taking over %1$d app(s); newly saved files are stored in PJM</string>
+    <string name="takeover_service_text_idle">Waiting for apps to take over</string>
+    <string name="takeover_failure_title">Could not delete originals</string>
+    <string name="takeover_failure_text">%1$d file(s) are in the vault, but the originals are still in the gallery</string>
+    <string name="takeover_query_failed_title">App takeover is paused</string>
+    <string name="takeover_query_failed_text">Could not read the gallery index, so takeover is paused (nothing is skipped; it resumes from the last position).</string>
+    <string name="takeover_failure_bigtext">The files are safely stored in PJM. Tap this notification to retry deleting the originals, or delete them from your gallery manually.</string>
 </resources>

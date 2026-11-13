@@ -38,6 +38,9 @@ class DiscoveryQueue(
     /** 本次会话已经交出过的路径（进程内；重建时由浏览历史播种） */
     private val servedThisSession = HashSet<String>()
 
+    /** 上一批最后交出的一条：重开一轮时用来避免"轮次交界处"立刻重播同一条 */
+    private var lastServedPath: String? = null
+
     /** 当前待消费队列长度（诊断/测试用）。 */
     val pendingCount: Int get() = queue.size
 
@@ -76,6 +79,7 @@ class DiscoveryQueue(
             servedThisSession.add(next)
             batch.add(next)
         }
+        if (batch.isNotEmpty()) lastServedPath = batch.last()
         return batch
     }
 
@@ -129,6 +133,17 @@ class DiscoveryQueue(
     }
 
     /**
+     * 放开"本次会话已送出"的占位。
+     *
+     * 快速划过的页会被标记 served 却从未上屏（没写浏览历史），于是队列取空、而
+     * isRoundComplete() 又为 false —— 本轮永远收不了尾。放开占位后，这些"真的没看过"
+     * 的路径会重新入队；已看过的仍被 view_history 过滤，不会重播。
+     */
+    fun forgetServed() {
+        servedThisSession.clear()
+    }
+
+    /**
      * 开新一轮：清空该分类的浏览历史，并把全库重新洗牌。
      *
      * **只应在 [isRoundComplete] 为 true 时调用** —— 否则会把本轮还没送出的路径
@@ -141,6 +156,11 @@ class DiscoveryQueue(
         servedThisSession.clear()
         onRoundRestart()
         roundRestarts++
-        return pump()
+        val ok = pump()
+        // 新一轮的第一条如果正好是上一轮最后一条，往队尾挪一下，避免交界处立刻重播
+        if (ok && queue.size > 1 && queue.first() == lastServedPath) {
+            queue.addLast(queue.removeFirst())
+        }
+        return ok
     }
 }

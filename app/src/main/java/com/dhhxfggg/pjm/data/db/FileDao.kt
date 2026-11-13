@@ -18,8 +18,37 @@ interface FileDao {
      * @param category The folder/category name to filter by.
      * @return A [Flow] emitting the list of files whenever the database changes.
      */
+    /**
+     * 按天聚合入库数量，给首页的热力图用。
+     *
+     * importedAt 为 0 的老记录退回 lastModified；按本地时区取日期。
+     */
+    @Query(
+        "SELECT date(COALESCE(NULLIF(importedAt, 0), lastModified) / 1000, 'unixepoch', 'localtime') AS day, " +
+            "COUNT(*) AS count FROM files GROUP BY day ORDER BY day",
+    )
+    suspend fun getImportCountsByDay(): List<ImportDayCount>
+
     @Query("SELECT * FROM files WHERE category = :category ORDER BY lastModified DESC")
     fun getFilesByCategory(category: String): Flow<List<FileEntity>>
+
+    /** 一次性读取（迁移/批处理用，不走 Flow） */
+    @Query("SELECT * FROM files WHERE category = :category ORDER BY lastModified DESC")
+    suspend fun getFilesByCategoryOnce(category: String): List<FileEntity>
+
+    /** 只改库内显示名；磁盘文件名（relativePath）保持不变 */
+    @Query("UPDATE files SET name = :name WHERE relativePath = :relativePath")
+    suspend fun updateDisplayName(
+        relativePath: String,
+        name: String,
+    )
+
+    /** 只改分类标签，不动磁盘路径（relativePath 才是定位依据） */
+    @Query("UPDATE files SET category = :category WHERE relativePath = :relativePath")
+    suspend fun updateCategory(
+        relativePath: String,
+        category: String,
+    )
 
     /**
      * Retrieves every file stored in the vault database.
@@ -154,6 +183,10 @@ interface FileDao {
      */
     @Query("SELECT COUNT(*) FROM files WHERE category = :category")
     suspend fun getCountByCategory(category: String): Int
+
+    /** 总文件数：启动时判断库是否为空（避免把 4 万条实体全读进内存） */
+    @Query("SELECT COUNT(*) FROM files")
+    suspend fun getTotalFileCount(): Long
 
     /**
      * Real-time aggregate of total vault size.

@@ -50,6 +50,14 @@ jobs:
       - name: Grant execute permission to gradlew
         run: chmod +x gradlew
 
+      - name: Install Android SDK components
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager "platforms;android-37" "build-tools;37.0.0" "ndk;28.2.13676358" "cmake;3.22.1"
+
+      - name: Compile instrumented tests
+        run: ./gradlew -Dgradle.user.home=$HOME/.gradle :app:assembleDebugAndroidTest --stacktrace
+
       - name: Unit tests
         run: ./gradlew -Dgradle.user.home=$HOME/.gradle :app:testDebugUnitTest --stacktrace
 

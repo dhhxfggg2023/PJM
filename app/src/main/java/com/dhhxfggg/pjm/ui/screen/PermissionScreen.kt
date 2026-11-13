@@ -24,6 +24,7 @@ import com.dhhxfggg.pjm.R
 @Composable
 fun PermissionScreen(
     onOpenSettings: () -> Unit,
+    onSkip: (() -> Unit)? = null,
     _onRequestPermissions: () -> Unit = {}, // Kept for compatibility but unused
 ) {
     Scaffold { paddingValues ->
@@ -102,6 +103,16 @@ fun PermissionScreen(
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                 )
+            }
+
+            if (onSkip != null) {
+                Spacer(modifier = Modifier.height(12.dp))
+                TextButton(onClick = onSkip, modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = stringResource(R.string.action_skip_permission),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
             }
         }
     }

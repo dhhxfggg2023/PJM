@@ -25,6 +25,12 @@ sealed class DiscoveryItem {
         override val file: File,
         override val entity: FileEntity,
     ) : DiscoveryItem()
+
+    data class Audio(
+        override val displayId: Long,
+        override val file: File,
+        override val entity: FileEntity,
+    ) : DiscoveryItem()
 }
 
 /**
@@ -36,6 +42,7 @@ enum class DiscoveryMode(
     BILI_VIDEOS(VaultManager.CAT_BILI_VIDEOS),
     IMAGES(VaultManager.CAT_IMAGES),
     VIDEOS(VaultManager.CAT_VIDEOS),
+    AUDIOS(VaultManager.CAT_AUDIOS),
 }
 
 /**
@@ -46,4 +53,6 @@ data class DiscoveryUiState(
     val items: List<DiscoveryItem> = emptyList(),
     val mode: DiscoveryMode = DiscoveryMode.BILI_VIDEOS,
     val isLoading: Boolean = false,
+    /** 音频没有内嵌封面时，随机抽一张图片当封面（相对 pjm_vault 的路径） */
+    val audioCoverPath: String? = null,
 )

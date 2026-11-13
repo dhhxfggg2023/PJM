@@ -2,6 +2,7 @@ package com.dhhxfggg.pjm.ui.screen
 
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -38,6 +39,7 @@ import com.dhhxfggg.pjm.ui.theme.PresetBiliPink
 import com.dhhxfggg.pjm.ui.theme.PresetDustyBlue
 import com.dhhxfggg.pjm.ui.theme.PresetForest
 import com.dhhxfggg.pjm.ui.theme.PresetLavender
+import com.dhhxfggg.pjm.ui.theme.PresetRose
 import com.dhhxfggg.pjm.ui.theme.rememberIconPack
 import com.dhhxfggg.pjm.ui.viewmodel.MainViewModel
 import java.io.File
@@ -51,6 +53,7 @@ fun MainScreen(
     mainViewModel: MainViewModel = hiltViewModel(),
     bottomPadding: Dp = 0.dp,
     onNavigateToCategory: (String) -> Unit,
+    onOpenHeatmap: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
@@ -88,11 +91,16 @@ fun MainScreen(
                 glassColor = glassColor,
                 glassBorderColor = glassBorderColor,
                 iconPack = iconPack,
-            ) {
-                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                VaultManager.triggerRefresh()
-                mainViewModel.refreshCovers()
-            }
+                onLongPress = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    onOpenHeatmap()
+                },
+                onRefresh = {
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    VaultManager.triggerRefresh()
+                    mainViewModel.refreshCovers()
+                },
+            )
 
             Spacer(modifier = Modifier.height(16.dp))
 
@@ -140,6 +148,7 @@ fun getCategoryInfo(
         // 核心修复：音频库原先用 PresetRose(#FF6B9C)，与 B站视频的 PresetBiliPink(#FB7299)
         // 几乎同色 —— 两张分类卡并排时看起来像重复的分类。改用淡紫，六个分类颜色即可完全区分。
         VaultManager.CAT_AUDIOS -> Triple(stringResource(R.string.cat_audios_display), iconPack.catAudios, PresetLavender)
+        VaultManager.CAT_TEXTS -> Triple(stringResource(R.string.cat_texts_display), iconPack.catTexts, PresetRose)
         else -> Triple(stringResource(R.string.cat_others_display), iconPack.catOthers, PresetDustyBlue)
     }
 }
@@ -155,10 +164,13 @@ fun StorageUsageModule(
     glassBorderColor: Color,
     iconPack: com.dhhxfggg.pjm.ui.theme.IconPack,
     onRefresh: () -> Unit,
+    onLongPress: () -> Unit = {},
 ) {
     Card(
-        modifier = Modifier.fillMaxWidth(),
-        onClick = onRefresh,
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .combinedClickable(onClick = onRefresh, onLongClick = onLongPress),
         colors = CardDefaults.cardColors(containerColor = glassColor),
         border = androidx.compose.foundation.BorderStroke(0.5.dp, glassBorderColor),
     ) {

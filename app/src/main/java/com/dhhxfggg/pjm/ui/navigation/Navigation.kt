@@ -15,6 +15,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.dhhxfggg.pjm.domain.util.FrameMonitor
 import com.dhhxfggg.pjm.domain.util.VaultManager
 import com.dhhxfggg.pjm.ui.component.BottomNavBar
 import com.dhhxfggg.pjm.ui.screen.DiscoveryScreen
@@ -22,6 +23,7 @@ import com.dhhxfggg.pjm.ui.screen.FileViewerScreen
 import com.dhhxfggg.pjm.ui.screen.MainScreen
 import com.dhhxfggg.pjm.ui.screen.MediaDetailScreen
 import com.dhhxfggg.pjm.ui.screen.SettingsScreen
+import com.dhhxfggg.pjm.ui.screen.VaultHeatmapScreen
 import com.dhhxfggg.pjm.ui.theme.rememberIconPack
 
 sealed class Screen(
@@ -40,6 +42,9 @@ sealed class Screen(
     object MediaDetail : Screen("media_detail/{relativePath}") {
         fun createRoute(relativePath: String) = "media_detail/${android.net.Uri.encode(relativePath)}"
     }
+
+    /** 入库热力图（首页保险库占用卡片长按进入） */
+    object VaultHeatmap : Screen("vault_heatmap")
 }
 
 @Composable
@@ -49,6 +54,8 @@ fun AppNavHost(
 ) {
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
+    // 给调试版慢帧统计标注当前页面，日志里能直接看到是哪一屏在掉帧
+    LaunchedEffect(currentRoute) { FrameMonitor.currentScreen = currentRoute.orEmpty() }
 
     val iconPack = rememberIconPack()
 
@@ -60,7 +67,7 @@ fun AppNavHost(
                 !(currentRoute == Screen.Discovery.route && isDiscoveryFullScreen)
         }
 
-    val animDuration = 250
+    val animDuration = 220
 
     Scaffold(
         bottomBar = { if (showBottomBar) BottomNavBar(navController = navController, iconPack = iconPack) },
@@ -70,24 +77,19 @@ fun AppNavHost(
             navController = navController,
             startDestination = startDestination,
             modifier = Modifier.fillMaxSize(),
+            // 只做位移，不再叠加整屏淡入淡出：两层全屏内容同时做 alpha + 位移，
+            // 每次跳页都要多渲染一整屏，手感发飘也更容易掉帧。
             enterTransition = {
-                slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Left, tween(animDuration, easing = FastOutSlowInEasing)) +
-                    fadeIn(tween(animDuration))
+                slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Left, tween(animDuration, easing = FastOutSlowInEasing))
             },
             exitTransition = {
-                slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.Left, tween(animDuration, easing = FastOutSlowInEasing)) +
-                    fadeOut(tween(animDuration))
+                slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.Left, tween(animDuration, easing = FastOutSlowInEasing))
             },
             popEnterTransition = {
-                slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Right, tween(animDuration, easing = FastOutSlowInEasing)) +
-                    fadeIn(tween(animDuration))
+                slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Right, tween(animDuration, easing = FastOutSlowInEasing))
             },
             popExitTransition = {
-                slideOutOfContainer(
-                    AnimatedContentTransitionScope.SlideDirection.Right,
-                    tween(animDuration, easing = FastOutSlowInEasing),
-                ) +
-                    fadeOut(tween(animDuration))
+                slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.Right, tween(animDuration, easing = FastOutSlowInEasing))
             },
         ) {
             composable(Screen.Main.route) {
@@ -96,6 +98,13 @@ fun AppNavHost(
                     onNavigateToCategory = { category ->
                         navController.navigate(Screen.FileViewer.createRoute(category))
                     },
+                    onOpenHeatmap = { navController.navigate(Screen.VaultHeatmap.route) },
+                )
+            }
+            composable(Screen.VaultHeatmap.route) {
+                VaultHeatmapScreen(
+                    onBack = { navController.popBackStack() },
+                    bottomPadding = innerPadding.calculateBottomPadding(),
                 )
             }
             composable(Screen.Discovery.route) {

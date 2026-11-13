@@ -6,9 +6,11 @@ import android.content.pm.ActivityInfo
 import android.graphics.Bitmap
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.*
 import androidx.compose.foundation.layout.*
@@ -20,9 +22,11 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
@@ -32,10 +36,10 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.FileProvider
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -43,8 +47,6 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.ui.AspectRatioFrameLayout
-import androidx.media3.ui.PlayerView
 import androidx.navigation.NavHostController
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
@@ -56,17 +58,23 @@ import coil3.size.Size
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.Maximize
 import com.composables.icons.lucide.Minimize
+import com.composables.icons.lucide.Pause
 import com.composables.icons.lucide.Play
 import com.dhhxfggg.pjm.R
 import com.dhhxfggg.pjm.domain.util.DiscoveryPlayerPool
+import com.dhhxfggg.pjm.domain.util.FileUtils
 import com.dhhxfggg.pjm.domain.util.ShareUtils
+import com.dhhxfggg.pjm.domain.util.VaultPaths
 import com.dhhxfggg.pjm.ui.component.PjmDeleteConfirmDialog
 import com.dhhxfggg.pjm.ui.component.PjmEmptyState
+import com.dhhxfggg.pjm.ui.component.VideoSurface
+import com.dhhxfggg.pjm.ui.component.rememberAudioInfo
 import com.dhhxfggg.pjm.ui.component.rememberIsAppVisible
 import com.dhhxfggg.pjm.ui.theme.rememberIconPack
 import com.dhhxfggg.pjm.ui.viewmodel.DiscoveryItem
 import com.dhhxfggg.pjm.ui.viewmodel.DiscoveryMode
 import com.dhhxfggg.pjm.ui.viewmodel.DiscoveryViewModel
+import com.dhhxfggg.pjm.ui.viewmodel.SettingsViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
@@ -84,8 +92,14 @@ fun DiscoveryScreen(
     isFullScreen: Boolean = false,
     onFullScreenChange: (Boolean) -> Unit = {},
     viewModel: DiscoveryViewModel = hiltViewModel(),
+    settingsViewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    // 每次导航回发现页都按设置里的默认分类重新定一次（VM 会跨导航存活，必须显式重放）
+    LaunchedEffect(Unit) { viewModel.applyDefaultMode() }
+    val settingsState by settingsViewModel.uiState.collectAsState()
+    val predictiveBackEnabled = settingsState.settings.predictiveBackEnabled
+
     val context = LocalContext.current
     val hapticFeedback = LocalHapticFeedback.current
     val activity = context as? Activity
@@ -95,23 +109,35 @@ fun DiscoveryScreen(
     val shareContentTitle = stringResource(R.string.chooser_title_share_content)
 
     var isInteractionLocked by remember { mutableStateOf(value = false) }
+    val scope = rememberCoroutineScope()
     val pagerState =
         rememberPagerState(
             pageCount = { uiState.items.size },
         )
     var showDeleteConfirm by remember { mutableStateOf<DiscoveryItem?>(null) }
 
-    // 发现页交互优化：长按显示操作按钮
-    var showActions by remember { mutableStateOf(value = false) }
+    // 右上角常驻「⋮」菜单的开合状态。
+    // 分享/删除以前挂在长按上，和"长按加速"抢同一个手势，两个功能都半残；
+    // 现在常驻入口，长按专心做加速。
+    var itemMenuOpen by remember { mutableStateOf(value = false) }
 
-    LaunchedEffect(showActions) {
-        if (showActions) {
-            delay(3000.milliseconds)
-            showActions = false
+    // 预测性返回：全屏观感下拖动返回手势时画面跟着缩小，松手才退出全屏
+    var backProgress by remember { mutableFloatStateOf(0f) }
+    if (predictiveBackEnabled) {
+        PredictiveBackHandler(enabled = isFullScreen) { progress ->
+            try {
+                progress.collect { event -> backProgress = event.progress }
+                onFullScreenChange(false)
+            } finally {
+                backProgress = 0f
+            }
+        }
+    } else {
+        BackHandler(enabled = isFullScreen) {
+            backProgress = 0f
+            onFullScreenChange(false)
         }
     }
-
-    BackHandler(enabled = isFullScreen) { onFullScreenChange(false) }
 
     LaunchedEffect(isFullScreen) {
         activity?.let {
@@ -166,7 +192,15 @@ fun DiscoveryScreen(
         modifier =
             Modifier
                 .fillMaxSize()
-                .background(color = if (isFullScreen) Color.Black else Color.Transparent),
+                .background(color = if (isFullScreen) Color.Black else Color.Transparent)
+                .graphicsLayer {
+                    if (isFullScreen) {
+                        translationX = size.width * 0.18f * backProgress
+                        val s = 1f - 0.05f * backProgress
+                        scaleX = s
+                        scaleY = s
+                    }
+                },
     ) {
         if (uiState.items.isEmpty() && uiState.isLoading) {
             // 还在加载：显示转圈
@@ -209,39 +243,62 @@ fun DiscoveryScreen(
                             onToggleFullScreen = { onFullScreenChange(!isFullScreen) },
                             onLockChange = { isInteractionLocked = it },
                             onLongPress = {
+                                // 长按只做触感反馈：播放/查看器内部用它做"加速"
                                 hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
-                                showActions = true
+                            },
+                            onVideoEnded = {
+                                // 自动连播：播完就滚到下一项（跨 视频 / B站视频 两种模式都适用）
+                                val next = (pagerState.currentPage + 1).coerceAtMost(uiState.items.lastIndex)
+                                if (next > pagerState.currentPage) {
+                                    scope.launch { pagerState.animateScrollToPage(next) }
+                                }
+                                viewModel.loadMoreItems()
                             },
                         )
 
-                        AnimatedVisibility(
-                            visible = (!isFullScreen && showActions),
-                            enter = fadeIn() + slideInHorizontally { it },
-                            exit = fadeOut() + slideOutHorizontally { it },
-                            modifier =
-                                Modifier
-                                    .align(Alignment.CenterEnd)
-                                    .padding(end = 16.dp),
-                        ) {
-                            Column(
-                                verticalArrangement = Arrangement.spacedBy(20.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                            ) {
-                                DiscoveryActionIcon(iconPack.actionShare, stringResource(R.string.action_share)) {
-                                    showActions = false
-                                    shareDiscoveryItem(context, item, shareContentTitle)
-                                }
-                                DiscoveryActionIcon(
-                                    iconPack.actionDelete,
-                                    stringResource(R.string.action_delete),
-                                    Color.Red.copy(alpha = 0.8f),
-                                ) {
-                                    showActions = false
-                                    showDeleteConfirm = item
-                                }
-                            }
-                        }
+
                     }
+                }
+            }
+        }
+
+        // 操作入口固定在右上角，并且整屏只渲染这一个菜单：
+        // 之前菜单写在每个 pager 页面里，翻页时前后几页各弹一个，看起来就是"冒出好几个分享/删除"
+        val currentItem = uiState.items.getOrNull(settledPage)
+        if (!isFullScreen && currentItem != null) {
+            Box(
+                modifier =
+                    Modifier
+                        .align(Alignment.TopEnd)
+                        .statusBarsPadding()
+                        .padding(top = 8.dp, end = 8.dp),
+            ) {
+                IconButton(
+                    onClick = { itemMenuOpen = true },
+                    modifier = Modifier.size(40.dp).background(Color.Black.copy(alpha = 0.35f), CircleShape),
+                ) {
+                    Icon(iconPack.actionMore, contentDescription = "更多", tint = Color.White)
+                }
+                DropdownMenu(expanded = itemMenuOpen, onDismissRequest = { itemMenuOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.action_share)) },
+                        leadingIcon = { Icon(iconPack.actionShare, contentDescription = null) },
+                        onClick = {
+                            itemMenuOpen = false
+                            shareDiscoveryItem(context, currentItem, shareContentTitle)
+                        },
+                    )
+                    HorizontalDivider()
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.action_delete), color = Color.Red.copy(alpha = 0.9f)) },
+                        leadingIcon = {
+                            Icon(iconPack.actionDelete, contentDescription = null, tint = Color.Red.copy(alpha = 0.9f))
+                        },
+                        onClick = {
+                            itemMenuOpen = false
+                            showDeleteConfirm = currentItem
+                        },
+                    )
                 }
             }
         }
@@ -268,6 +325,10 @@ fun DiscoveryScreen(
                         stringResource(R.string.mode_videos),
                         uiState.mode == DiscoveryMode.VIDEOS,
                     ) { viewModel.setMode(DiscoveryMode.VIDEOS) }
+                    DiscoveryModeTab(
+                        "音频",
+                        uiState.mode == DiscoveryMode.AUDIOS,
+                    ) { viewModel.setMode(DiscoveryMode.AUDIOS) }
                 }
             }
         }
@@ -290,7 +351,211 @@ fun DiscoveryScreen(
 }
 
 /**
- * Renders an individual discovery item, choosing between image and video display.
+ * 音频发现页：封面 + 标题/艺术家 + 官方 PlayerView 控制条。
+ * 播放器仍从复用池借，切页即释放，和视频页一致；播完自动连播由 onAudioEnded 驱动。
+ */
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+@Composable
+fun DiscoveryAudioRenderer(
+    item: DiscoveryItem.Audio,
+    isActive: Boolean,
+    isScrolling: Boolean,
+    onLongPress: () -> Unit,
+    onAudioEnded: () -> Unit,
+    fallbackCoverPath: String? = null,
+) {
+    val context = LocalContext.current
+    val iconPack = rememberIconPack()
+    // 没有内嵌封面时用一张随机图片当封面（尺寸交给 Coil 采样，不会整张原图进内存）
+    val fallbackCover = fallbackCoverPath?.let { remember(it) { VaultPaths.getFileByRelativePath(context, it) } }
+    var exoPlayer by remember { mutableStateOf<ExoPlayer?>(null) }
+    val info = rememberAudioInfo(item.file)
+    val isAppVisible = rememberIsAppVisible()
+
+    DisposableEffect(item.displayId, isActive) {
+        if (!isActive) {
+            onDispose {}
+        } else {
+            val player = DiscoveryPlayerPool.acquire(context)
+            exoPlayer = player
+            val uri = FileProvider.getUriForFile(context, context.packageName + ".fileprovider", item.file)
+            player.setMediaItem(MediaItem.fromUri(uri))
+            player.prepare()
+            val listener =
+                object : Player.Listener {
+                    override fun onPlaybackStateChanged(state: Int) {
+                        if (state == Player.STATE_ENDED) onAudioEnded()
+                    }
+                }
+            player.addListener(listener)
+            onDispose {
+                player.removeListener(listener)
+                DiscoveryPlayerPool.release(player)
+                exoPlayer = null
+            }
+        }
+    }
+
+    LaunchedEffect(isActive, isScrolling, isAppVisible) {
+        if (isActive && !isScrolling && isAppVisible) exoPlayer?.play() else exoPlayer?.pause()
+    }
+
+    Box(
+        modifier =
+            Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+                .pointerInput(item.displayId) {
+                    detectTapGestures(onLongPress = { onLongPress() })
+                },
+    ) {
+        Column(
+            modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 72.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Spacer(Modifier.weight(0.5f))
+            val artwork = info?.artwork
+            if (artwork != null) {
+                Image(
+                    bitmap = artwork.asImageBitmap(),
+                    contentDescription = null,
+                    modifier =
+                        Modifier
+                            .fillMaxWidth(0.72f)
+                            .aspectRatio(1f)
+                            .clip(RoundedCornerShape(20.dp)),
+                    contentScale = ContentScale.Crop,
+                )
+            } else if (fallbackCover != null) {
+                AsyncImage(
+                    model = fallbackCover,
+                    contentDescription = null,
+                    modifier =
+                        Modifier
+                            .fillMaxWidth(0.72f)
+                            .aspectRatio(1f)
+                            .clip(RoundedCornerShape(20.dp)),
+                    contentScale = ContentScale.Crop,
+                )
+            } else {
+                Box(
+                    modifier =
+                        Modifier
+                            .fillMaxWidth(0.72f)
+                            .aspectRatio(1f)
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(Color.White.copy(alpha = 0.06f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = iconPack.fileAudio,
+                        contentDescription = null,
+                        tint = Color.White.copy(alpha = 0.7f),
+                        modifier = Modifier.size(96.dp),
+                    )
+                }
+            }
+            Spacer(Modifier.height(24.dp))
+            Text(
+                text = info?.title ?: FileUtils.normalizedDisplayName(item.entity),
+                color = Color.White,
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text =
+                    listOfNotNull(info?.artist, info?.album)
+                        .filter { it.isNotBlank() }
+                        .joinToString(" · ")
+                        .ifBlank { "未知艺术家" },
+                color = Color.White.copy(alpha = 0.6f),
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.weight(0.4f))
+            DiscoveryAudioControls(player = exoPlayer)
+        }
+    }
+}
+
+/** 音频播放控制条：进度 + 时间 + 播放/暂停（自己画，避免 PlayerView 再叠一层封面） */
+@Composable
+private fun DiscoveryAudioControls(player: ExoPlayer?) {
+    var progress by remember { mutableFloatStateOf(0f) }
+    var duration by remember { mutableLongStateOf(0L) }
+    var current by remember { mutableLongStateOf(0L) }
+    var playing by remember { mutableStateOf(false) }
+    // 拖动期间不接收 500ms 轮询的进度，松手才 seek 一次
+    var dragging by remember { mutableStateOf(false) }
+    var dragValue by remember { mutableFloatStateOf(0f) }
+
+    LaunchedEffect(player) {
+        while (true) {
+            val p = player ?: break
+            if (!dragging) {
+                current = p.currentPosition.coerceAtLeast(0L)
+                if (p.duration > 0) duration = p.duration
+                progress = if (duration > 0) (current.toFloat() / duration).coerceIn(0f, 1f) else 0f
+            }
+            playing = p.isPlaying
+            delay(500.milliseconds)
+        }
+    }
+
+    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
+        Slider(
+            value = if (dragging) dragValue else progress,
+            onValueChange = { fraction ->
+                dragging = true
+                dragValue = fraction
+            },
+            onValueChangeFinished = {
+                val target = (dragValue * duration).toLong()
+                player?.seekTo(target)
+                current = target
+                progress = dragValue
+                dragging = false
+            },
+            colors =
+                SliderDefaults.colors(
+                    thumbColor = Color.White,
+                    activeTrackColor = Color.White,
+                    inactiveTrackColor = Color.White.copy(alpha = 0.3f),
+                ),
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(formatPlayTime(current), color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
+            Text(formatPlayTime(duration), color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
+        }
+        IconButton(
+            onClick = { if (playing) player?.pause() else player?.play() },
+            modifier = Modifier.align(Alignment.CenterHorizontally).size(64.dp),
+        ) {
+            Icon(
+                imageVector = if (playing) Lucide.Pause else Lucide.Play,
+                contentDescription = if (playing) "暂停" else "播放",
+                tint = Color.White,
+                modifier = Modifier.size(44.dp),
+            )
+        }
+    }
+}
+
+private fun formatPlayTime(ms: Long): String {
+    val totalSeconds = (ms / 1000).coerceAtLeast(0)
+    val minutes = totalSeconds / 60
+    val seconds = (totalSeconds % 60).toString().padStart(2, '0')
+    return minutes.toString() + ":" + seconds
+}
+
+/**
+ * Renders an individual discovery item, choosing between image, video and audio display.
  */
 @Composable
 fun DiscoveryItemRenderer(
@@ -302,10 +567,21 @@ fun DiscoveryItemRenderer(
     onToggleFullScreen: () -> Unit,
     onLockChange: (Boolean) -> Unit,
     onLongPress: () -> Unit,
+    onVideoEnded: () -> Unit,
+    audioCoverPath: String? = null,
 ) {
     key(item.displayId) {
         when (item) {
             is DiscoveryItem.Image -> DiscoveryImageRenderer(item, onLockChange, onLongPress)
+            is DiscoveryItem.Audio ->
+                DiscoveryAudioRenderer(
+                    item = item,
+                    isActive = isActive,
+                    isScrolling = isScrolling,
+                    onLongPress = onLongPress,
+                    onAudioEnded = onVideoEnded,
+                    fallbackCoverPath = audioCoverPath,
+                )
             is DiscoveryItem.Video ->
                 DiscoveryVideoRenderer(
                     item,
@@ -316,6 +592,7 @@ fun DiscoveryItemRenderer(
                     onToggleFullScreen,
                     onLockChange,
                     onLongPress,
+                    onVideoEnded,
                 )
         }
     }
@@ -466,6 +743,7 @@ fun DiscoveryVideoRenderer(
     onToggleFullScreen: () -> Unit,
     onLockChange: (Boolean) -> Unit,
     onLongPress: () -> Unit,
+    onVideoEnded: () -> Unit,
 ) {
     val context = LocalContext.current
     // 核心优化：从复用池借播放器（避免滑动时反复创建/销毁 MediaCodec 实例）
@@ -498,6 +776,8 @@ fun DiscoveryVideoRenderer(
 
                     override fun onPlaybackStateChanged(s: Int) {
                         if (s == Player.STATE_READY) duration = player.duration
+                        // 播完自动连播下一项（发现页两种视频模式共用）
+                        if (s == Player.STATE_ENDED) onVideoEnded()
                     }
                 }
             player.addListener(listener)
@@ -518,17 +798,8 @@ fun DiscoveryVideoRenderer(
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        AndroidView(
-            factory = { ctx ->
-                PlayerView(ctx).apply {
-                    useController = false
-                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                }
-            },
-            update = { view ->
-                // 核心优化：播放器动态绑定/解绑（非激活时显示缩略图，不绑定播放器）
-                view.player = exoPlayer
-            },
+        VideoSurface(
+            player = exoPlayer,
             modifier = Modifier.fillMaxSize(),
         )
 
@@ -540,7 +811,19 @@ fun DiscoveryVideoRenderer(
                     .pointerInput(item.displayId) {
                         detectTapGestures(
                             onTap = { showControls = !showControls },
-                            onDoubleTap = { if (isPlaying) exoPlayer?.pause() else exoPlayer?.play() },
+                            onDoubleTap = { offset ->
+                                // Instagram/Telegram 式分区跳转：左 1/3 后退、右 1/3 前进、中间不动作
+                                val w = size.width.toFloat()
+                                val pos = exoPlayer?.currentPosition ?: 0L
+                                val target =
+                                    when {
+                                        duration <= 15_000L -> pos
+                                        offset.x < w / 3f -> (pos - 10_000L).coerceAtLeast(0L)
+                                        offset.x > w * 2f / 3f -> (pos + 10_000L).coerceAtMost(duration)
+                                        else -> pos
+                                    }
+                                if (target != pos) exoPlayer?.seekTo(target)
+                            },
                             onLongPress = { onLongPress() },
                         )
                     }.pointerInput(item.displayId) {
@@ -549,7 +832,7 @@ fun DiscoveryVideoRenderer(
                         detectHorizontalDragGestures(
                             onDragStart = {
                                 onLockChange(true)
-                                showControls = true
+                                // 拖动进度时不弹控制条：只显示中间的秒数提示
                                 dragTotalX = 0f
                                 startPosition = exoPlayer?.currentPosition ?: 0L
                             },
@@ -646,13 +929,20 @@ private fun VideoProgressBar(
     var progress by remember { mutableFloatStateOf(0f) }
     var duration by remember { mutableLongStateOf(0L) }
     var currentTime by remember { mutableLongStateOf(0L) }
+    // 拖动期间不能被 500ms 轮询覆盖，否则滑块会被播放进度"抢回去"，手感就是拖不动
+    var dragging by remember { mutableStateOf(false) }
+    var dragValue by remember { mutableFloatStateOf(0f) }
 
     LaunchedEffect(exoPlayer) {
         while (true) {
             val p = exoPlayer ?: break
-            currentTime = p.currentPosition
-            if (duration <= 0) duration = p.duration
-            if (duration > 0) progress = currentTime.toFloat() / duration
+            if (!dragging) {
+                currentTime = p.currentPosition
+                val d = p.duration
+                // 时长不是常量：切集/切曲之后必须更新，否则整条进度条按旧总长算
+                if (d > 0 && d != Long.MIN_VALUE) duration = d
+                progress = if (duration > 0) (currentTime.toFloat() / duration).coerceIn(0f, 1f) else 0f
+            }
             delay(500.milliseconds)
         }
     }
@@ -665,10 +955,19 @@ private fun VideoProgressBar(
                 .padding(bottom = bottomPadding + (if (isFullScreen) 16.dp else 48.dp)),
     ) {
         Slider(
-            value = progress,
+            value = if (dragging) dragValue else progress,
+            // 拖动时只更新本地位置；松手才真正 seek 一次。
+            // 原来每移一个像素就 seekTo 一次，播放器被连续 seek 打成不断重新缓冲，看着就是"卡+不准"。
             onValueChange = {
-                progress = it
-                exoPlayer?.seekTo((it * duration).toLong())
+                dragging = true
+                dragValue = it
+            },
+            onValueChangeFinished = {
+                val target = (dragValue * duration).toLong()
+                exoPlayer?.seekTo(target)
+                currentTime = target
+                progress = dragValue
+                dragging = false
             },
             modifier =
                 Modifier
@@ -686,7 +985,8 @@ private fun VideoProgressBar(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("${formatTime(currentTime)} / ${formatTime(duration)}", color = Color.White, fontSize = 13.sp)
+            val shownTime = if (dragging) (dragValue * duration).toLong() else currentTime
+            Text(formatTime(shownTime) + " / " + formatTime(duration), color = Color.White, fontSize = 13.sp)
 
             IconButton(
                 onClick = onToggleFullScreen,

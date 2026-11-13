@@ -3,7 +3,6 @@ package com.dhhxfggg.pjm.domain.util
 import android.content.Context
 import com.dhhxfggg.pjm.data.model.FileEntity
 import java.io.File
-import java.util.UUID
 
 /**
  * PJM 保险库在应用私有目录中的路径布局工具。
@@ -42,13 +41,48 @@ object VaultPaths {
         file: File,
     ): String = file.absolutePath.removePrefix(vaultRoot(context).absolutePath).trimStart(File.separatorChar)
 
-    /** 生成入库目标路径：分类目录下 `<UUID>.<原扩展名>`（pjm 分卷需自行指定文件名） */
+    /**
+     * 生成入库目标路径（物理文件名即用户看到的名字）：
+     * - 图片：`PJM_yyyyMMdd_HHmmss.ext`（不暴露原始文件名，和显示名一致）；
+     * - 其他类型：保留原始文件名，重名时追加 (1)、(2)…
+     *
+     * @param importedAt 入库时间。命名和 entity.importedAt 用同一个时间戳，避免差一秒对不上。
+     */
     fun getNextVaultPath(
         context: Context,
         category: String,
         originalName: String,
+        importedAt: Long = System.currentTimeMillis(),
     ): File {
         val dir = getCategoryDir(context, category)
-        return File(dir, "${UUID.randomUUID()}.${FileUtils.getFileExtension(originalName)}")
+        val safeName = safeFileName(originalName)
+        // 用原始大小写的扩展名（FileUtils.getFileExtension 会小写化，且把 .pjm.1 归成 "pjm"）
+        val extension = safeName.substringAfterLast('.', "").takeIf { it.isNotEmpty() && it.length <= 10 }.orEmpty()
+        val suffix = if (extension.isEmpty()) "" else "." + extension
+        val base =
+            if (category == VaultCategories.CAT_IMAGES) {
+                // formatReadable 是 yyyyMMdd_HHmmssSSS，这里取到秒，和显示名 PJM_yyyyMMdd_HHmmss 一致
+                "PJM_" + VaultNaming.formatReadable(importedAt).take(15)
+            } else {
+                if (extension.isEmpty()) safeName else safeName.dropLast(extension.length + 1).ifBlank { "file" }
+            }
+        var candidate = File(dir, base + suffix)
+        var index = 1
+        while (candidate.exists()) {
+            candidate = File(dir, base + "(" + index + ")" + suffix)
+            index++
+        }
+        return candidate
+    }
+
+    /** 去掉路径分隔符/控制字符，避免原始文件名把文件写到目录外面去 */
+    private fun safeFileName(name: String): String {
+        val cleaned =
+            name
+                .substringAfterLast('/')
+                .substringAfterLast('\\')
+                .replace(Regex("[\\u0000-\\u001f:*?\"<>|]"), "_")
+                .trim()
+        return cleaned.ifBlank { "unnamed" }
     }
 }

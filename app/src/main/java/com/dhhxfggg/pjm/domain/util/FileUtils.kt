@@ -66,6 +66,50 @@ object FileUtils {
     private val VIDEO_EXT = setOf("mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "3gp", "ts", "rmvb")
     private val AUDIO_EXT = setOf("mp3", "aac", "ogg", "flac", "m4a", "wav", "opus", "amr", "wma", "mid")
 
+    /** 应用内可直接查看的纯文本类型：配置、日志、代码都归这里 */
+    private val TEXT_EXT =
+        setOf(
+            "txt",
+            "md",
+            "markdown",
+            "log",
+            "json",
+            "xml",
+            "yaml",
+            "yml",
+            "ini",
+            "conf",
+            "cfg",
+            "csv",
+            "tsv",
+            "html",
+            "htm",
+            "css",
+            "js",
+            "ts",
+            "jsx",
+            "tsx",
+            "kt",
+            "kts",
+            "java",
+            "py",
+            "c",
+            "cpp",
+            "h",
+            "hpp",
+            "cs",
+            "go",
+            "rs",
+            "rb",
+            "php",
+            "sh",
+            "bat",
+            "sql",
+            "gradle",
+            "properties",
+            "proguard",
+        )
+
     private val cachedDateFormat =
         object : ThreadLocal<SimpleDateFormat>() {
             override fun initialValue(): SimpleDateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US)
@@ -90,12 +134,16 @@ object FileUtils {
     /**
      * 规范化显示名（用于列表/详情/导出/分享的文件名，磁盘物理文件不变）。
      * - PJM 加密容器：本身已是规范命名（Export_/Pack_/Random_ + 可读时间），原样返回；
-     * - 其他文件：统一为 `PJM_yyyyMMdd_HHmmss.扩展名`（时间取入库时间 lastModified）。
+     * - 图片：统一为 `PJM_yyyyMMdd_HHmmss.扩展名`（时间取入库时间 lastModified）—— 相册里不暴露原始文件名；
+     * - 其他类型（视频/文档/压缩包…）：**保留导入时的原始文件名**，方便辨认。
      */
     fun normalizedDisplayName(entity: FileEntity): String {
         if (entity.extension.equals("pjm", ignoreCase = true)) return entity.name
-        val ts = compactTsFormat.get()?.format(Date(entity.lastModified)) ?: "unknown"
-        val base = "PJM_$ts"
+        if (!entity.isImage) return entity.name
+        // 用「入库时间」而不是文件自身时间：重命名/复制过的文件 lastModified 会变，入库时间不会
+        val ts = compactTsFormat.get()?.format(Date(entity.importedAt.takeIf { it > 0 } ?: entity.lastModified)) ?: "unknown"
+        // 只保留时间，不再加 PJM_ 前缀（保持和老库里的命名一致）
+        val base = ts
         val ext = entity.extension.lowercase().trim('.')
         return if (ext.isEmpty()) base else "$base.$ext"
     }
@@ -230,6 +278,8 @@ object FileUtils {
 
     fun isAudioFile(fileName: String): Boolean = (getFileExtension(fileName) in AUDIO_EXT)
 
+    fun isTextFile(fileName: String): Boolean = getFileExtension(fileName) in TEXT_EXT
+
     fun isArchiveFile(fileName: String): Boolean = getFileExtension(fileName) in setOf("zip", "rar", "7z", "tar", "gz", "bz2", "xz")
 
     /**
@@ -242,6 +292,7 @@ object FileUtils {
             in IMAGE_EXT -> "images"
             in VIDEO_EXT -> "videos"
             in AUDIO_EXT -> "audios"
+            in TEXT_EXT -> "texts"
             else -> "others"
         }
     }

@@ -16,6 +16,7 @@ import com.dhhxfggg.pjm.domain.util.PjmLogger
 import com.dhhxfggg.pjm.domain.util.VaultManager
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.*
+import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
@@ -37,10 +38,16 @@ class VaultService : Service() {
     lateinit var repository: FileRepository
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private var currentJob: Job? = null
 
-    /** 当前任务 id（store/encrypt），进度条独立显示 */
-    private var currentTaskId: String = TASK_STORE
+    /**
+     * 每个 taskId 一个独立 Job（核心修复）。
+     * 旧实现只有一个 currentJob，新任务一到就 cancel 旧的 —— 入库与加密并行时
+     * 先跑的那个会被静默杀掉；旧任务的 stopSelf() 还会把新任务一起带走。
+     */
+    private val jobs = ConcurrentHashMap<String, Job>()
+
+    /** 最近一次启动的任务 id（仅用于前台通知文案，任务本身互相独立） */
+    private var lastTaskId: String = TASK_STORE
 
     // Throttling for system notification updates
     private var lastNotificationTime = 0L
@@ -116,16 +123,11 @@ class VaultService : Service() {
         val uris = IntentCompat.getParcelableArrayListExtra(intent, EXTRA_URIS, Uri::class.java) ?: emptyList()
         val password = intent.getStringExtra(EXTRA_PASSWORD)
 
-        // 核心修复：防重复触发 —— 同任务 id 已有进行中任务时忽略本次启动（连点不叠加）；
-        // 不同任务（如查重/删除）允许并行，互不阻塞。
+        // 每个 taskId 一个独立 Job：入库与加密可以真正并行，互不取消。
         val taskId = if (action == ACTION_ENCRYPT) TASK_ENCRYPT else TASK_STORE
-        currentTaskId = taskId
+        lastTaskId = taskId
 
-        // 核心修复：必须先满足前台服务契约。
-        // 本服务由 startForegroundService() 启动，系统要求 5 秒内调用 startForeground()，
-        // 否则抛 RemoteServiceException(ForegroundServiceDidNotStartInTime) 直接崩溃。
-        // 旧代码把这一步放在防连点判断之后：用户在任务进行中再次分享（非常容易触发），
-        // 就会既不 startForeground() 也不 stopSelf()，必然崩溃。
+        // 前台服务契约：必须 5 秒内 startForeground，否则系统直接杀进程。
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(
                 NOTIFICATION_ID,
@@ -137,21 +139,20 @@ class VaultService : Service() {
         }
 
         if (!VaultManager.tryBeginOperation(taskId)) {
-            PjmLogger.w("VaultService", "Operation already in progress, ignoring duplicate trigger")
-            // 若确实有任务在跑：生命周期交给那个任务自己的 finally 收尾。
-            // 这里不能无条件 stopSelf() —— 那会走 onDestroy → serviceScope.cancel()，
-            // 把正在进行的入库/加密任务一起杀掉（用户看到「分享成功但文件没进库」）。
-            // 若没有任何任务在跑，说明只是残留的活动标志，此时可以安全收尾。
-            if (currentJob?.isActive != true) {
+            PjmLogger.w("VaultService", "Operation already in progress, taskId=" + taskId)
+            // 核心修复：同 taskId 的第二次触发不再静默丢弃 —— 明确告知用户。
+            VaultManager.notifyResult(
+                OperationResult.Error(action, getString(R.string.toast_operation_in_progress)),
+            )
+            if (jobs.isEmpty()) {
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf(startId)
             }
             return START_NOT_STICKY
         }
 
-        currentJob?.cancel()
-        currentJob =
-            serviceScope.launch {
+        val job =
+            serviceScope.launch(start = CoroutineStart.LAZY) {
                 try {
                     when (action) {
                         ACTION_STORE -> {
@@ -163,20 +164,21 @@ class VaultService : Service() {
                                     onProgress = { updateNotification(null, (it * 100).toInt()) },
                                     onUnsupported = { _, _ -> },
                                 )
-                            VaultManager.notifyResult(
-                                OperationResult.Success(
-                                    action = ACTION_STORE,
-                                    // 只上报以普通文件入库的源 uri（用于“是否删除原件”询问）；
-                                    // pjm 容器只解密不落库，已被 IngestionEngine 排除在 deletableUris 之外。
-                                    uris = summary.deletableUris,
-                                    imported = summary.imported,
-                                    skipped = summary.skipped,
-                                    failed = summary.failed,
-                                ),
-                            )
+                            if (!VaultManager.isTaskCancelled(taskId)) {
+                                VaultManager.notifyResult(
+                                    OperationResult.Success(
+                                        action = ACTION_STORE,
+                                        // 只上报以普通文件入库的源 uri（用于“是否删除原件”询问）；
+                                        // pjm 容器只解密不落库，已被 IngestionEngine 排除在 deletableUris 之外。
+                                        uris = summary.deletableUris,
+                                        imported = summary.imported,
+                                        skipped = summary.skipped,
+                                        failed = summary.failed,
+                                    ),
+                                )
+                            }
                         }
                         ACTION_ENCRYPT -> {
-                            // 顶部横幅：加密开始（独立任务 id，可与其他任务并行）
                             VaultManager.updateProgress(0f, getString(R.string.status_encrypting), taskId = TASK_ENCRYPT)
                             val volumes =
                                 repository
@@ -184,30 +186,44 @@ class VaultService : Service() {
                                         updateNotification("Packing and encrypting...", (progress * 100).toInt())
                                         VaultManager.updateProgress(progress, getString(R.string.status_encrypting), taskId = TASK_ENCRYPT)
                                     }.getOrThrow()
-                            // 顶部横幅：加密完成（delay(500) 后 finally 清除）
-                            VaultManager.updateProgress(1f, getString(R.string.status_encrypt_success), taskId = TASK_ENCRYPT)
-                            VaultManager.notifyResult(
-                                OperationResult.Success(
-                                    action = ACTION_ENCRYPT,
-                                    uris = uris,
-                                    volumes = volumes,
-                                ),
-                            )
+                            if (!VaultManager.isTaskCancelled(taskId)) {
+                                VaultManager.updateProgress(1f, getString(R.string.status_encrypt_success), taskId = TASK_ENCRYPT)
+                                VaultManager.notifyResult(
+                                    OperationResult.Success(
+                                        action = ACTION_ENCRYPT,
+                                        uris = uris,
+                                        volumes = volumes,
+                                    ),
+                                )
+                            }
                         }
                     }
                     delay(500.milliseconds) // Brief delay to ensure UI consistency
+                } catch (e: CancellationException) {
+                    PjmLogger.i("VaultService", "Task cancelled: " + taskId)
                 } catch (e: Exception) {
                     PjmLogger.e("VaultService", "Task failed", e)
-                    VaultManager.updateProgress(0f, "Operation failed: ${e.message}", taskId = taskId, isError = true)
+                    VaultManager.updateProgress(
+                        0f,
+                        "Operation failed: " + (e.message ?: "unknown"),
+                        taskId = taskId,
+                        isError = true,
+                    )
                     VaultManager.notifyResult(OperationResult.Error(action, e.message ?: "Unknown error"))
                     delay(2.seconds)
                 } finally {
                     VaultManager.clearProgress(taskId)
-                    VaultManager.endOperation(taskId) // 释放该任务（不影响其他并发任务）
-                    stopForeground(STOP_FOREGROUND_REMOVE)
-                    stopSelf()
+                    VaultManager.endOperation(taskId)
+                    jobs.remove(taskId)
+                    // 只有所有任务都结束了才停掉服务；停早了会 onDestroy → cancel 掉其它任务
+                    if (jobs.isEmpty()) {
+                        stopForeground(STOP_FOREGROUND_REMOVE)
+                        stopSelf()
+                    }
                 }
             }
+        jobs[taskId] = job
+        job.start()
 
         return START_NOT_STICKY
     }
@@ -220,13 +236,15 @@ class VaultService : Service() {
         startId: Int,
         fgsType: Int,
     ) {
-        PjmLogger.w("VaultService", "Foreground service timed out for type $fgsType")
-        val taskId = currentTaskId
-        currentJob?.cancel()
-        VaultManager.updateProgress(0f, "Operation timed out", taskId = taskId, isError = true)
-        // 核心修复：超时同样必须释放任务槽位，否则该 taskId 会永久停留在 isActive=true，
-        // 之后所有同类型任务（入库/加密）都会被防连点逻辑拦下，只能重启应用才能恢复。
-        VaultManager.endOperation(taskId)
+        PjmLogger.w("VaultService", "Foreground service timed out for type " + fgsType)
+        // 超时同样必须释放所有任务槽位，否则 taskId 永久停在 isActive=true，
+        // 之后同类型任务全被防连点拦下，只能重启应用。
+        jobs.keys.toList().forEach { id ->
+            VaultManager.updateProgress(0f, "Operation timed out", taskId = id, isError = true)
+            VaultManager.endOperation(id)
+        }
+        jobs.values.forEach { it.cancel() }
+        jobs.clear()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -247,20 +265,20 @@ class VaultService : Service() {
 
         // Always update the internal state for smooth UI progress bars
         if (progress >= 0) {
-            VaultManager.updateProgress(progress / 100f, status ?: currentTaskMessage(), taskId = currentTaskId)
+            VaultManager.updateProgress(progress / 100f, status ?: currentTaskMessage(), taskId = lastTaskId)
         } else if (status != null) {
-            VaultManager.updateProgress(currentTaskProgress(), status, taskId = currentTaskId)
+            VaultManager.updateProgress(currentTaskProgress(), status, taskId = lastTaskId)
         }
     }
 
     private fun currentTaskMessage(): String =
         VaultManager.activeTasks.value
-            .firstOrNull { it.taskId == currentTaskId }
+            .firstOrNull { it.taskId == lastTaskId }
             ?.message ?: ""
 
     private fun currentTaskProgress(): Float =
         VaultManager.activeTasks.value
-            .firstOrNull { it.taskId == currentTaskId }
+            .firstOrNull { it.taskId == lastTaskId }
             ?.progress ?: 0f
 
     private fun createNotification(

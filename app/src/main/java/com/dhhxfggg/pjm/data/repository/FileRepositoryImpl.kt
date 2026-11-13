@@ -8,14 +8,12 @@ import com.dhhxfggg.pjm.domain.util.IngestionEngine
 import com.dhhxfggg.pjm.domain.util.IngestionSummary
 import com.dhhxfggg.pjm.domain.util.SettingsManager
 import com.dhhxfggg.pjm.domain.util.VaultManager
+import com.dhhxfggg.pjm.domain.util.VaultNaming
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.map
 import java.io.File
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -87,7 +85,15 @@ class FileRepositoryImpl
             VaultManager.fullSyncDatabase(context, fileDao)
         }
 
-        override suspend fun exportVault(onProgress: (Float) -> Unit): Result<Int> = VaultManager.exportVaultToPjmModule(context, fileDao, onProgress)
+        override suspend fun totalFileCount(): Long = fileDao.getTotalFileCount()
+
+        override suspend fun updateDisplayName(
+            relativePath: String,
+            name: String,
+        ) {
+            if (name.isBlank()) return
+            fileDao.updateDisplayName(relativePath, name.trim())
+        }
 
         override suspend fun getRandomFileByCategory(category: String): FileEntity? {
             // 核心修复（所有分类封面都要能随机变）：
@@ -109,6 +115,15 @@ class FileRepositoryImpl
             val picked = fileDao.getFileByOffset(category, offset) ?: return null
             lastRandomFileId[category] = picked.id
             return picked
+        }
+
+        override suspend fun getCoverFile(category: String, daySeed: Int?): FileEntity? {
+            if (daySeed == null) return getRandomFileByCategory(category)
+            val count = fileDao.getCountByCategory(category)
+            if (count <= 0) return null
+            // 日期种子 + 分类名 → 稳定 offset：同一天永远同一张，跨天自动换
+            val offset = Math.floorMod(daySeed * 31 + category.hashCode(), count)
+            return fileDao.getFileByOffset(category, offset)
         }
 
         override suspend fun getLatestFileByCategory(category: String): FileEntity? = fileDao.getLatestFileByCategory(category)
@@ -134,8 +149,8 @@ class FileRepositoryImpl
             uris: List<Uri>,
             onProgress: (Float) -> Unit,
         ): Result<Int> {
-            val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-            val baseName = "Pack_$timeStamp"
+            // 毫秒精度：同一秒内两次打包不会算出同名容器互相覆盖
+            val baseName = "Pack_" + VaultNaming.readableTimestamp()
             return VaultManager.packUrisWithSplitting(
                 context = context,
                 uris = uris,

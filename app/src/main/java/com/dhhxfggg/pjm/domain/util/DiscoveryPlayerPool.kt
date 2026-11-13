@@ -37,7 +37,9 @@ object DiscoveryPlayerPool {
         val player =
             pool.pollFirst()
                 ?: ExoPlayer.Builder(appContext).build().apply {
-                    repeatMode = Player.REPEAT_MODE_ONE
+                    volume = AudioSettings.appVolume(appContext)
+                    // 发现页要"播完自动连播下一项"，必须关闭单曲循环，否则永远不会回调 STATE_ENDED
+                    repeatMode = Player.REPEAT_MODE_OFF
                     setAudioAttributes(
                         AudioAttributes
                             .Builder()

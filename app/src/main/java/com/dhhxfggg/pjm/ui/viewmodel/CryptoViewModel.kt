@@ -111,11 +111,15 @@ class CryptoViewModel
                                 }
                             }
                         }
+                        is OperationResult.Error -> {
+                            android.widget.Toast
+                                .makeText(app, result.message, android.widget.Toast.LENGTH_SHORT)
+                                .show()
+                        }
                         is OperationResult.PasswordRequired -> {
                             pendingUris = result.uris
                             _events.emit(CryptoEvent.RequestPassword(result.fileName))
                         }
-                        else -> {}
                     }
                 }
             }

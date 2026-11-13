@@ -91,6 +91,9 @@ object IngestionEngine {
                     uris.forEach { uri ->
                         launch {
                             jobSemaphore.withPermit {
+                                if (VaultManager.isTaskCancelled(TASK_STORE)) {
+                                    throw CancellationException("入库已取消")
+                                }
                                 if (!processedUris.add(uri)) return@withPermit
                                 val name = FileUtils.getFileName(context, uri)
                                 val nameIsPjm = (name.contains(".pjm.") || name.endsWith(".pjm"))
@@ -204,9 +207,11 @@ object IngestionEngine {
                 }
                 if (collectedEntities.isNotEmpty()) {
                     onStatus(context.getString(R.string.status_updating_index))
-                    fileDao.upsertAll(collectedEntities)
+                    fileDao.upsertAllLocked(collectedEntities)
                     // 只有 upsertAll 真正成功，才把这些文件算作「已入库」
                     importedCount = collectedEntities.size
+                    // 默认把图片感知指纹算好存下（只计算、不比对，不触发任何查重）
+                    FingerprintWarmer.warm(context, collectedEntities)
                 }
             } catch (e: CancellationException) {
                 // 核心修复：取消必须向上传播，并把「已落盘但未入库」的文件清理掉。
@@ -321,6 +326,9 @@ object IngestionEngine {
             while (ze != null) {
                 coroutineContext.ensureActive()
                 if (!ze.isDirectory) {
+                    // 容器条目声明了大小就按它检查空间：恶意/异常容器不会写出比声明更大的数据，
+                    // 提前拒绝比写到一半 ENOSPC 更安全（损坏的半成品会被回滚，但磁盘可能已被占满）。
+                    if (ze.size > 0) VaultManager.ensureDiskSpace(context, ze.size)
                     val wrapper =
                         object : FilterInputStream(zais) {
                             override fun close() {}

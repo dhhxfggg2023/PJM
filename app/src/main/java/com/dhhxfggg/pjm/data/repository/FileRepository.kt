@@ -23,9 +23,24 @@ interface FileRepository {
 
     suspend fun syncDatabase()
 
-    suspend fun exportVault(onProgress: (Float) -> Unit): Result<Int>
+    /** 只改库内显示名（磁盘上的 UUID 文件名不动） */
+    suspend fun updateDisplayName(
+        relativePath: String,
+        name: String,
+    )
 
     suspend fun getRandomFileByCategory(category: String): FileEntity?
+
+    /**
+     * 取一张封面。
+     *
+     * @param daySeed 非空时按「日期种子」固定挑选（同一天封面不变，实现"每日一换"）；
+     *                为空时就是原来的随机挑。
+     */
+    suspend fun getCoverFile(category: String, daySeed: Int?): FileEntity?
+
+    /** 库内文件总数（启动判断用，不加载实体） */
+    suspend fun totalFileCount(): Long
 
     /** 大库优化：取分类最近文件作封面（替代 RANDOM，O(log n)） */
     suspend fun getLatestFileByCategory(category: String): FileEntity?

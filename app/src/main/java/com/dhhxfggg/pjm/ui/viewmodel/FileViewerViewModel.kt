@@ -9,6 +9,7 @@ import coil3.imageLoader
 import coil3.memory.MemoryCache
 import com.dhhxfggg.pjm.R
 import com.dhhxfggg.pjm.data.model.FileEntity
+import com.dhhxfggg.pjm.data.repository.CategoryListCache
 import com.dhhxfggg.pjm.data.repository.FileRepository
 import com.dhhxfggg.pjm.domain.util.FileUtils
 import com.dhhxfggg.pjm.domain.util.PjmLogger
@@ -86,37 +87,47 @@ class FileViewerViewModel
          *
          * @param category The category of files to retrieve.
          */
-        fun getFlattenedFiles(category: String): StateFlow<List<FileListItem>> {
-            val filesFlow =
-                repository
-                    .getFilesByCategory(category)
-                    .map { files ->
-                        withContext(Dispatchers.Default) {
-                            // 核心修复：按【天】分桶后再格式化，而不是对每个文件各格式化一次。
-                            // 旧写法 `files.groupBy { FileUtils.formatFileTime(it.lastModified) }`
-                            // 会为每个文件创建 Date 并跑一遍 SimpleDateFormat.format ——
-                            // 万级库每次数据库写入都要做一万次，是滚动/删除时的主要卡顿来源。
-                            // 分桶后格式化次数从 O(文件数) 降到 O(天数)。
-                            //
-                            // 说明：repository 已按 lastModified DESC 排序，因此按插入顺序遍历
-                            // 天然保持「新的日期在前、组内也是新的在前」。
-                            val result = mutableListOf<FileListItem>()
-                            var currentBucket = Long.MIN_VALUE
-                            files.forEach { entity ->
-                                val bucket = Math.floorDiv(entity.lastModified, FileListItem.MILLIS_PER_DAY)
-                                if (bucket != currentBucket) {
-                                    currentBucket = bucket
-                                    result.add(FileListItem.Header(FileUtils.formatFileTime(entity.lastModified)))
-                                }
-                                result.add(FileListItem.FileItem(entity))
-                            }
-                            result
-                        }
-                    }.distinctUntilChanged()
-
-            return filesFlow
+        fun getFlattenedFiles(category: String): StateFlow<List<FileListItem>?> {
+            // 先用缓存把首帧顶上：4 万行的查询不值得让用户每次都盯着转圈
+            val cached = CategoryListCache.get(category)?.let { buildFlattened(category, it) }
+            return repository
+                .getFilesByCategory(category)
+                // 导入/接管会在短时间内连续写库：合并成一次列表重建，避免 4 万条列表反复重建
+                .debounce(200)
+                .onEach { CategoryListCache.put(category, it) }
+                .map { files -> withContext(Dispatchers.Default) { buildFlattened(category, files) } }
+                .distinctUntilChanged()
                 .flowOn(Dispatchers.Default)
-                .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+                // initialValue = null 表示「还没查到」：界面据此显示加载而不是「暂无资源」
+                .stateIn(viewModelScope, SharingStarted.Eagerly, cached)
+        }
+
+        /**
+         * 按【天】分桶后再格式化日期。
+         *
+         * 旧写法对每条文件都跑一次 Date/SimpleDateFormat，4 万条时单次就要上百毫秒；
+         * 分桶后格式化次数从 O(文件数) 降到 O(天数)。
+         */
+        private fun buildFlattened(
+            category: String,
+            files: List<FileEntity>,
+        ): List<FileListItem> {
+            val startedAt = System.currentTimeMillis()
+            val result = mutableListOf<FileListItem>()
+            var currentBucket = Long.MIN_VALUE
+            files.forEach { entity ->
+                val bucket = Math.floorDiv(entity.lastModified, FileListItem.MILLIS_PER_DAY)
+                if (bucket != currentBucket) {
+                    currentBucket = bucket
+                    result.add(FileListItem.Header(FileUtils.formatFileTime(entity.lastModified)))
+                }
+                result.add(FileListItem.FileItem(entity))
+            }
+            PjmLogger.d(
+                "FileViewerViewModel",
+                "构建列表: " + category + " " + files.size + " 条 / " + (System.currentTimeMillis() - startedAt) + "ms",
+            )
+            return result
         }
 
         /**
@@ -124,6 +135,24 @@ class FileViewerViewModel
          */
         fun setBatchMode(enabled: Boolean) {
             _uiState.update { it.copy(isBatchMode = enabled) }
+        }
+
+        /**
+         * 重命名「库内显示名」。
+         *
+         * 只改数据库里的 name，磁盘文件名永远是 UUID —— 显示名与物理名彻底分开：
+         * 用户能按自己起的名字找文件，磁盘那一侧的命名规则不会被任何人打乱。
+         */
+        fun renameDisplayName(
+            entity: FileEntity,
+            newName: String,
+        ) {
+            val trimmed = newName.trim()
+            if (trimmed.isBlank() || trimmed == entity.name) return
+            viewModelScope.launch {
+                runCatching { repository.updateDisplayName(entity.relativePath, trimmed) }
+                    .onFailure { PjmLogger.e("FileViewerViewModel", "重命名失败", it) }
+            }
         }
 
         /**

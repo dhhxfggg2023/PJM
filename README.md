@@ -92,15 +92,15 @@ PJM 是一个 Android 本地文件保险库应用。它把图片、视频、音�
 ### 发现页
 - 图片全屏缩放（双击 / 双指），视频播放（拖动快进快退）。
 - ExoPlayer 实例池化复用，避免滚动时反复创建解码器。
-- 全量打乱队列，一轮内不重复浏览；已看过的优先靠后。
+- 全量打乱队列，一轮内不重复；已看过的会被排除，看完一整轮才重新洗牌（快速划过、未停稳的页不会被计为「看过」）。
 
 ### 受限目录与特权访问
 - **Shizuku**：以 shell 身份访问 `Android/data` 等受保护目录。
-- **内置特权文件服务**：AIDL + 嵌入式进程，配合 `start.sh` 可在不安装 Shizuku 的情况下通过 adb 启动。
+- **内置特权文件服务**：嵌入式 shell 进程（文件队列协议），配合 `start.sh` 可在不安装 Shizuku 的情况下通过 adb 启动；Shizuku 通道则走 AIDL。
+  - 服务只接受 `/storage/emulated/0` 内的路径，`copy` 只能落到应用自己的外部私有目录；`/data`、`/system` 等一律拒绝。固定 token 主要防误触发；在 Android 10 及以下共享目录可被其他应用写入的场景，路径白名单把可利用面限制在共享存储内。
 
 ### 其他
-- 前台服务执行后台任务（带进度通知，支持取消与超时）。
-- 数据库每日自动备份（备份前执行 WAL checkpoint 以保证完整性）。
+- 前台服务执行后台任务（带进度通知；取消在文件边界生效；Android 15 超时会释放任务槽位）。
 - 冷启动清理孤儿缓存、残留临时文件与失效的浏览历史。
 
 ---
@@ -140,7 +140,18 @@ PJM 是一个 Android 本地文件保险库应用。它把图片、视频、音�
    sdkmanager "ndk;28.2.13676358" "cmake;3.22.1"
    ```
 
-3. **直接构建**，不需要任何密钥：debug 签名由 Android Studio 自动生成；本仓库的 release 目前沿用 debug 签名配置，因此 `assembleRelease` 同样开箱即可出包。
+3. **直接构建**，不需要任何密钥：debug 签名由 Android Studio 自动生成。release 默认沿用 debug 签名，`assembleRelease` 开箱即可出包。
+
+   **要换成正式签名**：在项目根目录放一个 `keystore.properties`（已被 `.gitignore` 排除）：
+
+   ```properties
+   storeFile=/绝对路径/release.jks
+   storePassword=...
+   keyAlias=...
+   keyPassword=...
+   ```
+
+   存在该文件时 release 自动使用它，否则回退 debug 签名。**请务必离线备份签名文件**：丢了就无法覆盖安装，只能卸载重装（保险库数据会一起丢）。
 
 ```bash
 ./gradlew :app:assembleDebug      # 调试包
@@ -156,7 +167,7 @@ PJM 是一个 Android 本地文件保险库应用。它把图片、视频、音�
 ./gradlew ktlintCheck             # 代码风格检查
 ```
 
-**运行要求**：Android 7.0+（minSdk 24），targetSdk 35。需要存储权限；在 Android 11+ 上建议授予「所有文件访问」，或使用 Shizuku 以获得完整功能。
+**运行要求**：Android 7.0+（minSdk 24），targetSdk 35。需要存储权限；Android 11+ 的「所有文件访问」是可选的（不授予也能使用本地保险库，仅影响 `Android/data` 访问），也可用 Shizuku 替代。
 
 ---
 
@@ -181,52 +192,23 @@ app/schemas/               # Room schema JSON（入库，供迁移测试使用�
 
 ---
 
-## 备份与恢复
+## 数据迁移与备份
 
-保险库位于应用**私有目录**，普通文件管理器和 adb 都无法直接读写它。因此备份/恢复需要借助 `run-as`，而 `run-as` 只对 `android:debuggable="true"` 的包生效。
+应用内**不再提供备份功能**：原「整库导出为 PJM 分卷」与「数据库每日备份」已删除。
+两者都会在手机本地再存一份完整副本，而全库体量已达 50GB 级别，手机剩余空间不足以承担这个翻倍开销。
 
-**备份思路**（在电脑上执行）：
+后续计划改为**直接文件传输**（手机与电脑点对点搬运），而不是「先在手机里打包一份、再把产物传出去」。
 
-```bash
-# 1. 安装一个可调试包（与应用同签名即可覆盖安装，数据保留）
-adb install -r app-debug.apk
-
-# 2. 逐块打包并取回（分块是为了单块失败不影响整体）
-adb shell "run-as com.dhhxfggg.pjm sh -c 'cd files/pjm_vault/images; tar cf - [0-3]*' > /data/local/tmp/chunk.tar"
-adb pull /data/local/tmp/chunk.tar ./images_a.tar
-adb shell "rm -f /data/local/tmp/chunk.tar"
-
-# 3. 数据库与设置
-adb shell "am force-stop com.dhhxfggg.pjm"
-adb shell "run-as com.dhhxfggg.pjm tar cf - databases shared_prefs files/datastore > /data/local/tmp/meta.tar"
-adb pull /data/local/tmp/meta.tar ./meta.tar
-
-# 4. 装回正式包，关闭调试访问
-adb install -r app-release.apk
-adb shell run-as com.dhhxfggg.pjm id   # 应报 "not debuggable"
-```
-
-**恢复**即反向操作：装可调试包 → `adb push` + `run-as ... tar xf` 到对应目录 → 恢复数据库 → 装回正式包。
-
-**校验**（恢复后应一致）：
-
-```bash
-adb shell "run-as com.dhhxfggg.pjm sh -c 'find files/pjm_vault -type f | wc -l'"
-adb shell "run-as com.dhhxfggg.pjm sh -c 'find files/pjm_vault -type f -exec du -cb {} + | tail -1'"
-```
-
-> 备份出来的是**明文**。请存放在可信介质上，不要放同步盘或共享目录。
-
-**注意**：应用内**没有「整库导出／导入」功能** —— 现有的 SAF 入口只用于「从授权目录导入 B 站视频」，导出也只支持单个文件到系统相册。因此整库的备份与恢复必须借助电脑和 adb。这是当前架构的一个已知缺口。
+保险库位于应用私有目录 `/data/user/0/com.dhhxfggg.pjm/files/pjm_vault/`，其中普通文件是**明文**（只有 `.pjm` 容器经过变换）。系统云备份与设备迁移已被排除在这些目录之外。极端情况下需要取回数据时，可安装可调试包后用 `adb shell run-as com.dhhxfggg.pjm ...` 手动读取；取回的内容同样是明文，请存放在可信介质上。
 
 ---
 
 ## 已知限制
 
 - **不是加密软件**，见 [安全模型](#安全模型必读)。
-- **应用内没有导入/导出功能**，备份恢复必须借助 adb + 可调试包。
+- **应用内没有备份/恢复/迁移功能**（见上），整库搬运只能借助电脑 + adb 手动处理。
 - **`0x03` 容器与 v1.9.3 及更早版本不兼容**（新包发不出去给老版本用户）。
-- 相似图片查重为 O(n²) 粗筛，在数万张量级下首次运行仍需较长时间（指纹需逐张解码）；之后有半永久缓存，增量运行很快。
+- 相似图片查重采用 4×16 位分块倒排索引粗筛（替代 O(n²) 全量比较，38k 张约 1 亿次定长数组扫描，随数量近似线性）；首次仍需逐张解码生成指纹，之后增量很快。
 - 保险库使用**扁平目录**存储（单目录可达数万文件），在十万级规模下目录遍历会变慢。
 - 仅在 Android 15（API 35）的真机与模拟器上做过实际验证，其余版本未系统测试。
 

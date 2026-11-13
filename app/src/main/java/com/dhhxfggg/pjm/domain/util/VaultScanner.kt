@@ -82,7 +82,7 @@ object VaultScanner {
                     .values
                     .flatten()
             suspects.forEachIndexed { i, entity ->
-                if (VaultManager.isTaskCancelled(VaultManager.TASK_DUPLICATES_EXACT)) throw CancellationException("精确查重已取消")
+                if (VaultManager.isTaskCancelled(VaultManager.TASK_DUPLICATES)) throw CancellationException("精确查重已取消")
                 onProgress(i.toFloat() / suspects.size)
                 val file = VaultManager.getFileFromEntity(context, entity)
                 // 核心修复：视频用内容级感知指纹（时长+分辨率+关键帧 dHash），
@@ -142,13 +142,14 @@ object VaultScanner {
      * 算法（针对上万张图片优化，1.3 万张实测通过）：
      * 1. 指纹（增量）：每张图采样解码算 64-bit dHash + 原始分辨率，落盘 [ImageFingerprintCache]。
      *    已缓存的直接跳过 —— 下次新增图片只需算新图，秒级增量。
-     * 2. 全量两两粗筛：64 位 dHash 转 Long，用 bitCount 快速算汉明距离（1 万张 ≈ 5 千万对，
-     *    JVM 上仅数秒）。阈值 ≤ 16 —— 大缩放 + 重压缩可能翻转较多位，必须放宽保证召回。
-     * 3. 【内存宽高比预过滤】：比例差异 > 3% 的对直接排除（原图 4:3 与 16:9 不可能是缩略图关系），
-     *    候选对骤降 90%+ —— 这是防止 256MB 堆 OOM 的关键。
-     * 4. 候选对用 IntArray 紧凑编码（4 字节/对）而非 Pair 装箱（~40 字节/对），
-     *    百万候选对仅 ~4MB。
-     * 5. 候选对精确确认：[ImageFingerprintCache.verifySameContent]（宽高比一致 + 128px
+     * 2. 候选对生成：4×16 位分块倒排索引（[DHashIndex]），不再做 O(n²) 全量两两比较。
+     *    鸽巢原理保证汉明距离 ≤15 的对必然被枚举到；38k 张图从 7.2 亿对降到约 1.06 亿次
+     *    定长数组区间扫描，近似线性。
+     * 3. 候选对按「面积差 ≥1.2 倍 → 宽高比差 ≤3% → 汉明距离 ≤15 → 32×32 灰度」逐级过滤，
+     *    全部是纯内存整数/字节运算。
+     * 4. 候选对**流式**验证，不再物化成候选数组（原实现可涨到几百 MB）；验证签名按需读盘
+     *    并走 512 张内存队列，避免每对读 4 个缓存文件。
+     * 5. 候选对精确确认：[ImageFingerprintCache.verifySameContent]（宽高比一致 + 64 宽
      *    逐像素亮度差 ≤ 阈值）才算重复 —— 像素验证对重采样鲁棒，是主判定，误报率极低。
      * 6. Union-Find 连通成组；每组【保留分辨率最高】的，其余标记为建议删除。
      *
@@ -176,13 +177,12 @@ object VaultScanner {
             data class Fp(
                 val entity: FileEntity,
                 val fp: ImageFingerprint?,
-                val gray32: ByteArray?,
             )
             val fpSemaphore = Semaphore(3)
             val fps = mutableListOf<Fp>()
             var processedTotal = 0
             for (batch in images.chunked(128)) {
-                if (VaultManager.isTaskCancelled(VaultManager.TASK_DUPLICATES_PERCEPTUAL)) throw CancellationException("指纹计算已取消")
+                if (VaultManager.isTaskCancelled(VaultManager.TASK_DUPLICATES)) throw CancellationException("指纹计算已取消")
                 fps +=
                     coroutineScope {
                         batch
@@ -190,20 +190,24 @@ object VaultScanner {
                                 async(VaultManager.PjmDispatchers.IO) {
                                     fpSemaphore.withPermit {
                                         val cachedFp = ImageFingerprintCache.getFingerprint(context, e)
-                                        val cachedGray = ImageFingerprintCache.getGray32(context, e)
-                                        val cachedSig = ImageFingerprintCache.getVerifySignature(context, e)
-                                        if (cachedFp != null && cachedGray != null && cachedSig != null) {
+                                        // 三项缓存都只做 stat 探测，不把内容读进内存：
+                                        // 38k 张全读一遍是 150MB+ 的无效 I/O（内容留给候选对验证阶段按需读）
+                                        val cacheComplete =
+                                            cachedFp != null &&
+                                                ImageFingerprintCache.hasGray32(context, e) &&
+                                                ImageFingerprintCache.hasVerifySignature(context, e)
+                                        if (cacheComplete) {
                                             // 三项全命中 → 零解码（增量场景：第二次起查重是秒级）
-                                            Fp(e, cachedFp, cachedGray)
+                                            Fp(e, cachedFp)
                                         } else {
                                             // 任一缺失 → 一次解码同时补齐三项（老缓存升级也走这里）
                                             val bundle = ImageFingerprintCache.computeBundle(context, e)
                                             if (bundle != null) {
                                                 ImageFingerprintCache.saveBundle(context, e, bundle)
-                                                Fp(e, bundle.fingerprint, bundle.gray32)
+                                                Fp(e, bundle.fingerprint)
                                             } else {
                                                 // 解码失败：退回已缓存的部分，绝不因单图失败影响整体
-                                                Fp(e, cachedFp, cachedGray)
+                                                Fp(e, cachedFp)
                                             }
                                         }
                                     }
@@ -220,94 +224,43 @@ object VaultScanner {
                 fps.mapNotNull { f -> f.fp?.let { f.entity to it } }.filter { it.second.dHash.length == 64 }
             if (fpList.size < 2) return@withContext emptyList()
 
-            // 2) 二进制串 → Long（加速汉明距离）+ 宽高比/面积预计算（粗筛纯内存过滤）
-            val dHashes = LongArray(fpList.size) { i -> fpList[i].second.dHash.toLongOrNull(2) ?: 0L }
+            // 2) 候选对生成：4×16 位分块倒排索引，替代 O(n²) 全量两两比较。
+            //
+            // 38k 张图两两比较是 7.2 亿次。这里把 64 位 dHash 切成 4 个 16 位块，
+            // 对每个块建「块值 → 图片下标」倒排表；查询时枚举与当前块值汉明距离 ≤3 的键。
+            // 鸽巢原理：若两张图总距离 ≤15，4 个块中必有一块差异 ≤3（否则总差 ≥16），
+            // 因此该索引**保证不漏**任何距离 ≤15 的候选对；复杂度从 O(n²) 降到约 O(n × 2788)。
+            //
+            // 核心修复（38k 张图直接把查重撑爆的两个根因）：
+            //  a. dHash 原来用 toLongOrNull(2) 解析，首位为 '1' 时溢出成 null → 0L，约一半
+            //     图片的哈希塌缩为 0、汉明距离恒为 0，候选对直接爆炸到数亿；
+            //  b. 候选对先物化成 LongArray 再统一验证，数组可涨到几百 MB；且每个候选对都要
+            //     重新读 4 个缓存文件。现在改为流式逐对验证 + 验证签名内存缓存。
+            val n = fpList.size
+            val hashes = LongArray(n) { PerceptualHash.parseBits(fpList[it].second.dHash) }
             val ratios =
-                FloatArray(fpList.size) { i ->
-                    val fp = fpList[i].second
+                FloatArray(n) {
+                    val fp = fpList[it].second
                     fp.width.toFloat() / fp.height.coerceAtLeast(1)
                 }
             val areas =
-                LongArray(fpList.size) { i ->
-                    val fp = fpList[i].second
+                LongArray(n) {
+                    val fp = fpList[it].second
                     fp.width.toLong() * fp.height
                 }
+            // 32×32 灰度按需读取 + 小缓存：38k 张全驻留约 38MB、10 万张约 100MB，
+            // 而只有通过汉明/面积/比例过滤的极少数候选对才需要它。
+            val grayCache = HashMap<Int, ByteArray>()
 
-            // 3) 粗筛（核心修复 OOM + 80% 卡死）：
-            //   a. O(n²) bitCount 保证 100% 召回（不遗漏任何汉明距离 ≤16 的对）；
-            //   b. 【内存宽高比预过滤】—— 原图 4:3 与 16:9 不可能是缩略图关系，纯内存直接排除；
-            //   c. 【面积差异预过滤】—— 本功能只找"原图 vs 缩略图"（面积差 ≥ 1.2 倍）；
-            //   d. 候选对用 LongArray 紧凑编码 (a shl 32) or b —— 8 字节/对，百万候选对约 8MB。
-            //      核心修复：原来用 IntArray + `(a shl 16) or b`，图片数 ≥ 65536 时高位被截断，
-            //      解码回来会指向**完全无关的两张图** —— 既产生错误重复组，又白白解码验证。
-            onProgress(0.6f)
-            val totalPairs = fpList.size.toLong() * (fpList.size - 1) / 2
-            var candidates = LongArray(8192)
-            var candidateCount = 0
-            var processedPairs = 0L
-            for (i in 0 until fpList.size - 1) {
-                if (VaultManager.isTaskCancelled(VaultManager.TASK_DUPLICATES_PERCEPTUAL)) throw CancellationException("比对已取消")
-                val hi = dHashes[i]
-                val ri = ratios[i]
-                val areaI = areas[i]
-                for (j in i + 1 until fpList.size) {
-                    if (++processedPairs % 8192 == 0L) {
-                        onProgress(0.6f + 0.15f * (processedPairs.toFloat() / totalPairs))
-                    }
-                    // 宽高比差异 > 3% → 直接排除（与 verifySameContent 的比例检查一致，先省一次解码）
-                    val rj = ratios[j]
-                    if (abs(ri - rj) / maxOf(ri, rj) > 0.03f) continue
-                    // 面积差异 < 1.2 倍 → 同分辨率/近似分辨率，非"原图 vs 缩略图"，跳过
-                    val maxArea = maxOf(areaI, areas[j])
-                    val minArea = minOf(areaI, areas[j])
-                    if (maxArea < minArea * 1.2f) continue
-                    if ((hi xor dHashes[j]).countOneBits() <= 16) {
-                        if (candidateCount == candidates.size) candidates = candidates.copyOf(candidates.size * 2)
-                        candidates[candidateCount++] = packPair(i, j)
-                    }
-                }
+            fun grayOf(index: Int): ByteArray? {
+                grayCache[index]?.let { return it }
+                val gray = ImageFingerprintCache.getGray32(context, fpList[index].first) ?: return null
+                if (grayCache.size >= 4096) grayCache.clear()
+                grayCache[index] = gray
+                return gray
             }
-            onProgress(0.75f)
-            PjmLogger.i(TAG, "图片感知查重：${fpList.size} 张图，$totalPairs 对，候选对 $candidateCount")
 
-            // 3.5) 32×32 灰度预筛（纯内存，微秒级）—— 候选对可能达数百万，
-            //      每对解码 64px 验证耗时以小时计。候选对先纯内存比较灰度：
-            //      平均亮度差 > 15 → 内容不一致，直接排除。
-            //      同图不同分辨率灰度差 < 6（通过），不同图 > 20（排除）—— 可砍掉 95%+ 干扰对。
-            // 核心优化：灰度已在第 1 步随指纹一次性算好并落盘，这里**只做内存归集**，
-            //      不再有第二次解码遍历（历史实现此处会再解码全部图片）。
-            onProgress(0.75f)
-            val gray32Cache = HashMap<String, ByteArray>(fpList.size)
-            fps.forEach { f ->
-                // 只为进入比对集合（fp 非空）的图片保留灰度，避免为被淘汰的图白占内存
-                if (f.fp != null) f.gray32?.let { gray32Cache[f.entity.relativePath] = it }
-            }
-            // 用灰度预筛过滤候选对（内存紧凑重建，避免保留被淘汰的）
-            if (candidateCount > 0) {
-                var kept = 0
-                for (idx in 0 until candidateCount) {
-                    if (VaultManager.isTaskCancelled(VaultManager.TASK_DUPLICATES_PERCEPTUAL)) throw CancellationException("灰度预筛已取消")
-                    val pair = candidates[idx]
-                    val i = pairFirst(pair)
-                    val j = pairSecond(pair)
-                    val g1 = gray32Cache[fpList[i].first.relativePath]
-                    val g2 = gray32Cache[fpList[j].first.relativePath]
-                    if (g1 != null && g2 != null && ImageFingerprintCache.gray32Similar(g1, g2)) {
-                        candidates[kept++] = pair
-                    }
-                }
-                candidateCount = kept
-            }
-            gray32Cache.clear()
-            onProgress(0.8f)
-            PjmLogger.i(TAG, "图片感知查重：灰度预筛后候选对 $candidateCount")
-
-            // 核心优化：候选对【并行】验证（解码 128px 是重活）
-            // 核心修复（崩溃/卡死）：
-            //   a. 分批验证（每批 32 对），批间更新进度 —— 避免验证阶段进度条卡住；
-            //   b. Semaphore(3) 限流 —— 控制并发解码内存峰值；
-            //   c. verifySameContent 内部 catch Throwable（含 OOM）+ recycle，单对失败不影响整体。
-            val parent = IntArray(fpList.size) { it }
+            val parent = IntArray(n) { it }
 
             fun find(x: Int): Int {
                 var r = x
@@ -326,54 +279,66 @@ object VaultScanner {
                 val rb = find(b)
                 if (ra != rb) parent[ra] = rb
             }
+
+            // 验证签名（.g64）按需读取，最多缓存 512 张（约 2MB），避免每个候选对都读盘
+            val sigCache = HashMap<Int, ByteArray>()
+
+            fun signatureOf(index: Int): ByteArray? {
+                sigCache[index]?.let { return it }
+                val sig = ImageFingerprintCache.getVerifySignature(context, fpList[index].first) ?: return null
+                if (sigCache.size >= 512) sigCache.clear()
+                sigCache[index] = sig
+                return sig
+            }
+
+            fun verifyPair(
+                i: Int,
+                j: Int,
+            ): Boolean {
+                val s1 = signatureOf(i)
+                val s2 = signatureOf(j)
+                return if (s1 != null && s2 != null) {
+                    ImageFingerprintCache.verifyBySignature(fpList[i].second, s1, fpList[j].second, s2)
+                } else {
+                    ImageFingerprintCache.verifySameContent(context, fpList[i].first, fpList[j].first)
+                }
+            }
+
+            var candidatePairs = 0L
             var verified = 0
-            if (candidateCount > 0) {
-                val totalCandidates = candidateCount
-                var processedCandidates = 0
-                var batchStart = 0
-                while (batchStart < candidateCount) {
-                    if (VaultManager.isTaskCancelled(VaultManager.TASK_DUPLICATES_PERCEPTUAL)) throw CancellationException("验证已取消")
-                    val batchEnd = minOf(batchStart + 32, candidateCount)
-                    coroutineScope {
-                        (batchStart until batchEnd)
-                            .map { idx ->
-                                async(VaultManager.PjmDispatchers.IO) {
-                                    if (VaultManager.isTaskCancelled(VaultManager.TASK_DUPLICATES_PERCEPTUAL)) return@async null
-                                    val pair = candidates[idx]
-                                    val i = pairFirst(pair)
-                                    val j = pairSecond(pair)
-                                    fpSemaphore.withPermit {
-                                        if (ImageFingerprintCache.verifySameContent(
-                                                context,
-                                                fpList[i].first,
-                                                fpList[j].first,
-                                            )
-                                        ) {
-                                            i to j
-                                        } else {
-                                            null
-                                        }
-                                    }
-                                }
-                            }.awaitAll()
-                            .forEach { pair ->
-                                if (pair != null) {
-                                    union(pair.first, pair.second)
-                                    verified++
-                                }
-                            }
+            onProgress(0.6f)
+            DHashIndex(hashes).forEachCandidatePair(
+                onImage = { i ->
+                    if (VaultManager.isTaskCancelled(VaultManager.TASK_DUPLICATES)) {
+                        throw CancellationException("图片感知查重已取消")
                     }
-                    processedCandidates += batchEnd - batchStart
-                    batchStart = batchEnd
-                    // 进度 80% → 90%：每 512 对才更新一次，避免海量候选对时高频 StateFlow 冲刷；
-                    // 进度按已处理比例平滑推进（候选对减少后肉眼可见地快速爬升）
-                    if (processedCandidates % 512 == 0 || processedCandidates == totalCandidates) {
-                        onProgress(0.8f + 0.1f * (processedCandidates.toFloat() / totalCandidates))
-                    }
+                    if (i % 1024 == 0) onProgress(0.6f + 0.2f * i.toFloat() / n)
+                },
+            ) { i, j ->
+                candidatePairs++
+                // 索引只保证距离 ≤15 的对必然出现，不保证出现的都 ≤15，这里做精确过滤
+                if ((hashes[i] xor hashes[j]).countOneBits() > DHashIndex.MAX_DISTANCE) return@forEachCandidatePair
+                // 面积差异 < 1.2 倍 → 同分辨率/近似分辨率，非"原图 vs 缩略图"
+                val areaI = areas[i]
+                val areaJ = areas[j]
+                val maxArea = maxOf(areaI, areaJ)
+                val minArea = minOf(areaI, areaJ)
+                if (maxArea < minArea * 1.2f) return@forEachCandidatePair
+                // 宽高比差异 > 3% → 原图 4:3 与 16:9 不可能是缩略图关系
+                val ri = ratios[i]
+                val rj = ratios[j]
+                if (abs(ri - rj) / maxOf(ri, rj) > 0.03f) return@forEachCandidatePair
+                // 32×32 灰度预筛（纯内存，砍掉 95%+ 干扰对）
+                val g1 = grayOf(i)
+                val g2 = grayOf(j)
+                if (g1 != null && g2 != null && !ImageFingerprintCache.gray32Similar(g1, g2)) return@forEachCandidatePair
+                if (verifyPair(i, j)) {
+                    union(i, j)
+                    verified++
                 }
             }
             onProgress(0.9f)
-            PjmLogger.i(TAG, "图片感知查重：确认重复对 $verified")
+            PjmLogger.i(TAG, "图片感知查重：$n 张图，候选对 $candidatePairs，确认重复对 $verified")
 
             // 4) 分组：每组 ≥ 2 → 保留分辨率最高，其余标记为建议删除（供 UI 对比展示）
             val groups = HashMap<Int, MutableList<Pair<FileEntity, ImageFingerprint>>>()
@@ -393,16 +358,6 @@ object VaultScanner {
             onProgress(1f)
             result
         }
-
-    /** 把候选对 (i, j) 打包进一个 Long（各占 32 位，支持索引 ≥ 65536）。 */
-    private fun packPair(
-        i: Int,
-        j: Int,
-    ): Long = (i.toLong() shl 32) or (j.toLong() and 0xFFFFFFFFL)
-
-    private fun pairFirst(pair: Long): Int = (pair ushr 32).toInt()
-
-    private fun pairSecond(pair: Long): Int = (pair and 0xFFFFFFFFL).toInt()
 
     fun calculateHash(file: File): String? {
         try {

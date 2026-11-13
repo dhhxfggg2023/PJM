@@ -49,6 +49,18 @@ object Settings {
     /** Bili 已合并视频导入后是否删除源文件 */
     const val KEY_BILI_MERGED_AUTO_DELETE = "bili_merged_auto_delete"
 
+    /** 预测性返回手势（返回时先预览上一页） */
+    const val KEY_PREDICTIVE_BACK = "predictive_back_gesture"
+
+    /** 发现页默认分类（images / videos / bili_videos / audios） */
+    const val KEY_DISCOVERY_DEFAULT_MODE = "discovery_default_mode"
+
+    /** 首页库封面：是否显示随机封面图 */
+    const val KEY_COVER_ENABLED = "library_cover_enabled"
+
+    /** 首页库封面刷新节奏（daily = 每日一换，each = 每次一换） */
+    const val KEY_COVER_REFRESH = "library_cover_refresh"
+
     /**
      * 应用程序设置的数据类。
      */
@@ -68,5 +80,9 @@ object Settings {
         val biliRootUri: String? = null,
         val biliAutoDelete: Boolean = false,
         val biliMergedAutoDelete: Boolean = false,
+        val predictiveBackEnabled: Boolean = true,
+        val discoveryDefaultMode: String = "bili_videos",
+        val coverEnabled: Boolean = true,
+        val coverRefresh: String = "each",
     )
 }

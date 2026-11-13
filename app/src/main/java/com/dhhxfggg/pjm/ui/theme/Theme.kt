@@ -197,54 +197,71 @@ fun AppTheme(
 ) {
     val context = LocalContext.current
     PJMTheme(settings = settings) {
-        val isDark =
-            when (settings.theme) {
-                "dark" -> true
-                "light" -> false
-                else -> isSystemInDarkTheme()
-            }
-        val baseColor = if (isDark) Color.Black else Color.White
-
-        Box(modifier = Modifier.fillMaxSize().background(baseColor)) {
-            val bgRequest =
-                remember(settings.customBackgroundUri, settings.isCustomBackgroundEnabled) {
-                    if (settings.isCustomBackgroundEnabled && !settings.customBackgroundUri.isNullOrEmpty()) {
-                        ImageRequest
-                            .Builder(context)
-                            .data(settings.customBackgroundUri)
-                            .crossfade(true)
-                            .build()
-                    } else {
-                        null
-                    }
-                }
-
-            if (bgRequest != null) {
-                AsyncImage(
-                    model = bgRequest,
-                    contentDescription = null,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop,
-                    onState = { state ->
-                        if (state is AsyncImagePainter.State.Error) {
-                            PjmLogger.e("AppTheme", "Background image load failed: ${state.result.throwable.message}")
-                        }
-                    },
-                )
-
-                // 背景遮罩层：受 backgroundOpacity 控制
-                // opacity 1.0 = 不透明（完全看到原图），opacity 0.0 = 全遮挡（看到 baseColor）
-                val overlayAlpha = (1f - settings.backgroundOpacity.coerceIn(0f, 1f))
-                if (overlayAlpha > 0f) {
-                    Box(
-                        modifier =
-                            Modifier
-                                .fillMaxSize()
-                                .background(baseColor.copy(alpha = overlayAlpha)),
-                    )
-                }
-            }
+        Box(modifier = Modifier.fillMaxSize()) {
+            PjmBackgroundBackdrop(settings)
             content()
+        }
+    }
+}
+
+/**
+ * 应用背景：底色 + 自定义壁纸 + 透明度遮罩。
+ *
+ * 抽成独立组件是为了给"铺在整个界面之上的二级页面层"复用 ——
+ * 设置页二级页面如果只画一个纯色底，用户自定义的壁纸就被盖成纯白/纯黑。
+ */
+@Composable
+fun PjmBackgroundBackdrop(
+    settings: Settings.AppSettings,
+    modifier: Modifier = Modifier,
+) {
+    val context = LocalContext.current
+    val isDark =
+        when (settings.theme) {
+            "dark" -> true
+            "light" -> false
+            else -> isSystemInDarkTheme()
+        }
+    val baseColor = if (isDark) Color.Black else Color.White
+
+    Box(modifier = modifier.fillMaxSize().background(baseColor)) {
+        val bgRequest =
+            remember(settings.customBackgroundUri, settings.isCustomBackgroundEnabled) {
+                if (settings.isCustomBackgroundEnabled && !settings.customBackgroundUri.isNullOrEmpty()) {
+                    ImageRequest
+                        .Builder(context)
+                        .data(settings.customBackgroundUri)
+                        .crossfade(true)
+                        .build()
+                } else {
+                    null
+                }
+            }
+
+        if (bgRequest != null) {
+            AsyncImage(
+                model = bgRequest,
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
+                onState = { state ->
+                    if (state is AsyncImagePainter.State.Error) {
+                        PjmLogger.e("AppTheme", "Background image load failed: ${state.result.throwable.message}")
+                    }
+                },
+            )
+
+            // 背景遮罩层：受 backgroundOpacity 控制
+            // opacity 1.0 = 不透明（完全看到原图），opacity 0.0 = 全遮挡（看到 baseColor）
+            val overlayAlpha = (1f - settings.backgroundOpacity.coerceIn(0f, 1f))
+            if (overlayAlpha > 0f) {
+                Box(
+                    modifier =
+                        Modifier
+                            .fillMaxSize()
+                            .background(baseColor.copy(alpha = overlayAlpha)),
+                )
+            }
         }
     }
 }
