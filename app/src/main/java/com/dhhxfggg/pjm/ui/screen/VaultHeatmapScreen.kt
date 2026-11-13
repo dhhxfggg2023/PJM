@@ -1,6 +1,7 @@
 package com.dhhxfggg.pjm.ui.screen
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -11,10 +12,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -23,9 +26,11 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -95,6 +100,11 @@ fun VaultHeatmapScreen(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 20.dp),
         )
+
+        Spacer(Modifier.height(16.dp))
+        HeatmapLegend()
+        Spacer(Modifier.height(14.dp))
+        MonthlyStats(counts = state.counts, today = state.today)
     }
 }
 
@@ -198,6 +208,96 @@ private fun HeatmapGrid(
                         )
                     }
                 }
+            }
+        }
+    }
+}
+
+/** 色阶图例：少 → 多 */
+@Composable
+private fun HeatmapLegend() {
+    val base = MaterialTheme.colorScheme.primary
+    val empty = MaterialTheme.colorScheme.outline.copy(alpha = 0.16f)
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.padding(horizontal = 20.dp),
+    ) {
+        Text("少", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.width(6.dp))
+        listOf(0f, 0.22f, 0.40f, 0.58f, 0.76f).forEach { alpha ->
+            Box(
+                modifier =
+                    Modifier
+                        .padding(end = 3.dp)
+                        .size(10.dp)
+                        .background(if (alpha == 0f) empty else base.copy(alpha = alpha), RoundedCornerShape(2.dp)),
+            )
+        }
+        Spacer(Modifier.width(3.dp))
+        Text("多", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+/** 近 6 个月的入库量：把网格下方的空位用上，顺便给个趋势 */
+@Composable
+private fun MonthlyStats(
+    counts: Map<Long, Int>,
+    today: Long,
+) {
+    if (counts.isEmpty()) return
+    val months =
+        remember(counts, today) {
+            val result = LinkedHashMap<String, Int>()
+            for (back in 5 downTo 0) {
+                result[formatEpochDay(today - back * 30L).substring(0, 7)] = 0
+            }
+            counts.forEach { (day, count) ->
+                val key = formatEpochDay(day).substring(0, 7)
+                if (result.containsKey(key)) result[key] = (result[key] ?: 0) + count
+            }
+            result
+        }
+    val max = (months.values.maxOrNull() ?: 0).coerceAtLeast(1)
+    Column(modifier = Modifier.padding(horizontal = 20.dp)) {
+        Text(
+            text = "最近 6 个月",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(6.dp))
+        months.forEach { (key, value) ->
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+            ) {
+                Text(
+                    text = key,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.width(52.dp),
+                )
+                Box(
+                    modifier =
+                        Modifier
+                            .weight(1f)
+                            .height(10.dp)
+                            .clip(RoundedCornerShape(5.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                ) {
+                    Box(
+                        modifier =
+                            Modifier
+                                .fillMaxHeight()
+                                .fillMaxWidth((value.toFloat() / max).coerceIn(0f, 1f))
+                                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.75f)),
+                    )
+                }
+                Text(
+                    text = " " + value,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.width(44.dp),
+                )
             }
         }
     }

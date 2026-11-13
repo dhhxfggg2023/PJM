@@ -660,7 +660,6 @@ private fun AudioViewer(
     var playbackSpeed by remember { mutableFloatStateOf(1f) }
     var shuffle by remember { mutableStateOf(false) }
     var repeatOne by remember { mutableStateOf(false) }
-    var showQueue by remember { mutableStateOf(false) }
 
     // 整个音频分类就是播放队列：上一首/下一首/随机都能用，不用用户自己挑
     val queueFiles = remember(queue) { queue.map { VaultManager.getFileFromEntity(context, it) } }
@@ -885,9 +884,6 @@ private fun AudioViewer(
                         }
                     }
                 }
-                TextButton(onClick = { showQueue = true }) {
-                    Text("队列", color = Color.White.copy(alpha = 0.8f), fontSize = 12.sp)
-                }
                 // 定时关闭：一次列出全部时长，点哪个是哪个
                 Box {
                     var sleepMenu by remember { mutableStateOf(false) }
@@ -926,41 +922,7 @@ private fun AudioViewer(
         ViewerTopBar(title = "", onBack = onBack, modifier = Modifier.align(Alignment.TopCenter))
     }
 
-    if (showQueue) {
-        ModalBottomSheet(onDismissRequest = { showQueue = false }) {
-            LazyColumn(modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
-                items(queueFiles.size) { index ->
-                    val entity = queue.getOrNull(index)
-                    val name = entity?.let { FileUtils.normalizedDisplayName(it) }.orEmpty()
-                    val playing = index == currentIndex
-                    Row(
-                        modifier =
-                            Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    controller?.seekTo(index, 0L)
-                                    controller?.play()
-                                    showQueue = false
-                                }.padding(horizontal = 20.dp, vertical = 14.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = if (playing) "▶" else (index + 1).toString(),
-                            color = if (playing) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontSize = 12.sp,
-                            modifier = Modifier.width(28.dp),
-                        )
-                        Text(
-                            text = name,
-                            color = if (playing) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
-            }
-        }
-    }
+
 }
 
 // ---------------- 文本 ----------------
@@ -1107,7 +1069,9 @@ private fun TextViewer(
                 restored = true
                 pagerState.scrollToPage(saved)
             }
-            if (result.size - publishedPages >= 4) {
+            // 每排完一页就交给界面：原来攒够 4 页才发布，第一屏要等四页的量，
+            // 长文/大字号时体感就是"点了半天才出字"
+            if (result.size != publishedPages) {
                 publishedPages = result.size
                 pages = result.toList()
                 chapters = chapterEntries.toList()
