@@ -269,7 +269,8 @@ fun DiscoveryScreen(
                     Modifier
                         .align(Alignment.TopEnd)
                         .statusBarsPadding()
-                        .padding(top = 8.dp, end = 8.dp),
+                        // 往下挪：顶部有进度条/模式切换时会盖住这颗按钮，点不到
+                        .padding(top = 56.dp, end = 12.dp),
             ) {
                 IconButton(
                     onClick = { itemMenuOpen = true },
