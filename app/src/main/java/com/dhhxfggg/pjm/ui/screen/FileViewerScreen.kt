@@ -46,6 +46,7 @@ import com.composables.icons.lucide.LayoutGrid
 import com.composables.icons.lucide.LayoutList
 import com.composables.icons.lucide.ListTodo
 import com.composables.icons.lucide.Lucide
+import com.composables.icons.lucide.Pencil
 import com.composables.icons.lucide.Square
 import com.composables.icons.lucide.X
 import com.dhhxfggg.pjm.MainApplication
@@ -255,6 +256,16 @@ fun FileViewerScreen(
                         )
                         Spacer(Modifier.width(6.dp))
 
+                        // 重命名只对「单选 + 非图片」出现：图片显示名固定是入库时间，改了也没意义
+                        if (selectedFiles.size == 1 && !selectedFiles[0].isImage) {
+                            PjmIconButton(
+                                icon = Lucide.Pencil,
+                                contentDescription = "重命名",
+                                onClick = { renameTarget = selectedFiles[0] },
+                            )
+                            Spacer(Modifier.width(6.dp))
+                        }
+
                         PjmIconButton(
                             icon = iconPack.actionShare,
                             contentDescription = stringResource(R.string.action_share),
@@ -439,7 +450,15 @@ fun FileViewerScreen(
                                             },
                                             isSelected = false,
                                             modifier = Modifier.aspectRatio(1f),
-                                            onLongClick = { if (!uiState.isBatchMode && !item.entity.isImage) renameTarget = item.entity },
+                                            // 长按 = 选中（进入多选），不再是直接弹重命名；重命名改成多选工具条上的按钮
+                                            onLongClick = {
+                                                if (!uiState.isBatchMode) {
+                                                    fileViewModel.setBatchMode(true)
+                                                    if (selectedFiles.none { it.relativePath == item.entity.relativePath }) {
+                                                        selectedFiles.add(item.entity)
+                                                    }
+                                                }
+                                            },
                                         )
                                     }
                                 }
@@ -527,7 +546,15 @@ fun FileViewerScreen(
                                     FileCard(
                                         fileEntity = item.entity,
                                         isSelected = isSelected,
-                                        onLongClick = { if (!uiState.isBatchMode && !item.entity.isImage) renameTarget = item.entity },
+                                        // 长按 = 选中（进入多选），不再是直接弹重命名；重命名改成多选工具条上的按钮
+                                        onLongClick = {
+                                            if (!uiState.isBatchMode) {
+                                                fileViewModel.setBatchMode(true)
+                                                if (selectedFiles.none { it.relativePath == item.entity.relativePath }) {
+                                                    selectedFiles.add(item.entity)
+                                                }
+                                            }
+                                        },
                                         onClick = {
                                             if (uiState.isBatchMode) {
                                                 toggleSelection(item.entity)
@@ -628,6 +655,9 @@ fun FileViewerScreen(
             onConfirm = { newName ->
                 fileViewModel.renameDisplayName(entity, newName)
                 renameTarget = null
+                // 改完名就退出多选，省得再按一次返回
+                selectedFiles.clear()
+                fileViewModel.setBatchMode(false)
             },
         )
     }
@@ -811,7 +841,8 @@ private fun BoxScope.QuickScrollScrubber(
                         Modifier
                             .align(Alignment.TopEnd)
                             .offset(
-                                x = (-128).dp,
+                                // 气泡贴到滑条左边一点（原来 -128dp 离得太远），字号也放大到 14sp
+                                x = (-40).dp,
                                 y =
                                     ((maxHeight - thumbHeight) * fraction)
                                         .coerceIn(0.dp, (maxHeight - 40.dp).coerceAtLeast(0.dp)),
@@ -825,7 +856,7 @@ private fun BoxScope.QuickScrollScrubber(
                 ) {
                     Text(
                         text = label,
-                        style = MaterialTheme.typography.labelSmall,
+                        style = MaterialTheme.typography.bodyMedium,
                         maxLines = 1,
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
                     )

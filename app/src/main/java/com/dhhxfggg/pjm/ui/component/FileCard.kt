@@ -213,13 +213,20 @@ fun FileCard(
                 // 列表里必须能看见文件名：只给日期和大小根本认不出是哪个文件
                 Text(
                     text = FileUtils.normalizedDisplayName(fileEntity),
-                    style = MaterialTheme.typography.bodyMedium,
+                    // 列表模式的文件名要一眼能读：原 bodyMedium(14sp) 偏小，换成 16sp
+                    style = MaterialTheme.typography.bodyLarge,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                     color = if (isSelected) MaterialTheme.colorScheme.primary else Color.Unspecified,
                 )
                 Text(
-                    text = FileUtils.formatFileTime(fileEntity.lastModified) + " · " + FileUtils.formatFileSize(fileEntity.size),
+                    // 图片的标题本身就是入库时间，小字只放大小，别再把时间重复一遍
+                    text =
+                        if (fileEntity.isImage) {
+                            FileUtils.formatFileSize(fileEntity.size)
+                        } else {
+                            FileUtils.formatFileTime(fileEntity.lastModified) + " · " + FileUtils.formatFileSize(fileEntity.size)
+                        },
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,

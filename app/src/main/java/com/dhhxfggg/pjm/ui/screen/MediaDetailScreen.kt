@@ -380,11 +380,14 @@ private fun VideoPage(
         reverseJob = null
         player.setPlaybackSpeed(1f)
         turboSpeed = 0f
-        if (wasPlayingBeforeTurbo) player.play() else player.pause()
+        // 用 playWhenReady（用户是否想让它在播）而不是 isPlaying（此刻是否真的在播）：
+        // seek / 换速的瞬间 playbackState 可能短暂离开 READY，isPlaying 会瞬间变 false，
+        // 于是松手时把正在播放的视频停掉 —— 这就是「快进之后自动暂停」的根因。
+        player.playWhenReady = wasPlayingBeforeTurbo
     }
 
     fun startTurbo(forward: Boolean) {
-        wasPlayingBeforeTurbo = player.isPlaying
+        wasPlayingBeforeTurbo = player.playWhenReady
         turboForward = forward
         turboSpeed = 2f
         if (forward) {
@@ -812,17 +815,21 @@ private fun AudioViewer(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceEvenly,
             ) {
-                IconButton(
-                    onClick = {
-                        val c = controller ?: return@IconButton
-                        c.shuffleModeEnabled = !c.shuffleModeEnabled
-                    },
-                ) {
-                    Icon(
-                        imageVector = Lucide.Shuffle,
-                        contentDescription = "随机播放",
-                        tint = if (shuffle) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.6f),
-                    )
+                // 图标按钮光看图认不出来，补一行小字
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    IconButton(
+                        onClick = {
+                            val c = controller ?: return@IconButton
+                            c.shuffleModeEnabled = !c.shuffleModeEnabled
+                        },
+                    ) {
+                        Icon(
+                            imageVector = Lucide.Shuffle,
+                            contentDescription = "随机播放",
+                            tint = if (shuffle) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.6f),
+                        )
+                    }
+                    Text("随机", color = Color.White.copy(alpha = 0.7f), fontSize = 10.sp)
                 }
                 IconButton(onClick = { controller?.seekToPreviousMediaItem() }) {
                     Icon(Lucide.SkipBack, contentDescription = "上一首", tint = Color.White, modifier = Modifier.size(32.dp))
@@ -840,17 +847,20 @@ private fun AudioViewer(
                 IconButton(onClick = { controller?.seekToNextMediaItem() }) {
                     Icon(Lucide.SkipForward, contentDescription = "下一首", tint = Color.White, modifier = Modifier.size(32.dp))
                 }
-                IconButton(
-                    onClick = {
-                        val c = controller ?: return@IconButton
-                        c.repeatMode = if (c.repeatMode == Player.REPEAT_MODE_ONE) Player.REPEAT_MODE_ALL else Player.REPEAT_MODE_ONE
-                    },
-                ) {
-                    Icon(
-                        imageVector = if (repeatOne) Lucide.Repeat1 else Lucide.Repeat,
-                        contentDescription = if (repeatOne) "单曲循环" else "列表循环",
-                        tint = if (repeatOne) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.6f),
-                    )
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    IconButton(
+                        onClick = {
+                            val c = controller ?: return@IconButton
+                            c.repeatMode = if (c.repeatMode == Player.REPEAT_MODE_ONE) Player.REPEAT_MODE_ALL else Player.REPEAT_MODE_ONE
+                        },
+                    ) {
+                        Icon(
+                            imageVector = if (repeatOne) Lucide.Repeat1 else Lucide.Repeat,
+                            contentDescription = if (repeatOne) "单曲循环" else "列表循环",
+                            tint = if (repeatOne) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.6f),
+                        )
+                    }
+                    Text(if (repeatOne) "单曲" else "循环", color = Color.White.copy(alpha = 0.7f), fontSize = 10.sp)
                 }
             }
             Spacer(Modifier.height(4.dp))

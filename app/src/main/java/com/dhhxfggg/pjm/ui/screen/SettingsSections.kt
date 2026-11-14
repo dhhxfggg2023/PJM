@@ -26,6 +26,7 @@ import com.dhhxfggg.pjm.R
 import com.dhhxfggg.pjm.data.model.Settings
 import com.dhhxfggg.pjm.domain.shizuku.EmbeddedPrivilegedIo
 import com.dhhxfggg.pjm.domain.util.AudioSettings
+import com.dhhxfggg.pjm.domain.util.FileUtils
 import com.dhhxfggg.pjm.ui.component.PjmAeroDialog
 import com.dhhxfggg.pjm.ui.theme.PresetAmber
 import com.dhhxfggg.pjm.ui.theme.PresetBiliPink
@@ -37,6 +38,10 @@ import com.dhhxfggg.pjm.ui.viewmodel.SettingsViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import java.io.File
+
+/** 目录递归求和：诊断页显示缓存 / 日志占用 */
+private fun dirSizeBytes(dir: File?): Long = dir?.listFiles()?.sumOf { if (it.isFile) it.length() else dirSizeBytes(it) } ?: 0L
 
 /** 均衡器面板：5 根纵向推子（拖动时不会被页面滚动抢走手势） */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -45,15 +50,23 @@ private fun EqualizerPanel(
     gains: MutableList<Float>,
     onDismiss: () -> Unit,
     onCommit: (Int, Float) -> Unit,
+    onReset: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         Column(modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
-            Text(
-                text = "均衡器",
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp),
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "均衡器",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                // 一键把 5 段推子全部归零（±0 dB），不用一段一段拖回去
+                TextButton(onClick = onReset) { Text("恢复默认") }
+            }
             // 推子长度跟着可用空间走：竖向推子太短根本没法微调，所以至少 220dp
             BoxWithConstraints(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
                 // 面板整体占屏约 0.6，推子只占其中一段：太高反而不方便拇指够到顶
@@ -246,6 +259,12 @@ internal fun AudioPlaybackSettings() {
                     gains = gains,
                     onDismiss = { showEqPanel = false },
                     onCommit = { index, value -> AudioSettings.setBandGainDb(context, index, value) },
+                    onReset = {
+                        for (index in gains.indices) {
+                            gains[index] = 0f
+                            AudioSettings.setBandGainDb(context, index, 0f)
+                        }
+                    },
                 )
             }
         }
@@ -289,17 +308,17 @@ internal fun DiscoverySettings(
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
             )
             Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+                // 原来四个选项被 weight(1f) 拉满宽度，又宽又扁。改成按内容宽度、居中排布。
                 options.chunked(2).forEach { row ->
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
                     ) {
                         row.forEach { (value, label) ->
                             FilterChip(
                                 selected = settings.discoveryDefaultMode == value,
                                 onClick = { settingsViewModel.updateSetting(Settings.KEY_DISCOVERY_DEFAULT_MODE, value) },
                                 label = { Text(label) },
-                                modifier = Modifier.weight(1f),
                             )
                         }
                     }
@@ -731,17 +750,21 @@ internal fun MaintenanceSettings(
             )
         }
         SettingsCategory(title = stringResource(R.string.settings_cat_diagnostics)) {
+            val ctx = LocalContext.current
+            // 显示各自现在占多大：缓存 = 缩略图 + 临时文件 + 阅读器分页缓存；日志 = files/logs
+            val cacheBytes by produceState(0L) { value = withContext(Dispatchers.IO) { dirSizeBytes(ctx.cacheDir) } }
+            val logBytes by produceState(0L) { value = withContext(Dispatchers.IO) { dirSizeBytes(File(ctx.filesDir, "logs")) } }
             // 核心修复：清除缓存与清除日志分离
             SettingsButton(
                 icon = Lucide.Brush,
                 title = stringResource(R.string.settings_title_clear_cache_all),
-                description = stringResource(R.string.settings_desc_clear_cache_only_tmp),
+                description = stringResource(R.string.settings_desc_clear_cache_only_tmp) + " · 当前 " + FileUtils.formatFileSize(cacheBytes),
                 onClick = onClearCache,
             )
             SettingsButton(
                 icon = Lucide.FileX,
                 title = stringResource(R.string.settings_title_clear_logs),
-                description = stringResource(R.string.settings_desc_clear_logs),
+                description = stringResource(R.string.settings_desc_clear_logs) + " · 当前 " + FileUtils.formatFileSize(logBytes),
                 onClick = onClearLogs,
             )
             SettingsButton(icon = Lucide.Bug, title = stringResource(R.string.settings_title_export_logs), onClick = onExportLogs)
