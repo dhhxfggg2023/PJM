@@ -3,6 +3,9 @@ package com.dhhxfggg.pjm.ui.screen
 import android.content.ComponentName
 import android.content.Context
 import android.graphics.BitmapFactory
+import android.graphics.Typeface
+import android.text.StaticLayout
+import android.text.TextPaint
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -35,13 +38,10 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -968,7 +968,6 @@ private fun TextViewer(
     val context = LocalContext.current
     val density = LocalDensity.current
     val configuration = LocalConfiguration.current
-    val measurer = rememberTextMeasurer()
     val prefs = remember { context.getSharedPreferences("pjm_reader", Context.MODE_PRIVATE) }
     val positionKey = remember(file.absolutePath) { "page_" + file.absolutePath.hashCode() }
 
@@ -1014,8 +1013,17 @@ private fun TextViewer(
         val pageWidth = with(density) { (configuration.screenWidthDp.dp - (marginDp * 2).dp).toPx() }
         // 底部工具条（进度 + 按钮）比原来高，正文可用的高度相应减少
         val pageHeight = with(density) { (configuration.screenHeightDp.dp - 176.dp).toPx() }
-        val constraints = Constraints(maxWidth = pageWidth.toInt().coerceAtLeast(1))
         val gap = with(density) { 6.dp.toPx() }
+        // 量行数改用 android.text.StaticLayout：和 Compose 用的是同一套 Minikin 断行，
+        // 但可以在后台线程跑、不受「每帧只排几毫秒」的限制。行高用 style 里定死的 lineHeight。
+        val lineHeightPx = with(density) { (fontSize * lineSpacing).sp.toPx() }
+        val measurePaint =
+            TextPaint().apply {
+                typeface = Typeface.SERIF
+                textSize = with(density) { fontSize.sp.toPx() }
+                isAntiAlias = true
+            }
+        val measureWidth = pageWidth.toInt().coerceAtLeast(1)
 
         // 分页缓存：同一本书 + 同一套排版参数（字号/行距/边距/屏幕尺寸）直接复用上次算好的页边界，
         // 再打开就是瞬间出页，不用重新量上万段。缓存在 cacheDir，"清除缓存"会一并清掉。
@@ -1045,62 +1053,69 @@ private fun TextViewer(
         val pageStarts = mutableListOf(0)
         var current = mutableListOf<String>()
         var used = 0f
-        var publishedPages = 0
         val saved = prefs.getInt(positionKey, 0)
         var restored = false
 
-        // 关键：排版是逐段量高，一本 3MB 的书要量上万段。旧实现一次性量完，
-        // 中间只 yield()（yield 不会等下一帧），主线程被连续占用好几秒 = 卡死。
-        // 现在每帧只给排版 6ms，剩下的时间留给绘制/手势，并且边排版边把结果交给界面，
-        // 第一页几十毫秒就能看，后面随翻随补。
-        val frameBudgetNanos = 6_000_000L
-        var sliceStart = System.nanoTime()
-
-        for ((index, paragraph) in paragraphs.withIndex()) {
-            val isChapter = CHAPTER_PATTERN.matches(paragraph)
-            val height =
-                if (paragraph.isEmpty()) {
-                    gap * 1.5f
-                } else {
-                    measurer.measure(AnnotatedString(paragraph), style, constraints = constraints).size.height + gap
-                }
-            if (used + height > pageHeight && current.isNotEmpty()) {
-                result.add(current)
-                current = mutableListOf()
-                used = 0f
-                pageStarts.add(index)
-            }
-            if (isChapter) {
-                chapterEntries.add(paragraph.trim() to result.size)
-                chapterParagraphs.add(index to paragraph.trim())
-            }
-            current.add(paragraph)
-            used += height
-
-            if (!restored && saved in result.indices) {
-                restored = true
-                pagerState.scrollToPage(saved)
-            }
-            // 每排完一页就交给界面：原来攒够 4 页才发布，第一屏要等四页的量，
-            // 长文/大字号时体感就是"点了半天才出字"
-            if (result.size != publishedPages) {
-                publishedPages = result.size
+        // 排版改成「后台整块量、主线程贴结果」：
+        // 旧实现把量高放在主线程、每帧只给 6ms，一本大书要排十几秒，期间一直"排版中"；
+        // 现在量高整块丢到 Default 线程，主线程不再被占，第一块排完（约 1-3 页）立刻出字。
+        suspend fun publishChunk() {
+            withContext(Dispatchers.Main) {
                 pages = result.toList()
                 chapters = chapterEntries.toList()
+                if (!restored && saved in result.indices) {
+                    restored = true
+                    pagerState.scrollToPage(saved)
+                }
             }
-            if (System.nanoTime() - sliceStart > frameBudgetNanos) {
-                // 让出一帧：等下一次 vsync 再继续，保证拖动/翻页不掉帧
-                withFrameNanos { }
-                sliceStart = System.nanoTime()
+        }
+
+        var cursor = 0
+        var chunk = 120 // 第一块小一点：点开就能看到字
+        while (cursor < paragraphs.size) {
+            val end = minOf(cursor + chunk, paragraphs.size)
+            withContext(Dispatchers.Default) {
+                for (index in cursor until end) {
+                    val paragraph = paragraphs[index]
+                    val height =
+                        if (paragraph.isEmpty()) {
+                            gap * 1.5f
+                        } else {
+                            val lines =
+                                StaticLayout
+                                    .Builder
+                                    .obtain(paragraph, 0, paragraph.length, measurePaint, measureWidth)
+                                    .setIncludePad(false)
+                                    .setLineSpacing(0f, 1f)
+                                    .build()
+                                    .lineCount
+                            lines * lineHeightPx + gap
+                        }
+                    if (used + height > pageHeight && current.isNotEmpty()) {
+                        result.add(current)
+                        current = mutableListOf()
+                        used = 0f
+                        pageStarts.add(index)
+                    }
+                    if (CHAPTER_PATTERN.matches(paragraph)) {
+                        chapterEntries.add(paragraph.trim() to result.size)
+                        chapterParagraphs.add(index to paragraph.trim())
+                    }
+                    current.add(paragraph)
+                    used += height
+                }
             }
+            cursor = end
+            chunk = 600
+            publishChunk()
         }
         if (current.isNotEmpty()) result.add(current)
         if (result.isEmpty()) result.add(emptyList())
         pages = result
         chapters = chapterEntries
-        writePageCache(cacheFile, paragraphs.size, pageStarts, chapterParagraphs)
         layoutDone = true
         if (!restored && saved in result.indices) pagerState.scrollToPage(saved)
+        withContext(Dispatchers.IO) { writePageCache(cacheFile, paragraphs.size, pageStarts, chapterParagraphs) }
     }
 
     LaunchedEffect(pagerState, pages) {
@@ -1301,7 +1316,8 @@ private fun readerCacheKey(
     widthDp: Int,
     heightDp: Int,
 ): String {
-    val parts = listOf(file.length(), file.lastModified(), fontSize, lineSpacing, marginDp, widthDp, heightDp)
+    // v3：分页算法从「Compose 逐段量高」换成 StaticLayout 后台量行，旧缓存的页边界不能再用
+    val parts = listOf("v3", file.length(), file.lastModified(), fontSize, lineSpacing, marginDp, widthDp, heightDp)
     return parts.joinToString("-")
 }
 
