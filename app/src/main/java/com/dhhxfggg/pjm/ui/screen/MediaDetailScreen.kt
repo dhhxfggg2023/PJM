@@ -11,6 +11,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -25,6 +26,7 @@ import androidx.compose.foundation.pager.VerticalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -77,6 +79,7 @@ import me.saket.telephoto.zoomable.coil3.ZoomableAsyncImage
 import me.saket.telephoto.zoomable.rememberZoomableImageState
 import me.saket.telephoto.zoomable.rememberZoomableState
 import java.io.File
+import java.util.Locale
 
 /**
  * 统一的文件查看器：图片 / 视频 / 音频 / 文本。
@@ -982,6 +985,8 @@ private fun TextViewer(
     var themeIndex by remember { mutableIntStateOf(prefs.getInt("theme_index", 0)) }
     var showChrome by remember { mutableStateOf(true) }
     var showChapters by remember { mutableStateOf(false) }
+    // 排版/配色等设置全部收进独立浮窗，工具条只留导航与进度
+    var showSettings by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val pagerState = rememberPagerState(0) { (pages?.size ?: 1).coerceAtLeast(1) }
     val theme = READER_THEMES[themeIndex.coerceIn(0, READER_THEMES.size - 1)]
@@ -1179,19 +1184,54 @@ private fun TextViewer(
                             },
                 ) { index ->
                     val page = pageList.getOrNull(index).orEmpty()
-                    Column(modifier = Modifier.fillMaxSize().padding(horizontal = marginDp.dp, vertical = 18.dp)) {
-                        page.forEach { paragraph ->
-                            Text(
-                                text = paragraph,
-                                style = style,
-                                modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
-                            )
+                    // 包一层 SelectionContainer：长按可以选中文字复制（之前完全不能选）
+                    SelectionContainer {
+                        Column(
+                            modifier =
+                                Modifier
+                                    .fillMaxSize()
+                                    .padding(start = marginDp.dp, end = marginDp.dp, top = 18.dp, bottom = 36.dp),
+                        ) {
+                            page.forEach { paragraph ->
+                                Text(
+                                    text = paragraph,
+                                    style = style,
+                                    modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
+                                )
+                            }
                         }
                     }
                 }
                 AnimatedVisibility(visible = showChrome, enter = fadeIn(), exit = fadeOut()) {
                     Column(modifier = Modifier.fillMaxSize()) {
-                        ViewerTopBar(title = title, onBack = onBack)
+                        // 顶栏只放导航：返回 / 标题 / 目录 / 设置（排版类全部进浮窗）
+                        Row(
+                            modifier =
+                                Modifier
+                                    .fillMaxWidth()
+                                    .background(Color.Black.copy(alpha = 0.4f))
+                                    .statusBarsPadding()
+                                    .padding(horizontal = 2.dp, vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            IconButton(onClick = onBack) { Icon(Lucide.ArrowLeft, null, tint = Color.White) }
+                            Text(
+                                text = title,
+                                color = Color.White,
+                                style = MaterialTheme.typography.titleSmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
+                            if (chapters.isNotEmpty()) {
+                                IconButton(onClick = { showChapters = true }) {
+                                    Icon(Lucide.ListTodo, "目录", tint = Color.White)
+                                }
+                            }
+                            IconButton(onClick = { showSettings = true }) {
+                                Icon(Lucide.Settings, "阅读设置", tint = Color.White)
+                            }
+                        }
                         Spacer(Modifier.weight(1f))
                         Column(
                             modifier =
@@ -1217,57 +1257,48 @@ private fun TextViewer(
                                     ),
                                 modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
                             )
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                TextButton(onClick = {
-                                    fontSize = (fontSize - 1f).coerceAtLeast(12f)
-                                    prefs.edit().putFloat("font_size", fontSize).apply()
-                                }) { Text("A-", color = Color.White) }
-                                TextButton(onClick = {
-                                    fontSize = (fontSize + 1f).coerceAtMost(30f)
-                                    prefs.edit().putFloat("font_size", fontSize).apply()
-                                }) { Text("A+", color = Color.White) }
-                                // 行距：1.4 / 1.8 / 2.2 三挡轮换
-                                TextButton(onClick = {
-                                    lineSpacing =
-                                        when {
-                                            lineSpacing < 1.6f -> 1.8f
-                                            lineSpacing < 2.0f -> 2.2f
-                                            else -> 1.4f
-                                        }
-                                    prefs.edit().putFloat("line_spacing", lineSpacing).apply()
-                                }) { Text("行距", color = Color.White) }
-                                // 边距：12 / 18 / 24dp 三挡轮换
-                                TextButton(onClick = {
-                                    marginDp =
-                                        when (marginDp) {
-                                            12 -> 18
-                                            18 -> 24
-                                            else -> 12
-                                        }
-                                    prefs.edit().putInt("margin_dp", marginDp).apply()
-                                }) { Text("边距", color = Color.White) }
-                                TextButton(onClick = {
-                                    themeIndex = (themeIndex + 1) % READER_THEMES.size
-                                    prefs.edit().putInt("theme_index", themeIndex).apply()
-                                }) { Text("配色", color = Color.White) }
-                                if (chapters.isNotEmpty()) {
-                                    TextButton(onClick = { showChapters = true }) { Text("目录", color = Color.White) }
-                                }
-                                Spacer(Modifier.weight(1f))
-                                Text(
-                                    text =
-                                        (pagerState.currentPage + 1).toString() + "/" + pageList.size +
-                                            "  " + ((pagerState.currentPage + 1) * 100 / pageList.size) + "%" +
-                                            (if (layoutDone) "" else " · 排版中"),
-                                    color = Color.White.copy(alpha = 0.8f),
-                                    fontSize = 12.sp,
-                                )
-                            }
+                            // 页码常显在页面右下角，这里只保留进度条
                         }
                     }
                 }
+                // 页码/百分比常显：不用唤出工具条也能看到读到哪
+                Text(
+                    text =
+                        (pagerState.currentPage + 1).toString() + " / " + pageList.size +
+                            "  ·  " + ((pagerState.currentPage + 1) * 100 / pageList.size) + "%" +
+                            (if (layoutDone) "" else " · 排版中"),
+                    color = Color(theme.foreground).copy(alpha = 0.5f),
+                    fontSize = 11.sp,
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(end = 14.dp, bottom = 10.dp),
+                )
             }
         }
+    }
+
+    if (showSettings) {
+        ReaderSettingsSheet(
+            fontSize = fontSize,
+            lineSpacing = lineSpacing,
+            marginDp = marginDp,
+            themeIndex = themeIndex,
+            onFontSize = {
+                fontSize = it
+                prefs.edit().putFloat("font_size", it).apply()
+            },
+            onLineSpacing = {
+                lineSpacing = it
+                prefs.edit().putFloat("line_spacing", it).apply()
+            },
+            onMargin = {
+                marginDp = it
+                prefs.edit().putInt("margin_dp", it).apply()
+            },
+            onTheme = {
+                themeIndex = it
+                prefs.edit().putInt("theme_index", it).apply()
+            },
+            onDismiss = { showSettings = false },
+        )
     }
 
     if (showChapters) {
@@ -1275,12 +1306,16 @@ private fun TextViewer(
             LazyColumn(modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
                 items(chapters.size) { index ->
                     val (chapterTitle, page) = chapters[index]
+                    val current = chapters.indexOfLast { it.second <= pagerState.currentPage } == index
                     Text(
                         text = chapterTitle,
                         style = MaterialTheme.typography.bodyMedium,
+                        color = if (current) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                        fontWeight = if (current) FontWeight.SemiBold else FontWeight.Normal,
                         modifier =
                             Modifier
                                 .fillMaxWidth()
+                                .background(if (current) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent)
                                 .clickable {
                                     showChapters = false
                                     scope.launch { pagerState.scrollToPage(page.coerceIn(0, (pages?.size ?: 1) - 1)) }
@@ -1305,6 +1340,85 @@ private class ReaderPageCache(
     fun pageOf(paragraphIndex: Int): Int {
         val pos = starts.binarySearch(paragraphIndex)
         return if (pos >= 0) pos else (-pos - 2).coerceAtLeast(0)
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ReaderSettingsSheet(
+    fontSize: Float,
+    lineSpacing: Float,
+    marginDp: Int,
+    themeIndex: Int,
+    onFontSize: (Float) -> Unit,
+    onLineSpacing: (Float) -> Unit,
+    onMargin: (Int) -> Unit,
+    onTheme: (Int) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 28.dp),
+        ) {
+            Text("阅读设置", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(10.dp))
+            LabeledSlider("字号", fontSize, 14f..30f, 15) { onFontSize(it.coerceIn(14f, 30f)) }
+            LabeledSlider("行距", lineSpacing, 1.2f..2.6f, 13) { onLineSpacing(it.coerceIn(1.2f, 2.6f)) }
+            LabeledSlider("左右边距", marginDp.toFloat(), 8f..40f, 31) { onMargin(it.toInt().coerceIn(8, 40)) }
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "配色",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                READER_THEMES.forEachIndexed { index, item ->
+                    Box(
+                        modifier =
+                            Modifier
+                                .size(48.dp)
+                                .clip(CircleShape)
+                                .background(Color(item.background))
+                                .border(
+                                    width = if (index == themeIndex) 2.dp else 1.dp,
+                                    color =
+                                        if (index == themeIndex) {
+                                            MaterialTheme.colorScheme.primary
+                                        } else {
+                                            Color(item.foreground).copy(alpha = 0.5f)
+                                        },
+                                    shape = CircleShape,
+                                ).clickable { onTheme(index) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun LabeledSlider(
+    label: String,
+    value: Float,
+    range: ClosedFloatingPointRange<Float>,
+    steps: Int,
+    onChange: (Float) -> Unit,
+) {
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, style = MaterialTheme.typography.bodySmall, modifier = Modifier.width(64.dp))
+        Slider(
+            value = value,
+            onValueChange = onChange,
+            valueRange = range,
+            steps = steps,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            text = if (label == "行距") String.format(Locale.US, "%.1f", value) else value.toInt().toString(),
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.width(42.dp),
+        )
     }
 }
 
