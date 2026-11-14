@@ -137,8 +137,11 @@ PJM 是一个 Android 本地文件保险库应用。它把图片、视频、音�
 2. **手动装 NDK 与 CMake**（AGP 不会自动下载，缺了会在配置阶段失败）：
 
    ```bash
-   sdkmanager "ndk;28.2.13676358" "cmake;3.22.1"
+   sdkmanager --licenses
+   sdkmanager "platforms;android-37.0" "build-tools;36.1.0" "ndk;28.2.13676358" "cmake;3.22.1"
    ```
+
+   注意平台包名带次版本号（`android-37.0`，不是 `android-37`），装错名会直接报错退出。CI 用的是同一组包名，见 `.github/workflows/ci.yml`。
 
 3. **直接构建**，不需要任何密钥：debug 签名由 Android Studio 自动生成。release 默认沿用 debug 签名，`assembleRelease` 开箱即可出包。
 
