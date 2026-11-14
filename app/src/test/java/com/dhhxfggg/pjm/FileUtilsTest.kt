@@ -139,7 +139,7 @@ class FileUtilsTest {
     }
 
     @Test
-    fun normalizedDisplayName_regularFileGetsPjmPrefix() {
+    fun normalizedDisplayName_imageUsesImportTimeOnly() {
         val e =
             FileEntity(
                 relativePath = "images/photo.jpg",
@@ -152,8 +152,31 @@ class FileUtilsTest {
                 contentHash = null,
             )
         val name = FileUtils.normalizedDisplayName(e)
-        // 时间部分格式化为 yyyyMMdd_HHmmss，前缀 PJM_
-        assertTrue("should start with PJM_: $name", name.startsWith("PJM_"))
-        assertTrue("should end with .jpg: $name", name.endsWith(".jpg"))
+        // 只有 yyyyMMdd_HHmmss.扩展名，不带 PJM_ 前缀（与老库里的图片名一致）
+        assertTrue("should be time-only name, got: $name", Regex("^\\d{8}_\\d{6}\\.jpg$").matches(name))
+        assertFalse("should not keep a PJM_ prefix: $name", name.startsWith("PJM_"))
+    }
+
+    @Test
+    fun normalizedDisplayName_prefersImportedAt() {
+        fun entityAt(
+            importedAt: Long,
+            lastModified: Long,
+        ) = FileEntity(
+            relativePath = "images/time.jpg",
+            name = "time.jpg",
+            size = 1,
+            category = "images",
+            lastModified = lastModified,
+            importedAt = importedAt,
+            isImage = true,
+            extension = "jpg",
+            contentHash = null,
+        )
+        // 入库时间优先：文件自身时间变了，显示名不该跟着变
+        assertEquals(
+            FileUtils.normalizedDisplayName(entityAt(importedAt = 1_784_981_057_941L, lastModified = 1_600_000_000_000L)),
+            FileUtils.normalizedDisplayName(entityAt(importedAt = 1_784_981_057_941L, lastModified = 1_700_000_000_000L)),
+        )
     }
 }

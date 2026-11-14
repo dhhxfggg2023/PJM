@@ -7,7 +7,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * 命名规则回归：图片统一为 PJM_入库时间，其它类型保留原始文件名。
+ * 命名规则回归：图片统一为 入库时间（`yyyyMMdd_HHmmss`，不带 PJM_ 前缀），其它类型保留原始文件名。
  *
  * 这条规则是用户明确要求的（图片不暴露原名、其它类型方便辨认），
  * 改动 normalize 时很容易顺手把所有类型都改掉，用测试钉住。
@@ -31,8 +31,8 @@ class FileDisplayNameTest {
     @Test
     fun imageNameIsNormalizedToImportTime() {
         val display = FileUtils.normalizedDisplayName(entity("IMG_20260101_123456.jpg", "jpg", isImage = true))
-        assertTrue("图片应统一为 PJM_ 前缀: $display", display.startsWith("PJM_"))
-        assertTrue("扩展名保留: $display", display.endsWith(".jpg"))
+        // 只保留入库时间：yyyyMMdd_HHmmss.扩展名（老库里的图片名就是这样，用户要求不带 PJM_ 前缀）
+        assertTrue("图片显示名应为 入库时间.扩展名: $display", Regex("^\\d{8}_\\d{6}\\.jpg$").matches(display))
     }
 
     @Test

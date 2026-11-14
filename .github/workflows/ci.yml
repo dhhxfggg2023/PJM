@@ -1,9 +1,9 @@
 # PJM CI — 构建 / 单测 / 静态检查
 #
 # 触发：push 与 PR 到 main。
-# 环境：GitHub ubuntu-latest 已预装所需 Android SDK 组件
-#   - platforms;android-37.0 / build-tools;37.0.0 / NDK 28.2.13676358 / cmdline-tools
-#   （无需再执行 sdkmanager --install，runner 已全部具备）
+# 环境：GitHub ubuntu-latest + 显式安装缺失的 SDK 组件
+#   - platforms;android-37.0 / build-tools;36.1.0 / ndk;28.2.13676358 / cmake;3.22.1
+#   （平台包名带次版本号；写成 platforms;android-37 或 build-tools;37.0.0 仓库里不存在，会直接失败）
 # 依赖从 google() / mavenCentral() 解析。
 
 name: CI
@@ -52,8 +52,24 @@ jobs:
 
       - name: Install Android SDK components
         run: |
-          yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager "platforms;android-37" "build-tools;37.0.0" "ndk;28.2.13676358" "cmake;3.22.1"
+          set -euo pipefail
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then SDKMANAGER="$(command -v sdkmanager || true)"; fi
+          if [ -z "$SDKMANAGER" ] || [ ! -x "$SDKMANAGER" ]; then
+            echo "::error::sdkmanager not found under $ANDROID_HOME"
+            ls -la "$ANDROID_HOME" || true
+            exit 1
+          fi
+          echo "using $SDKMANAGER"
+          yes | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses > /dev/null 2>&1 || true
+          # 平台包名带次版本号（37.0），且 build-tools 用 AGP 9.3 默认的 36.1.0；
+          # 老的写法 platforms;android-37 / build-tools;37.0.0 在仓库里不存在，会让本步骤直接失败。
+          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" \
+            "platforms;android-37.0" \
+            "build-tools;36.1.0" \
+            "cmake;3.22.1" \
+            "ndk;28.2.13676358"
+          ls "$ANDROID_HOME/platforms" "$ANDROID_HOME/build-tools" "$ANDROID_HOME/ndk" "$ANDROID_HOME/cmake"
 
       - name: Compile instrumented tests
         run: ./gradlew -Dgradle.user.home=$HOME/.gradle :app:assembleDebugAndroidTest --stacktrace
