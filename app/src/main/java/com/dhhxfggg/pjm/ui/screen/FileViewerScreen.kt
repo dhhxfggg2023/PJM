@@ -439,7 +439,7 @@ fun FileViewerScreen(
                                             },
                                             isSelected = false,
                                             modifier = Modifier.aspectRatio(1f),
-                                            onLongClick = { if (!uiState.isBatchMode) renameTarget = item.entity },
+                                            onLongClick = { if (!uiState.isBatchMode && !item.entity.isImage) renameTarget = item.entity },
                                         )
                                     }
                                 }
@@ -527,7 +527,7 @@ fun FileViewerScreen(
                                     FileCard(
                                         fileEntity = item.entity,
                                         isSelected = isSelected,
-                                        onLongClick = { if (!uiState.isBatchMode) renameTarget = item.entity },
+                                        onLongClick = { if (!uiState.isBatchMode && !item.entity.isImage) renameTarget = item.entity },
                                         onClick = {
                                             if (uiState.isBatchMode) {
                                                 toggleSelection(item.entity)
