@@ -1,5 +1,6 @@
 package com.dhhxfggg.pjm.ui.screen
 
+import com.dhhxfggg.pjm.ui.component.PjmSlider
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -20,6 +21,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.composables.icons.lucide.*
 import com.dhhxfggg.pjm.R
@@ -87,7 +89,7 @@ private fun EqualizerPanel(
                                 modifier = Modifier.height(travel).width(56.dp),
                                 contentAlignment = Alignment.Center,
                             ) {
-                                Slider(
+                                PjmSlider(
                                     value = gains[index],
                                     valueRange = -12f..12f,
                                     onValueChange = { gains[index] = it },
@@ -122,6 +124,7 @@ internal fun MainCategoryList(
     settingsViewModel: SettingsViewModel,
     managedAppCount: Int,
     onNavigate: (SettingsPage) -> Unit,
+    bottomPadding: Dp = 0.dp,
 ) {
     Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         // 「通用」：日常最常改的两项（外观 + 接管），按大多数软件的层级习惯放在最上面
@@ -208,6 +211,9 @@ internal fun MainCategoryList(
                 accent = PresetAmber,
             )
         }
+        // 列表铺到屏幕底部（底栏是透明的），末尾补出底栏高度，
+        // 保证「系统诊断与维护」这类最后一项仍能完整滚出来、点得到
+        Spacer(Modifier.height(bottomPadding))
     }
 }
 
@@ -237,7 +243,7 @@ internal fun AudioPlaybackSettings() {
                 accent = PresetLavender,
             )
             // 5 段均衡器改成独立面板里的纵向推子：列表里一长排横向滑块，滚动时手指
-            // 很容易扫到就把频段改了（用户反馈"容易误触"）。面板里没有滚动，推子互不干扰。
+            // 滚动时很容易被误触到就把频段改了。面板里没有滚动，推子互不干扰。
             var showEqPanel by remember { mutableStateOf(false) }
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp),
@@ -275,7 +281,7 @@ internal fun AudioPlaybackSettings() {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Slider(
+                PjmSlider(
                     value = volume,
                     valueRange = 0f..1f,
                     onValueChange = { volume = it },

@@ -1,5 +1,6 @@
 package com.dhhxfggg.pjm.ui.screen
 
+import com.dhhxfggg.pjm.ui.component.PjmSlider
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
@@ -172,8 +173,8 @@ internal fun SettingsButton(
                     it,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+                    // 不截断：说明文字一行放不下就换行，被省略号吃掉一半等于没写
+                    // （原先 maxLines = 1 + Ellipsis，长一点的说明只看到前半句）
                 )
             }
         }
@@ -220,9 +221,13 @@ internal fun SettingsStepper(
                 sliderValue = newValue
                 onValueChange(newValue)
             }) { Icon(Lucide.Minus, null) }
-            Slider(value = sliderValue, onValueChange = {
-                sliderValue = it
-            }, onValueChangeFinished = { onValueChange(sliderValue) }, valueRange = valueRange, modifier = Modifier.weight(1f))
+            PjmSlider(
+                value = sliderValue,
+                onValueChange = { sliderValue = it },
+                onValueChangeFinished = { onValueChange(sliderValue) },
+                valueRange = valueRange,
+                modifier = Modifier.weight(1f),
+            )
             IconButton(onClick = {
                 val newValue = (sliderValue + step).coerceIn(valueRange)
                 sliderValue = newValue

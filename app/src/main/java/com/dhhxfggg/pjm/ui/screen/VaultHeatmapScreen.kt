@@ -37,6 +37,8 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -45,7 +47,7 @@ import com.dhhxfggg.pjm.ui.viewmodel.VaultHeatmapViewModel
 import com.dhhxfggg.pjm.ui.viewmodel.formatEpochDay
 
 /**
- * 入库热力图（GitHub 贡献图样式）。
+ * 入库热力图（按天网格着色）。
  *
  * 入口：首页「保险库占用」卡片长按；单击仍是刷新封面的小彩蛋。
  * 整块格子用一张 Canvas 画完 —— 53×7=371 个格子如果各建一个 Composable，
@@ -60,7 +62,16 @@ fun VaultHeatmapScreen(
     val state by viewModel.state.collectAsState()
     var selectedDay by remember { mutableStateOf<Long?>(null) }
 
-    Column(modifier = Modifier.fillMaxSize().padding(bottom = bottomPadding)) {
+    // 热力图必须压在纯白底上：格子是用主色的透明度叠出来的，
+    // 直接铺在壁纸上就会和背景混色，深浅根本分不出来。
+    val darkTheme = MaterialTheme.colorScheme.surface.luminance() < 0.5f
+    Column(
+        modifier =
+            Modifier
+                .fillMaxSize()
+                .background(if (darkTheme) MaterialTheme.colorScheme.surface else Color.White)
+                .padding(bottom = bottomPadding),
+    ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
@@ -127,10 +138,11 @@ private fun HeatmapGrid(
 ) {
     val measurer = rememberTextMeasurer()
     val scroll = rememberScrollState()
-    val cell = 12.dp
-    val gap = 3.dp
+    // 格子放大到 18dp：原来 12dp 太碎，一屏看下来像一排小点
+    val cell = 18.dp
+    val gap = 4.dp
     val step = cell + gap
-    val labelHeight = 16.dp
+    val labelHeight = 22.dp
     val cols = 53
     val rows = 7
     val gridWidth = step * cols - gap
@@ -141,10 +153,10 @@ private fun HeatmapGrid(
     val onSurface = MaterialTheme.colorScheme.onSurfaceVariant
 
     Row(modifier = Modifier.fillMaxWidth().padding(start = 8.dp), verticalAlignment = Alignment.Top) {
-        Box(modifier = Modifier.width(18.dp).height(gridHeight)) {
+        Box(modifier = Modifier.width(26.dp).height(gridHeight)) {
             Canvas(modifier = Modifier.fillMaxSize()) {
                 listOf(0 to "一", 2 to "三", 4 to "五").forEach { (row, text) ->
-                    val layout = measurer.measure(text, TextStyle(fontSize = 8.sp, color = onSurface))
+                    val layout = measurer.measure(text, TextStyle(fontSize = 10.sp, color = onSurface))
                     drawText(
                         layout,
                         topLeft =
@@ -176,20 +188,28 @@ private fun HeatmapGrid(
             ) {
                 val cellPx = cell.toPx()
                 val stepPx = step.toPx()
+                // 满格 = 这片网格里单日入库最多的那天，其余按比例给深浅。
+                // 以前按固定阈值分级（1-2、3-5…），跨过阈值就是同一个颜色，肉眼分不出 3 和 5。
+                var maxCount = 1
+                for (col in 0 until cols) {
+                    for (row in 0 until rows) {
+                        val c = counts[startDay + col * 7L + row] ?: 0
+                        if (c > maxCount) maxCount = c
+                    }
+                }
                 var lastMonth = -1
                 for (col in 0 until cols) {
                     val weekStart = startDay + col * 7L
                     val month = formatEpochDay(weekStart).substring(5, 7).toInt()
                     if (month != lastMonth) {
                         lastMonth = month
-                        val layout = measurer.measure(month.toString() + "月", TextStyle(fontSize = 9.sp, color = onSurface))
+                        val layout = measurer.measure(month.toString() + "月", TextStyle(fontSize = 11.sp, color = onSurface))
                         drawText(layout, topLeft = Offset(col * stepPx, 0f))
                     }
                     for (row in 0 until rows) {
                         val day = weekStart + row
-                        val level = levelOf(counts[day] ?: 0)
-                        val color =
-                            if (level == 0) emptyColor else baseColor.copy(alpha = 0.22f + 0.18f * (level - 1))
+                        val count = counts[day] ?: 0
+                        val color = if (count <= 0) emptyColor else baseColor.copy(alpha = cellAlpha(count, maxCount))
                         val topLeft = Offset(col * stepPx, labelHeight.toPx() + row * stepPx)
                         if (day == selectedDay) {
                             drawRoundRect(
@@ -203,7 +223,7 @@ private fun HeatmapGrid(
                             color = color,
                             topLeft = topLeft,
                             size = Size(cellPx, cellPx),
-                            cornerRadius = CornerRadius(3f, 3f),
+                            cornerRadius = CornerRadius(5f, 5f),
                         )
                     }
                 }
@@ -223,12 +243,12 @@ private fun HeatmapLegend() {
     ) {
         Text("少", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.width(6.dp))
-        listOf(0f, 0.22f, 0.40f, 0.58f, 0.76f).forEach { alpha ->
+        listOf(0f, 0.20f, 0.39f, 0.57f, 0.76f, 0.94f).forEach { alpha ->
             Box(
                 modifier =
                     Modifier
                         .padding(end = 3.dp)
-                        .size(10.dp)
+                        .size(14.dp)
                         .background(if (alpha == 0f) empty else base.copy(alpha = alpha), RoundedCornerShape(2.dp)),
             )
         }
@@ -302,11 +322,17 @@ private fun MonthlyStats(
     }
 }
 
-private fun levelOf(count: Int): Int =
-    when {
-        count <= 0 -> 0
-        count <= 2 -> 1
-        count <= 5 -> 2
-        count <= 15 -> 3
-        else -> 4
-    }
+/**
+ * 单日浓度：等比例映射到 [0.20, 0.94] 的透明度。
+ *
+ * 当天最多 = 满色，1 个文件也有能看见的淡色，中间按 count / maxCount 连续过渡，
+ * 不再按固定阈值分档（分档后相邻两档看起来一样深）。
+ */
+private fun cellAlpha(
+    count: Int,
+    maxCount: Int,
+): Float {
+    if (count <= 0) return 0f
+    val max = maxCount.coerceAtLeast(1)
+    return (0.20f + 0.74f * (count.toFloat() / max)).coerceIn(0.20f, 0.94f)
+}

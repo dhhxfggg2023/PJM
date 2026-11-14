@@ -89,7 +89,7 @@ class ThumbnailSyncManager
 
             // 缩略图只对视频有意义：图片由 Coil 直接解码并走它自己的磁盘缓存，
             // ThumbnailCache 里的图片缩略图从来没有读取方。
-            // 旧实现每轮都把 4 万张图逐条 stat、还生成没人读的图片缩略图 —— 纯浪费 IO。
+            // 旧实现每轮都把全库逐条 stat、还生成没人读的图片缩略图 —— 纯浪费 IO。
             val videos =
                 try {
                     fileDao.getFilesByCategoryOnce(VaultManager.CAT_VIDEOS) +

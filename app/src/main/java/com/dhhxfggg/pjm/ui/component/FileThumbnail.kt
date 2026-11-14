@@ -61,7 +61,7 @@ internal fun FileThumbnail(
             VaultManager.getFileFromEntity(context, fileEntity)
         }
     // 不再在组合期 stat 文件：保险库目录里几万个文件，FUSE 上一次 stat 可能要几毫秒，
-    // 滚动时每个新项都做一次会直接把主线程拖慢（实测 jank 25%、90 分位 113ms）。
+    // 滚动时每个新项都做一次会直接把主线程拖慢。
     // 文件缺失时 Coil 自己会走 error 分支，露出的就是卡片底色，和原来一致。
 
     // 视频优先加载半持久化缩略图 jpg（首次由 ViewModel 异步生成）。

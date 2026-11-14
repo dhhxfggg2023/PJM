@@ -72,7 +72,7 @@ class TakeoverViewModel
                 .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
 
         /**
-         * 读出可添加的应用：桌面能启动、非系统应用（被更新过的系统应用如 Chrome 允许）。
+         * 读出可添加的应用：桌面能启动、非系统应用（系统应用被更新后也算）。
          *
          * 放在 suspend 里由 UI 用 produceState/LaunchedEffect 触发 ——
          * 组合期直接查 PackageManager 会在进入页面时卡住一帧，应用多了更明显。

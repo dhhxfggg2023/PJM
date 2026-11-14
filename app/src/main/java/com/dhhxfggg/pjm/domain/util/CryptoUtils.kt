@@ -216,7 +216,7 @@ object CryptoUtils {
                         // 写入必须先把调用方的字节拷出来再原地变换（不能污染调用方缓冲区），
                         // 原来每次 write 都 `copyOfRange` 新分配一个 len 大小的数组、写完再清零 ——
                         // 而 NO_COMPRESSION 路径下 ZipArchiveOutputStream 常按 1MB 批量写，
-                        // 导出 10GB 就是约 1 万次 1MB 分配（≈10GB 垃圾），GC 尖峰明显。
+                        // 逐块导出时每次 1MB 的临时分配会累积成大量垃圾，GC 尖峰明显。
                         // 注：变换后就地存放的是密文，因此不再需要逐次清零。
                         var scratch = ByteArray(0)
 
@@ -432,7 +432,7 @@ object CryptoUtils {
 
     /**
      * 内容级 PJM 容器检测：读取头部并按容器自身的版本/模式解密后比对文件魔数。
-     * 不依赖文件名 —— 分享场景（微信/QQ 等）的 content URI 经常拿不到正确文件名，
+     * 不依赖文件名 —— 分享场景的 content URI 经常拿不到正确文件名，
      * 文件名识别会失败，必须用内容确认。
      *
      * 注意这里与 [openPjmContent] 共用 [detectContainerHeader]，因此**新旧算法的容器都能识别**；

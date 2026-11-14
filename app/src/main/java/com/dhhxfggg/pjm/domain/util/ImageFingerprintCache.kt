@@ -12,7 +12,7 @@ import kotlin.math.abs
 /**
  * 图片感知指纹缓存（半永久）。
  *
- * 用途：找出【内容相同但分辨率不同】的图片（原图 vs QQ 缩略图等）。
+ * 用途：找出【内容相同但分辨率不同】的图片（原图 vs 聊天软件缩略图等）。
  * 原理：同一张图缩到小尺寸后 dHash（感知哈希）一致 —— 缩放/重压缩不影响
  *       相邻像素的相对亮度，因此不同分辨率的同图指纹相同。
  *
@@ -48,7 +48,7 @@ object ImageFingerprintCache {
      *
      * 它与 [VERIFY_WIDTH] 必须保持一致 —— 签名就是「把图缩到 64 宽再转灰度」的结果，
      * 因此 [verifySameContent] 可以完全用缓存做判定，不必再解码原图。
-     * 每张约 4KB（64×48 典型值），2 万张约 80MB，远小于重新解码原图的时间成本。
+     * 每张约 4KB（64×48 典型值），大库总量仍远小于重新解码原图的时间成本。
      */
     private const val VERIFY_SIG_WIDTH = 64
 
@@ -132,7 +132,7 @@ object ImageFingerprintCache {
      * 一次解码的全部产物。
      *
      * 存在意义：历史上 dHash 指纹与 32×32 灰度是**两次独立解码**（两次都解到 64 宽），
-     * 2 万张图等于白解码两万次。这里合并为一次解码产出三样东西，首次查重耗时直接减半。
+     * 否则等于把全库白白解码一遍。这里合并为一次解码产出三样东西，首次查重耗时直接减半。
      */
     class PerceptualData(
         val fingerprint: ImageFingerprint,
@@ -286,7 +286,7 @@ object ImageFingerprintCache {
      *
      * 核心优化：用 getPixels() 一次性取出整块像素，而不是逐像素 getPixel()。
      * getPixel 是每次一个虚函数调用 + 一次 JNI 跨界；getPixels 只跨界一次。
-     * 历史实现（32×32 灰度、验证循环）都是逐像素调用，实测慢 10~50 倍。
+     * 历史实现（32×32 灰度、验证循环）都是逐像素调用，性能会差一到两个数量级。
      */
     private fun grayOf(bmp: Bitmap): ByteArray? {
         val w = bmp.width
@@ -349,7 +349,7 @@ object ImageFingerprintCache {
                 val dHash = VaultManager.dHash64(decoded.first)
                 ImageFingerprint(dHash, decoded.second.first, decoded.second.second)
             } finally {
-                // 核心修复：显式回收解码 Bitmap，降低 1.2 万张的 GC 压力（防 OOM）
+                // 显式回收解码后的 Bitmap，降低大批量图片时的 GC 压力（防 OOM）
                 try {
                     decoded.first.recycle()
                 } catch (_: Exception) {
@@ -435,7 +435,7 @@ object ImageFingerprintCache {
     /**
      * 慢路径（历史实现）：读原图解码后比对。
      * 已顺带把逐像素 `getPixel()` 换成一次 `getPixels()` —— 后者只跨界一次 JNI，
-     * 前者每像素一次虚调用，实测差 10~50 倍。
+     * 前者每像素一次虚调用，性能相差一到两个数量级。
      */
     private fun verifyByDecoding(
         context: Context,
@@ -546,8 +546,8 @@ object ImageFingerprintCache {
     /**
      * 获取 32×32 灰度缩略图（读缓存优先；未缓存则计算并落盘）。
      *
-     * 核心修复（半永久化）：灰度图落盘后，首次查重计算一次（5 分钟/1.3 万张），
-     * 之后的查重全部走缓存 —— 秒级跳过灰度阶段，不再重复解码 1.3 万张大图。
+     * 灰度图落盘后，首次查重时计算一次，
+     * 之后的查重全部走缓存 —— 秒级跳过灰度阶段，不再重复解码大图。
      * 删除源文件时 delete() 会同步清理 .g32，保证无孤儿残留。
      *
      * @return 32×32=1024 字节灰度数组（0-255），失败返回 null
@@ -628,7 +628,7 @@ object ImageFingerprintCache {
         }
     }
 
-    /** 按 EXIF orientation 旋转（QQ 原图常带旋转标签，缩略图已应用，必须对齐） */
+    /** 按 EXIF orientation 旋转（原图常带旋转标签，缩略图已应用，必须对齐） */
     private fun applyExifRotation(
         bmp: Bitmap,
         path: String,

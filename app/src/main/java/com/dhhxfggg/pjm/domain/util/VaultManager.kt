@@ -237,7 +237,7 @@ object VaultManager {
                 }
 
                 // 注意：这里**不要**再调用 MediaScannerConnection.scanFile。
-                // 保险库位于应用私有目录，媒体库不可能收录它（实测每次都回调 uri=null），
+                // 保险库位于应用私有目录，媒体库不可能收录它（每次回调均为 uri=null），
                 // 每入库一个文件就白白多一次跨进程扫描 + 一条日志。
 
                 PjmResult.Success(
@@ -621,7 +621,7 @@ object VaultManager {
     ): List<DuplicateGroup> = VaultScanner.findDuplicateFiles(context, fileDao, onProgress)
 
     /**
-     * 图片感知查重：找出【内容相同但分辨率不同】的图片（原图 vs QQ 缩略图等）。
+     * 图片感知查重：找出【内容相同但分辨率不同】的图片（原图 vs 聊天软件缩略图等）。
      * 实现已迁移至 [VaultScanner.findSimilarImages]。
      */
     suspend fun findSimilarImages(

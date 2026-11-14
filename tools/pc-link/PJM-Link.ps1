@@ -9,6 +9,8 @@ $script:Utf8 = [System.Text.UTF8Encoding]::new($false)
 $script:Utf8Bom = [System.Text.UTF8Encoding]::new($true)
 $script:LogLock = [object]::new()
 $script:Categories = @('images','videos','bili_videos','audios','texts','pjm','others')
+# 选定的设备序列号；非空时所有 adb 子命令都带 -s
+$script:Serial = $null
 
 function Write-Log {
     param([string]$Message, [string]$Level = '信息')
@@ -46,7 +48,13 @@ function Invoke-Adb {
     param([string]$AdbPath, [string]$Arguments, [int]$TimeoutMs = 15000, $Runtime = $null)
     $psi = [System.Diagnostics.ProcessStartInfo]::new()
     $psi.FileName = $AdbPath
-    $psi.Arguments = $Arguments
+    # 电脑上同时挂着无线调试/模拟器时，裸 adb 会因为「多于一个设备」直接失败。
+    # 选定过一次设备后，所有子命令都显式 -s，避免歧义。
+    if (-not [string]::IsNullOrEmpty($script:Serial)) {
+        $psi.Arguments = '-s "' + $script:Serial + '" ' + $Arguments
+    } else {
+        $psi.Arguments = $Arguments
+    }
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true
     $psi.RedirectStandardOutput = $true
@@ -59,7 +67,13 @@ function Invoke-Adb {
         $outTask = $p.StandardOutput.ReadToEndAsync()
         $errTask = $p.StandardError.ReadToEndAsync()
         $finished = $p.WaitForExit($TimeoutMs)
-        if (-not $finished) { try { $p.Kill() } catch { } }
+        if (-not $finished) {
+            # 超时必须真的杀掉：wait-for-device 这类调用会一直挂着，
+            # 若只 Kill 不兜底，进程会残留并锁住本目录的 adb\adb.exe（文件夹就删不掉）。
+            try { $p.Kill($true) } catch { try { $p.Kill() } catch { } }
+            try { [void]$p.WaitForExit(2000) } catch { }
+            if (-not $p.HasExited) { try { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } catch { } }
+        }
         try { [void]$outTask.Wait(3000) } catch { }
         try { [void]$errTask.Wait(3000) } catch { }
         $out = ''
@@ -80,6 +94,30 @@ function Remove-Tunnels {
     if ([string]::IsNullOrEmpty($AdbPath)) { return }
     $r = Invoke-Adb -AdbPath $AdbPath -Arguments 'forward --remove tcp:8787' -TimeoutMs 4000 -Runtime $Runtime
     if ($r.ExitCode -eq 0) { Write-Log '已移除 adb forward 127.0.0.1:8787' } else { Write-Log ('移除 adb forward 返回：' + ($r.Out + $r.Err).Trim()) '警告' }
+    $r = Invoke-Adb -AdbPath $AdbPath -Arguments 'reverse --remove tcp:8788' -TimeoutMs 4000 -Runtime $Runtime
+    if ($r.ExitCode -eq 0) { Write-Log '已移除 adb reverse 127.0.0.1:8788' } else { Write-Log ('移除 adb reverse 返回：' + ($r.Out + $r.Err).Trim()) '警告' }
+}
+
+# 退出时清掉「本工具目录里」跑起来的 adb.exe 子进程。
+# 之所以单独做：wait-for-device 超时残留会让 adb\adb.exe 一直被占用，
+# Windows 于是拒绝删除整个 PJM-Link 文件夹（提示"文件正被另一个进程使用"）。
+# 只结束本目录 adb\ 下的进程，绝不碰系统/Studio 用的那份 adb。
+function Stop-BundledAdb {
+    param([string]$Root = $script:Dir)
+    try {
+        $adbDir = [IO.Path]::GetFullPath((Join-Path $Root 'adb')).TrimEnd('\') + '\'
+        $procs = Get-CimInstance Win32_Process -Filter "Name='adb.exe'" -ErrorAction SilentlyContinue
+        foreach ($p in $procs) {
+            $exe = [string]$p.ExecutablePath
+            if ([string]::IsNullOrEmpty($exe)) { continue }
+            if ($exe.StartsWith($adbDir, [StringComparison]::OrdinalIgnoreCase)) {
+                try {
+                    Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop
+                    Write-Log ('已结束残留 adb 进程：PID ' + $p.ProcessId)
+                } catch { }
+            }
+        }
+    } catch { }
 }
 
 function Get-DiskInfo {
@@ -230,7 +268,7 @@ function Get-HttpErrorText {
 }
 
 function Invoke-PullJob {
-    param($Runtime)
+    param($Runtime, [string[]]$Dates = @())
     $task = $Runtime.Task
     $task.active = $true
     $task.done = 0
@@ -259,8 +297,19 @@ function Invoke-PullJob {
         $resp.Close()
         $resp = $null
         $Runtime.CurrentWeb = $null
-        $items = @()
-        if (-not [string]::IsNullOrWhiteSpace($json)) { $items = @($json | ConvertFrom-Json) }
+        $items = ConvertFrom-JsonFast $json
+        # 手机端可以指定「只传这几天」；没指定就是全部
+        if ($Dates.Count -gt 0) {
+            $picked = @()
+            foreach ($it in $items) {
+                $mm = Convert-ToEpochMs $it.m
+                $dstr = (Get-Date).ToString('yyyy-MM-dd')
+                if ($mm -gt 0) { $dstr = ([DateTimeOffset]::FromUnixTimeMilliseconds($mm)).LocalDateTime.ToString('yyyy-MM-dd') }
+                if ($Dates -contains $dstr) { $picked += $it }
+            }
+            $items = $picked
+            Write-Log ('按日期筛选：' + ($Dates -join ', ') + '，共 ' + $items.Count + ' 个文件')
+        }
         $task.total = $items.Count
         if ($items.Count -eq 0) {
             Write-Log '手机没有可传的文件'
@@ -383,6 +432,339 @@ function Invoke-PullJob {
 }
 
 
+
+function Write-HttpText {
+    param($Context, [int]$Code, [string]$Text)
+    try {
+        $bytes = [Text.Encoding]::UTF8.GetBytes($Text)
+        $Context.Response.StatusCode = $Code
+        $Context.Response.ContentType = 'application/json; charset=utf-8'
+        $Context.Response.ContentLength64 = $bytes.Length
+        $Context.Response.OutputStream.Write($bytes, 0, $bytes.Length)
+        $Context.Response.OutputStream.Close()
+    } catch { }
+}
+
+function Read-RequestBody {
+    param($Context)
+    try {
+        $stream = $Context.Request.InputStream
+        if ($null -eq $stream) { return '' }
+        $reader = [IO.StreamReader]::new($stream, [Text.Encoding]::UTF8)
+        try { return $reader.ReadToEnd() } finally { $reader.Close() }
+    } catch { return '' }
+}
+
+# PowerShell 5.1 的 ConvertFrom-Json 在顶层是数组时，会被包成「一个元素是数组」，
+# 直接 @() 包起来会得到 Count=1，随后把整个数组拼成字符串当成一个文件名（就出过这个错）。
+# 这里统一摊平：确实嵌套就展开，普通对象数组原样返回。
+function ConvertFrom-JsonList {
+    param([string]$Json)
+    if ([string]::IsNullOrWhiteSpace($Json)) { return @() }
+    $parsed = $null
+    try { $parsed = $Json | ConvertFrom-Json } catch { return @() }
+    if ($parsed -is [System.Array]) { return $parsed }
+    $list = [System.Collections.Generic.List[object]]::new()
+    foreach ($x in @($parsed)) {
+        if ($null -eq $x) { continue }
+        if ($x -is [System.Array]) { foreach ($y in $x) { [void]$list.Add($y) } } else { [void]$list.Add($x) }
+    }
+    return , $list.ToArray()
+}
+
+# ConvertFrom-Json 在几 MB 的数组上要几十秒（PowerShell 5.1 的实现很慢）。
+# 手机文件清单动辄几 MB，用 .NET 的序列化器解析，快一到两个数量级。
+function ConvertFrom-JsonFast {
+    param([string]$Json)
+    if ([string]::IsNullOrWhiteSpace($Json)) { return @() }
+    try {
+        Add-Type -AssemblyName System.Web.Extensions -ErrorAction SilentlyContinue
+        $ser = [System.Web.Script.Serialization.JavaScriptSerializer]::new()
+        $ser.MaxJsonLength = [int]::MaxValue
+        $obj = $ser.DeserializeObject($Json)
+        if ($null -eq $obj) { return @() }
+        if ($obj -is [System.Array]) { return $obj }
+        return @($obj)
+    } catch {
+        return (ConvertFrom-JsonList $Json)
+    }
+}
+
+function Get-RequestJson {
+    param($Context)
+    return (@{
+        root = $script:Data
+        disk = @{
+            fs = [string](Get-DiskInfo).Fs
+            free = [long](Get-DiskInfo).Free
+            total = [long](Get-DiskInfo).Total
+            writable = [bool](Get-DiskInfo).Writable
+        }
+        folders = @(Get-Folders)
+        push = @{
+            active = [bool]$script:Runtime.Push.active
+            done = [int]$script:Runtime.Push.done
+            total = [int]$script:Runtime.Push.total
+            bytes = [long]$script:Runtime.Push.bytes
+            skipped = [int]$script:Runtime.Push.skipped
+            failed = [int]$script:Runtime.Push.failed
+            current = [string]$script:Runtime.Push.current
+            lastAt = [long]$script:Runtime.Push.lastAt
+        }
+    } | ConvertTo-Json -Depth 6 -Compress)
+}
+
+function Send-FileResponse {
+    param($Context, [string]$Category, [string]$Date, [string]$Name)
+    try {
+        if ($script:Categories -notcontains $Category) { Write-HttpText $Context 400 '{"ok":false,"error":"分类不合法"}'; return }
+        if ($Date -notmatch '^\d{4}-\d{2}-\d{2}$') { Write-HttpText $Context 400 '{"ok":false,"error":"日期不合法"}'; return }
+        if ([string]::IsNullOrWhiteSpace($Name) -or $Name.Contains('..') -or $Name.IndexOfAny([char[]]@('\','/')) -ge 0) {
+            Write-HttpText $Context 400 '{"ok":false,"error":"文件名不合法"}'
+            return
+        }
+        $path = Join-Path (Join-Path (Join-Path $script:Data $Category) $Date) $Name
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { Write-HttpText $Context 404 '{"ok":false,"error":"文件不存在"}'; return }
+        $file = [IO.FileInfo]::new($path)
+        $Context.Response.StatusCode = 200
+        $Context.Response.ContentType = 'application/octet-stream'
+        $Context.Response.ContentLength64 = $file.Length
+        $Context.Response.AddHeader('Content-Disposition', ('attachment; filename*=UTF-8''' + [Uri]::EscapeDataString($Name)))
+        $stream = [IO.File]::Open($path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+        try {
+            $buffer = [byte[]]::new(131072)
+            while ($true) {
+                $read = $stream.Read($buffer, 0, $buffer.Length)
+                if ($read -le 0) { break }
+                $Context.Response.OutputStream.Write($buffer, 0, $read)
+            }
+        } finally { $stream.Dispose() }
+        $Context.Response.OutputStream.Close()
+    } catch { Write-Log ('发送文件失败：' + $_.Exception.Message) '错误' }
+}
+
+function Get-PushLedgerPath {
+    return (Join-Path $script:Data '.pjm-push.tsv')
+}
+
+function Initialize-PushLedger {
+    param($Runtime)
+    $ledger = $Runtime.Ledger
+    if ([bool]$ledger.loaded) { return }
+    $ledger.loaded = $true
+    $path = Get-PushLedgerPath
+    if (-not (Test-Path -LiteralPath $path)) { return }
+    try {
+        foreach ($line in [IO.File]::ReadAllLines($path, $script:Utf8)) {
+            if ([string]::IsNullOrWhiteSpace($line)) { continue }
+            $tab = $line.IndexOf([char]9)
+            if ($tab -le 0) { continue }
+            $key = $line.Substring(0, $tab)
+            if (-not $ledger.map.ContainsKey($key)) { $ledger.map[$key] = $line.Substring($tab + 1) }
+        }
+    } catch {
+        Write-Log ('推送记录读取失败：' + $_.Exception.Message) '警告'
+    }
+}
+
+function Add-PushLedgerEntry {
+    param($Runtime, [string]$Key, [string]$RelativePath)
+    if ([string]::IsNullOrWhiteSpace($Key)) { return }
+    $Runtime.Ledger.map[$Key] = $RelativePath
+    try {
+        [IO.File]::AppendAllText((Get-PushLedgerPath), $Key + [char]9 + $RelativePath + [Environment]::NewLine, $script:Utf8)
+    } catch {
+        Write-Log ('推送记录写入失败：' + $_.Exception.Message) '警告'
+    }
+}
+
+# 推送是否还在进行：手机端 10 秒没有任何字节进来就认为已经停了，
+# 否则手机断线会把「接收中」永远挂在那里，电脑端再也点不了接收。
+function Test-PushLive {
+    param($Runtime)
+    $p = $Runtime.Push
+    if ($null -eq $p -or -not [bool]$p.active) { return $false }
+    $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    return (($now - [long]$p.lastAt) -lt 10000)
+}
+
+function Receive-UploadFile {
+    param($Context, $Runtime)
+    $query = $Context.Request.QueryString
+    $cat = [string]$query['cat']
+    $date = [string]$query['date']
+    $name = [string]$query['name']
+    if ($script:Categories -notcontains $cat) { Write-HttpText $Context 400 '{"ok":false,"error":"分类不合法"}'; return }
+    if ($date -notmatch '^[0-9]{4}-[0-9]{2}-[0-9]{2}$') { Write-HttpText $Context 400 '{"ok":false,"error":"日期不合法"}'; return }
+    $safe = Get-SafeName $name
+    $dir = Join-Path (Join-Path $script:Data $cat) $date
+    if (-not (Test-Path -LiteralPath $dir)) { [void](New-Item -ItemType Directory -Path $dir -Force) }
+    $length = [long]$Context.Request.ContentLength64
+    $index = [int]$Context.Request.Headers['X-PJM-Index']
+    $number = [int]$Context.Request.Headers['X-PJM-Total']
+    $push = $Runtime.Push
+    $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    # 上次推送已经停了 15 秒以上：这次是新一轮，计数从头开始
+    if (($now - [long]$push.lastAt) -gt 15000) {
+        $push.done = 0
+        $push.bytes = [long]0
+        $push.skipped = 0
+        $push.failed = 0
+        $push.startedAt = $now
+    }
+    $push.active = $true
+    $push.current = $safe
+    if ($number -gt 0) { $push.total = $number }
+    $push.lastAt = $now
+    $input = $Context.Request.InputStream
+
+    # 按 uuid 认文件：这个文件以前收过（改名、换入库日期也算同一个），就不再重复落盘
+    $uuid = [string]$query['uuid']
+    if ([string]::IsNullOrWhiteSpace($uuid)) { $uuid = $safe }
+    $ledgerKey = $cat + '|' + $uuid
+    Initialize-PushLedger -Runtime $Runtime
+    $known = ''
+    if ($Runtime.Ledger.map.ContainsKey($ledgerKey)) { $known = [string]$Runtime.Ledger.map[$ledgerKey] }
+    if (-not [string]::IsNullOrEmpty($known) -and (Test-Path -LiteralPath (Join-Path $script:Data $known) -PathType Leaf)) {
+        $buffer = [byte[]]::new(262144)
+        try { while ($input.Read($buffer, 0, $buffer.Length) -gt 0) { } } catch { }
+        $push.skipped = [int]$push.skipped + 1
+        $push.done = $index
+        Write-Log ('已在电脑上，跳过：' + $cat + '/' + $date + '/' + $safe)
+        Write-HttpText $Context 200 '{"ok":true,"skipped":true}'
+        return
+    }
+
+    $target = Get-UniqueTarget -Directory $dir -FileName $safe
+    $part = $target.Path + '.part'
+    $stream = $null
+    try {
+        $stream = [IO.File]::Open($part, [IO.FileMode]::Create, [IO.FileAccess]::Write, [IO.FileShare]::None)
+        $buffer = [byte[]]::new(262144)
+        $written = [long]0
+        $lastTick = $now
+        while ($true) {
+            $read = $input.Read($buffer, 0, $buffer.Length)
+            if ($read -le 0) { break }
+            $stream.Write($buffer, 0, $read)
+            $written += $read
+            $push.bytes = [long]$push.bytes + $read
+            $t = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+            if (($t - $lastTick) -gt 400) { $push.lastAt = $t; $lastTick = $t }
+        }
+        $stream.Dispose()
+        $stream = $null
+        if ($length -ge 0 -and $written -ne $length) { throw ('接收长度不一致：期望 ' + $length + '，实际 ' + $written) }
+        [IO.File]::Move($part, $target.Path)
+        Add-PushLedgerEntry -Runtime $Runtime -Key $ledgerKey -RelativePath ($cat + '/' + $date + '/' + $target.Name)
+        $push.done = if ($index -gt 0) { $index } else { [int]$push.done + 1 }
+        $push.lastAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        Write-Log ('已接收：' + $target.Name + '（' + (Format-Bytes $written) + '）')
+        $json = '{"ok":true,"skipped":false,"name":' + (ConvertTo-Json -InputObject $target.Name) + ',"size":' + $written + '}'
+        Write-HttpText $Context 200 $json
+    } catch {
+        $push.failed = [int]$push.failed + 1
+        if ($null -ne $stream) { try { $stream.Dispose() } catch { } }
+        try { if (Test-Path -LiteralPath $part) { Remove-Item -LiteralPath $part -Force } } catch { }
+        Write-Log ('接收文件失败：' + $_.Exception.Message) '错误'
+        try { Write-HttpText $Context 500 ('{"ok":false,"error":' + (ConvertTo-Json -InputObject $_.Exception.Message) + '}') } catch { }
+    }
+}
+
+function Invoke-ServerLoop {
+    param($Runtime)
+    $listener = $null
+    try {
+        $listener = [System.Net.HttpListener]::new()
+        $listener.Prefixes.Add('http://127.0.0.1:8788/')
+        $listener.Start()
+        $Runtime.Listener = $listener
+        Write-Log '电脑端取回服务已启动：127.0.0.1:8788（手机可读 PJM-Transfer）'
+        while (-not $Runtime.QuitEvent.WaitOne(0)) {
+            $ctx = $null
+            try { $ctx = $listener.GetContext() }
+            catch {
+                if ($Runtime.QuitEvent.WaitOne(0)) { break }
+                Write-Log ('取回服务监听异常：' + $_.Exception.Message) '错误'
+                break
+            }
+            try {
+                $path = $ctx.Request.Url.AbsolutePath
+                $query = $ctx.Request.QueryString
+                switch ($path) {
+                    '/api/pc/state' { Write-HttpText $ctx 200 (Get-RequestJson $ctx) }
+                    '/api/pc/files' {
+                        $cat = [string]$query['cat']
+                        $date = [string]$query['date']
+                        $dir = Join-Path (Join-Path $script:Data $cat) $date
+                        $items = @()
+                        if ((Test-Path -LiteralPath $dir) -and $script:Categories -contains $cat -and $date -match '^\d{4}-\d{2}-\d{2}$') {
+                            $items = @(Get-ChildItem -LiteralPath $dir -File -ErrorAction SilentlyContinue | ForEach-Object { @{ name = $_.Name; size = [long]$_.Length } })
+                        }
+                        Write-HttpText $ctx 200 (ConvertTo-Json -InputObject @($items) -Depth 4 -Compress)
+                    }
+                    '/api/pc/file' {
+                        Send-FileResponse $ctx ([string]$query['cat']) ([string]$query['date']) ([string]$query['name'])
+                    }
+                    '/api/pc/upload' {
+                        # 手机端「发到电脑」：手机把文件推进来，电脑只负责落盘
+                        Receive-UploadFile $ctx $Runtime
+                    }
+                    '/api/pc/uploaddone' {
+                        $p = $Runtime.Push
+                        $p.active = $false
+                        $p.current = ''
+                        Write-Log ('手机推送结束：完成 ' + $p.done + '/' + $p.total + ' · ' + (Format-Bytes $p.bytes) + ' · 跳过 ' + $p.skipped + ' · 失败 ' + $p.failed)
+                        Write-HttpText $ctx 200 '{"ok":true}'
+                    }
+                    '/api/pc/pull' {
+                        # 电脑端可选：主动把手机文件拉过来（手机推送不在进行时）
+                        $dates = @()
+                        $raw = Read-RequestBody $ctx
+                        if (-not [string]::IsNullOrWhiteSpace($raw)) {
+                            try {
+                                $obj = $raw | ConvertFrom-Json
+                                if ($null -ne $obj -and $null -ne $obj.dates) {
+                                    foreach ($d in @($obj.dates)) {
+                                        $s = [string]$d
+                                        if ($s -match '^[0-9]{4}-[0-9]{2}-[0-9]{2}$') { $dates += $s }
+                                    }
+                                }
+                            } catch { Write-Log ('解析请求体失败：' + $_.Exception.Message) '警告' }
+                            $dates = @($dates | Select-Object -Unique)
+                            if ($dates.Count -eq 0) { Write-Log ('请求体里没有日期：' + $raw) '警告' }
+                        }
+                        if ($Runtime.Task.active -or (Test-PushLive $Runtime)) { Write-HttpText $ctx 200 '{"ok":false,"error":"正在传输中"}'; break }
+                        $started = Start-Pull -Runtime $Runtime -Mode 'pull' -Dates $dates
+                        if ($started) {
+                            if ($dates.Count -gt 0) { Write-Log ('手机端请求接收：' + ($dates -join ', ')) } else { Write-Log '手机端请求接收：全部文件' }
+                            Write-HttpText $ctx 200 '{"ok":true}'
+                        } else {
+                            Write-HttpText $ctx 200 '{"ok":false,"error":"正在传输中"}'
+                        }
+                    }
+                    '/api/pc/stop' {
+                        Stop-Pull -Runtime $Runtime
+                        Write-HttpText $ctx 200 '{"ok":true}'
+                    }
+                    default { Write-HttpText $ctx 404 '{"ok":false,"error":"接口不存在"}' }
+                }
+            } catch {
+                Write-Log ('处理取回请求失败：' + $_.Exception.Message) '错误'
+                try { Write-HttpText $ctx 500 '{"ok":false,"error":"内部错误"}' } catch { }
+            }
+        }
+    } catch {
+        Write-Log ('取回服务启动失败：' + $_.Exception.Message) '错误'
+    } finally {
+        if ($null -ne $listener) {
+            try { $listener.Stop() } catch { }
+            try { $listener.Close() } catch { }
+        }
+        $Runtime.Listener = $null
+    }
+}
+
 $script:Runtime = $null
 $script:Closing = $false
 $script:Ui = @{}
@@ -408,15 +790,52 @@ function New-Runtime {
         error = $null
         cancel = $false
     })
+    # 手机推送（手机是发送方，电脑只是被动收字节）
+    $push = [hashtable]::Synchronized(@{
+        active = $false
+        done = 0
+        total = 0
+        bytes = [long]0
+        skipped = 0
+        failed = 0
+        current = ''
+        startedAt = [long]0
+        lastAt = [long]0
+    })
+    # 已接收记录：cat|uuid → 相对路径。按 uuid 记账：改名、改入库日期都不会重复接收
+    $ledger = [hashtable]::Synchronized(@{ loaded = $false; map = @{} })
     return [hashtable]::Synchronized(@{
         State = $state
         Task = $task
+        Push = $push
+        Ledger = $ledger
         LogQueue = [System.Collections.Concurrent.ConcurrentQueue[string]]::new()
         QuitEvent = [System.Threading.ManualResetEvent]::new($false)
+        Listener = $null
+        ServerJob = $null
         CurrentWeb = $null
         CurrentAdb = $null
         Job = $null
     })
+}
+
+function Select-AdbDevice {
+    param([string]$AdbPath, $Runtime)
+    $r = Invoke-Adb -AdbPath $AdbPath -Arguments 'devices' -TimeoutMs 8000 -Runtime $Runtime
+    if ($r.ExitCode -ne 0) { return $null }
+    $usb = $null
+    $any = $null
+    foreach ($line in $r.Out.Split([char[]]@(13, 10))) {
+        $t = $line.Trim()
+        if ([string]::IsNullOrEmpty($t) -or $t.StartsWith('List of devices')) { continue }
+        if ($t -notmatch '^(\S+)\s+device$') { continue }
+        $serial = $Matches[1]
+        if ([string]::IsNullOrEmpty($any)) { $any = $serial }
+        # USB 连接的序列号不含冒号；无线调试那种（ip:port）优先级更低
+        if ($serial -notmatch ':') { $usb = $serial; break }
+    }
+    if ($null -ne $usb) { return $usb }
+    return $any
 }
 
 function Initialize-Connection {
@@ -431,6 +850,14 @@ function Initialize-Connection {
     Write-Log ('使用 adb：' + $adb)
     $r = Invoke-Adb -AdbPath $adb -Arguments 'start-server' -TimeoutMs 15000 -Runtime $Runtime
     if ($r.ExitCode -ne 0) { Write-Log ('adb start-server 失败：' + ($r.Err + $r.Out).Trim()) '警告' }
+    # 多设备（USB + 无线调试 + 模拟器）时先选定一台，否则后面的 forward/reverse 会直接失败
+    $script:Serial = Select-AdbDevice -AdbPath $adb -Runtime $Runtime
+    if ([string]::IsNullOrEmpty($script:Serial)) {
+        $Runtime.State.Device = '未找到手机'
+        Write-Log '没有检测到已授权的手机：请插好数据线并在手机上允许 USB 调试' '错误'
+        return
+    }
+    Write-Log ('使用设备：' + $script:Serial)
     $Runtime.State.Device = '等待手机连接...'
     Write-Log '等待手机连接（最多 10 秒）...'
     $r = Invoke-Adb -AdbPath $adb -Arguments 'wait-for-device' -TimeoutMs 10000 -Runtime $Runtime
@@ -447,20 +874,28 @@ function Initialize-Connection {
     }
     $Runtime.State.Device = '已连接'
     Write-Log 'USB 隧道已建立：127.0.0.1:8787 → 手机传输服务'
+    # 反向隧道：手机访问 127.0.0.1:8788 时走 USB 到电脑的取回服务
+    $r = Invoke-Adb -AdbPath $adb -Arguments 'reverse tcp:8788 tcp:8788' -TimeoutMs 8000 -Runtime $Runtime
+    if ($r.ExitCode -eq 0) {
+        Write-Log 'USB 反向隧道已建立：手机 127.0.0.1:8788 → 电脑取回服务'
+    } else {
+        Write-Log ('adb reverse 失败：' + ($r.Err + $r.Out).Trim()) '错误'
+    }
 }
 
 function Start-Pull {
-    param($Runtime)
-    if ($Runtime.Task.active) { return $false }
+    param($Runtime, [string]$Mode = 'pull', [string[]]$Dates = @())
+    if ($Mode -eq 'pull' -and $Runtime.Task.active) { return $false }
     $rs = [runspacefactory]::CreateRunspace()
     $rs.Open()
-    $rs.SessionStateProxy.SetVariable('PjmLinkJob', @{ Runtime = $Runtime })
+    $rs.SessionStateProxy.SetVariable('PjmLinkJob', @{ Runtime = $Runtime; Mode = $Mode; Dates = $Dates })
     $ps = [powershell]::Create()
     $ps.Runspace = $rs
     $quoted = "'" + $script:Path.Replace("'", "''") + "'"
     [void]$ps.AddScript('& ' + $quoted)
     $h = $ps.BeginInvoke()
-    $Runtime.Job = @{ Ps = $ps; Handle = $h; Runspace = $rs }
+    $entry = @{ Ps = $ps; Handle = $h; Runspace = $rs }
+    if ($Mode -eq 'server') { $Runtime.ServerJob = $entry } else { $Runtime.Job = $entry }
     return $true
 }
 
@@ -506,106 +941,148 @@ function Start-MainWindow {
     $runtime.State.Total = $disk.Total
     $runtime.State.Writable = $disk.Writable
 
+    # ---------- 配色与字号（统一一套，别再一屏三种蓝） ----------
+    $bg = [System.Drawing.Color]::FromArgb(246, 247, 249)
+    $card = [System.Drawing.Color]::White
+    $line = [System.Drawing.Color]::FromArgb(226, 230, 237)
+    $text = [System.Drawing.Color]::FromArgb(31, 36, 48)
+    $muted = [System.Drawing.Color]::FromArgb(107, 114, 128)
+    $primary = [System.Drawing.Color]::FromArgb(47, 107, 255)
+    $danger = [System.Drawing.Color]::FromArgb(200, 60, 60)
+
     $form = [System.Windows.Forms.Form]::new()
     $form.Text = 'PJM Link'
-    $form.ClientSize = [System.Drawing.Size]::new(720, 420)
+    $form.ClientSize = [System.Drawing.Size]::new(760, 600)
     $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedSingle
     $form.MaximizeBox = $false
     $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
-    $form.BackColor = [System.Drawing.Color]::FromArgb(250, 250, 252)
+    $form.BackColor = $bg
+    $form.ForeColor = $text
+    $form.Font = [System.Drawing.Font]::new('Microsoft YaHei UI', 9)
 
     $font = [System.Drawing.Font]::new('Microsoft YaHei UI', 9)
     $bold = [System.Drawing.Font]::new('Microsoft YaHei UI', 10, [System.Drawing.FontStyle]::Bold)
 
-    $group = [System.Windows.Forms.GroupBox]::new()
-    $group.Text = '连接状态'
-    $group.Font = $font
-    $group.Location = [System.Drawing.Point]::new(12, 8)
-    $group.Size = [System.Drawing.Size]::new(696, 96)
-    $form.Controls.Add($group)
+    $title = [System.Windows.Forms.Label]::new()
+    $title.Text = 'PJM Link'
+    $title.Font = [System.Drawing.Font]::new('Microsoft YaHei UI', 16, [System.Drawing.FontStyle]::Bold)
+    $title.ForeColor = $text
+    $title.Location = [System.Drawing.Point]::new(20, 16)
+    $title.Size = [System.Drawing.Size]::new(400, 32)
+    $form.Controls.Add($title)
+
+    $subtitle = [System.Windows.Forms.Label]::new()
+    $subtitle.Text = 'USB 直连 · 只走线缆，不经过网络'
+    $subtitle.Font = $font
+    $subtitle.ForeColor = $muted
+    $subtitle.Location = [System.Drawing.Point]::new(22, 48)
+    $subtitle.Size = [System.Drawing.Size]::new(420, 20)
+    $form.Controls.Add($subtitle)
+
+    # 状态卡片：白底 + 1px 描边，四行内容左对齐
+    $statusCard = [System.Windows.Forms.Panel]::new()
+    $statusCard.BackColor = $card
+    $statusCard.Location = [System.Drawing.Point]::new(20, 84)
+    $statusCard.Size = [System.Drawing.Size]::new(720, 118)
+    $statusCard.Paint.Add({
+        param($sender, $e)
+        $pen = [System.Drawing.Pen]::new($line, 1)
+        try { $e.Graphics.DrawRectangle($pen, 0, 0, $sender.Width - 1, $sender.Height - 1) } finally { $pen.Dispose() }
+    })
+    $form.Controls.Add($statusCard)
 
     $lblDevice = [System.Windows.Forms.Label]::new()
     $lblDevice.Text = '设备：未连接'
     $lblDevice.Font = $bold
+    $lblDevice.ForeColor = $text
     $lblDevice.AutoEllipsis = $true
-    $lblDevice.Location = [System.Drawing.Point]::new(12, 22)
-    $lblDevice.Size = [System.Drawing.Size]::new(670, 20)
-    $group.Controls.Add($lblDevice)
-
-    $lblAdb = [System.Windows.Forms.Label]::new()
-    $lblAdb.Text = 'adb：'
-    $lblAdb.AutoEllipsis = $true
-    $lblAdb.Location = [System.Drawing.Point]::new(12, 44)
-    $lblAdb.Size = [System.Drawing.Size]::new(670, 18)
-    $group.Controls.Add($lblAdb)
-
-    $lblData = [System.Windows.Forms.Label]::new()
-    $lblData.Text = '数据目录：'
-    $lblData.AutoEllipsis = $true
-    $lblData.Location = [System.Drawing.Point]::new(12, 62)
-    $lblData.Size = [System.Drawing.Size]::new(670, 18)
-    $group.Controls.Add($lblData)
+    $lblDevice.Location = [System.Drawing.Point]::new(16, 14)
+    $lblDevice.Size = [System.Drawing.Size]::new(688, 22)
+    $statusCard.Controls.Add($lblDevice)
 
     $lblDisk = [System.Windows.Forms.Label]::new()
     $lblDisk.Text = '磁盘：'
+    $lblDisk.Font = $font
+    $lblDisk.ForeColor = $text
     $lblDisk.AutoEllipsis = $true
-    $lblDisk.Location = [System.Drawing.Point]::new(12, 78)
-    $lblDisk.Size = [System.Drawing.Size]::new(670, 18)
-    $group.Controls.Add($lblDisk)
+    $lblDisk.Location = [System.Drawing.Point]::new(16, 42)
+    $lblDisk.Size = [System.Drawing.Size]::new(688, 20)
+    $statusCard.Controls.Add($lblDisk)
 
-    $btnReceive = [System.Windows.Forms.Button]::new()
-    $btnReceive.Text = '接收手机文件'
-    $btnReceive.Font = $bold
-    $btnReceive.Location = [System.Drawing.Point]::new(12, 112)
-    $btnReceive.Size = [System.Drawing.Size]::new(240, 60)
-    $btnReceive.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
-    $btnReceive.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(70, 110, 200)
-    $btnReceive.BackColor = [System.Drawing.Color]::FromArgb(235, 242, 255)
+    $lblData = [System.Windows.Forms.Label]::new()
+    $lblData.Text = '保存位置：'
+    $lblData.Font = $font
+    $lblData.ForeColor = $muted
+    $lblData.AutoEllipsis = $true
+    $lblData.Location = [System.Drawing.Point]::new(16, 68)
+    $lblData.Size = [System.Drawing.Size]::new(688, 20)
+    $statusCard.Controls.Add($lblData)
+
+    $lblAdb = [System.Windows.Forms.Label]::new()
+    $lblAdb.Text = 'adb：'
+    $lblAdb.Font = $font
+    $lblAdb.ForeColor = $muted
+    $lblAdb.AutoEllipsis = $true
+    $lblAdb.Location = [System.Drawing.Point]::new(16, 92)
+    $lblAdb.Size = [System.Drawing.Size]::new(688, 18)
+    $statusCard.Controls.Add($lblAdb)
+
+    # 主按钮：实心主色；次按钮：白底描边；停止：红字描边
+    function New-FlatButton {
+        param([string]$Text, [System.Drawing.Point]$Location, [System.Drawing.Size]$Size, [System.Drawing.Font]$Font, [System.Drawing.Color]$Back, [System.Drawing.Color]$Fore, [System.Drawing.Color]$Border)
+        $b = [System.Windows.Forms.Button]::new()
+        $b.Text = $Text
+        $b.Font = $Font
+        $b.Location = $Location
+        $b.Size = $Size
+        $b.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+        $b.FlatAppearance.BorderSize = 1
+        $b.FlatAppearance.BorderColor = $Border
+        $b.BackColor = $Back
+        $b.ForeColor = $Fore
+        $b.Cursor = [System.Windows.Forms.Cursors]::Hand
+        $b.UseVisualStyleBackColor = $false
+        return $b
+    }
+
+    $btnReceive = New-FlatButton '接收手机文件' ([System.Drawing.Point]::new(20, 218)) ([System.Drawing.Size]::new(190, 42)) $bold $primary ([System.Drawing.Color]::White) $primary
     $form.Controls.Add($btnReceive)
 
-    $btnOpen = [System.Windows.Forms.Button]::new()
-    $btnOpen.Text = '打开文件夹'
-    $btnOpen.Font = $font
-    $btnOpen.Location = [System.Drawing.Point]::new(264, 112)
-    $btnOpen.Size = [System.Drawing.Size]::new(190, 60)
-    $btnOpen.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnOpen = New-FlatButton '打开文件夹' ([System.Drawing.Point]::new(222, 218)) ([System.Drawing.Size]::new(150, 42)) $font $card $text $line
     $form.Controls.Add($btnOpen)
 
-    $btnStop = [System.Windows.Forms.Button]::new()
-    $btnStop.Text = '停止'
-    $btnStop.Font = $font
+    $btnStop = New-FlatButton '停止' ([System.Drawing.Point]::new(384, 218)) ([System.Drawing.Size]::new(100, 42)) $font $card $danger $line
     $btnStop.Enabled = $false
-    $btnStop.Location = [System.Drawing.Point]::new(468, 112)
-    $btnStop.Size = [System.Drawing.Size]::new(110, 29)
     $form.Controls.Add($btnStop)
 
-    $btnHelp = [System.Windows.Forms.Button]::new()
-    $btnHelp.Text = '使用说明'
-    $btnHelp.Font = $font
-    $btnHelp.Location = [System.Drawing.Point]::new(468, 143)
-    $btnHelp.Size = [System.Drawing.Size]::new(110, 29)
+    $btnHelp = New-FlatButton '使用说明' ([System.Drawing.Point]::new(620, 218)) ([System.Drawing.Size]::new(120, 42)) $font $card $text $line
     $form.Controls.Add($btnHelp)
 
-    $btnExit = [System.Windows.Forms.Button]::new()
-    $btnExit.Text = '退出'
-    $btnExit.Font = $font
-    $btnExit.Location = [System.Drawing.Point]::new(586, 112)
-    $btnExit.Size = [System.Drawing.Size]::new(122, 60)
-    $btnExit.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btnExit = New-FlatButton '退出' ([System.Drawing.Point]::new(620, 218)) ([System.Drawing.Size]::new(120, 42)) $font $card $muted $line
+    $btnExit.Location = [System.Drawing.Point]::new(620, 218)
     $form.Controls.Add($btnExit)
 
+    # 顶部右侧也放一个「使用说明」，避免按钮挤在一起
+    $btnHelp.Location = [System.Drawing.Point]::new(620, 18)
+    $btnHelp.Size = [System.Drawing.Size]::new(120, 30)
+    $btnExit.Location = [System.Drawing.Point]::new(620, 218)
+    $btnExit.Size = [System.Drawing.Size]::new(120, 42)
+
     $progress = [System.Windows.Forms.ProgressBar]::new()
-    $progress.Location = [System.Drawing.Point]::new(12, 182)
-    $progress.Size = [System.Drawing.Size]::new(696, 20)
+    $progress.Location = [System.Drawing.Point]::new(20, 280)
+    $progress.Size = [System.Drawing.Size]::new(720, 12)
     $progress.Minimum = 0
     $progress.Maximum = 100
+    $progress.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
     $form.Controls.Add($progress)
 
     $lblSpeed = [System.Windows.Forms.Label]::new()
     $lblSpeed.Text = '就绪'
+    $lblSpeed.Font = $font
+    $lblSpeed.ForeColor = $muted
     $lblSpeed.AutoEllipsis = $true
-    $lblSpeed.Location = [System.Drawing.Point]::new(12, 204)
-    $lblSpeed.Size = [System.Drawing.Size]::new(696, 20)
+    $lblSpeed.Location = [System.Drawing.Point]::new(20, 298)
+    $lblSpeed.Size = [System.Drawing.Size]::new(720, 22)
     $form.Controls.Add($lblSpeed)
 
     $log = [System.Windows.Forms.TextBox]::new()
@@ -613,10 +1090,12 @@ function Start-MainWindow {
     $log.ReadOnly = $true
     $log.ScrollBars = [System.Windows.Forms.ScrollBars]::Vertical
     $log.WordWrap = $false
+    $log.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
     $log.Font = [System.Drawing.Font]::new('Consolas', 9)
-    $log.Location = [System.Drawing.Point]::new(12, 230)
-    $log.Size = [System.Drawing.Size]::new(696, 178)
-    $log.BackColor = [System.Drawing.Color]::FromArgb(252, 252, 252)
+    $log.Location = [System.Drawing.Point]::new(20, 330)
+    $log.Size = [System.Drawing.Size]::new(720, 250)
+    $log.BackColor = [System.Drawing.Color]::White
+    $log.ForeColor = $text
     $form.Controls.Add($log)
 
     $tip = [System.Windows.Forms.ToolTip]::new()
@@ -629,6 +1108,7 @@ function Start-MainWindow {
         Form = $form; Device = $lblDevice; Adb = $lblAdb; Data = $lblData; Disk = $lblDisk
         Receive = $btnReceive; Open = $btnOpen; Stop = $btnStop; Help = $btnHelp; Exit = $btnExit
         Progress = $progress; Speed = $lblSpeed; Log = $log; Timer = $timer; Tip = $tip
+        Subtitle = $subtitle
     }
 
     $btnReceive.Add_Click({
@@ -680,7 +1160,15 @@ function Start-MainWindow {
             $script:Ui.Adb.Text = 'adb：' + $st.Adb
             $script:Ui.Data.Text = '数据目录：' + $st.DataRoot
             $script:Ui.Disk.Text = '磁盘：' + $st.Fs + ' · 剩余 ' + (Format-Bytes $st.Free) + ' / ' + (Format-Bytes $st.Total)
-            if ($task.total -gt 0) {
+            $push = $rt.Push
+            $pushLive = Test-PushLive $rt
+            if ($pushLive) {
+                # 手机正在推送：进度由手机那边驱动，这里只做展示
+                $pTotal = [Math]::Max(1, [int]$push.total)
+                $script:Ui.Progress.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
+                $script:Ui.Progress.Maximum = $pTotal
+                $script:Ui.Progress.Value = [Math]::Min($pTotal, [Math]::Max(0, [int]$push.done))
+            } elseif ($task.total -gt 0) {
                 $script:Ui.Progress.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
                 $script:Ui.Progress.Maximum = [Math]::Max(1, [int]$task.total)
                 $script:Ui.Progress.Value = [Math]::Min([int]$task.total, [int]$task.done)
@@ -690,17 +1178,21 @@ function Start-MainWindow {
                 $script:Ui.Progress.Style = [System.Windows.Forms.ProgressBarStyle]::Continuous
                 $script:Ui.Progress.Value = 0
             }
-            if ($task.active) {
+            if ($pushLive) {
+                $script:Ui.Speed.Text = '手机推送中 · ' + $push.done + '/' + $push.total + ' · ' + (Format-Bytes $push.bytes) + ' · 当前 ' + $push.current
+            } elseif ($task.active) {
                 $script:Ui.Speed.Text = '传输中 · ' + $task.done + '/' + $task.total + ' · ' + (Format-Bytes $task.bytes) + ' · ' + (Format-Bytes $task.speedBps) + '/s · 跳过 ' + $task.skipped + ' · 失败 ' + $task.failed
             } elseif ($task.total -gt 0) {
                 $err = ''
                 if (-not [string]::IsNullOrEmpty($task.error)) { $err = ' · ' + $task.error }
                 $script:Ui.Speed.Text = '上次任务：' + $task.done + '/' + $task.total + ' · ' + (Format-Bytes $task.bytes) + ' · 跳过 ' + $task.skipped + ' · 失败 ' + $task.failed + $err
+            } elseif ([int]$push.total -gt 0) {
+                $script:Ui.Speed.Text = '上次推送：' + $push.done + '/' + $push.total + ' · ' + (Format-Bytes $push.bytes) + ' · 跳过 ' + $push.skipped + ' · 失败 ' + $push.failed
             } else {
                 $script:Ui.Speed.Text = '就绪'
             }
             $script:Ui.Stop.Enabled = [bool]$task.active
-            $script:Ui.Receive.Enabled = -not [bool]$task.active
+            $script:Ui.Receive.Enabled = (-not [bool]$task.active) -and (-not $pushLive)
             $count = 0
             while ($count -lt 200) {
                 $line = $null
@@ -726,26 +1218,47 @@ function Start-MainWindow {
             }
             $script:Closing = $true
             $script:Ui.Timer.Stop()
-            Stop-Pull -Runtime $script:Runtime
             $script:Runtime.QuitEvent.Set()
+            try { if ($null -ne $script:Runtime.Listener) { $script:Runtime.Listener.Stop() } } catch { }
+            try {
+                if ($null -ne $script:Runtime.ServerJob) {
+                    $script:Runtime.ServerJob.Ps.Stop()
+                    $script:Runtime.ServerJob.Runspace.Dispose()
+                }
+            } catch { }
+            Stop-Pull -Runtime $script:Runtime
             Wait-PullJob -Runtime $script:Runtime -TimeoutMs 5000
             if (-not [string]::IsNullOrEmpty($script:Runtime.State.Adb)) {
                 Remove-Tunnels -AdbPath $script:Runtime.State.Adb -Runtime $script:Runtime
             }
+            Stop-BundledAdb
             Write-Log 'PJM Link 已退出'
         } catch { }
     })
 
     Initialize-Connection -Runtime $runtime
+    if ($runtime.State.Device -eq '已连接') { [void](Start-Pull -Runtime $runtime -Mode 'server') }
     $timer.Start()
     Write-Log ('PJM Link 启动，数据目录：' + $script:Data)
     [System.Windows.Forms.Application]::Run($form)
+    # 兜底：窗口关掉后仍有残留 adb 或后台 runspace 时，让进程一定退出，
+    # 否则这些句柄会一直锁着工具目录，用户删不掉文件夹。
+    Stop-BundledAdb
+    [Environment]::Exit(0)
 }
 
 $jobVar = Get-Variable -Name PjmLinkJob -Scope Global -ErrorAction SilentlyContinue
 if ($null -ne $jobVar -and $jobVar.Value -is [hashtable]) {
     $script:Runtime = $jobVar.Value.Runtime
-    Invoke-PullJob -Runtime $script:Runtime
+    $mode = 'pull'
+    if ($null -ne $jobVar.Value.Mode) { $mode = [string]$jobVar.Value.Mode }
+    if ($mode -eq 'server') {
+        Invoke-ServerLoop -Runtime $script:Runtime
+    } else {
+        $dates = @()
+        if ($null -ne $jobVar.Value.Dates) { $dates = @($jobVar.Value.Dates) }
+        Invoke-PullJob -Runtime $script:Runtime -Dates $dates
+    }
     return
 }
 

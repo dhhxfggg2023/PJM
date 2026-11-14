@@ -66,6 +66,7 @@ import com.dhhxfggg.pjm.domain.util.FileUtils
 import com.dhhxfggg.pjm.domain.util.ShareUtils
 import com.dhhxfggg.pjm.domain.util.VaultPaths
 import com.dhhxfggg.pjm.ui.component.PjmDeleteConfirmDialog
+import com.dhhxfggg.pjm.ui.component.PlayerProgressBar
 import com.dhhxfggg.pjm.ui.component.PjmEmptyState
 import com.dhhxfggg.pjm.ui.component.VideoSurface
 import com.dhhxfggg.pjm.ui.component.rememberAudioInfo
@@ -505,25 +506,20 @@ private fun DiscoveryAudioControls(player: ExoPlayer?) {
     }
 
     Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
-        Slider(
-            value = if (dragging) dragValue else progress,
-            onValueChange = { fraction ->
+        PlayerProgressBar(
+            progress = if (dragging) dragValue else progress,
+            onScrub = { fraction ->
                 dragging = true
                 dragValue = fraction
             },
-            onValueChangeFinished = {
-                val target = (dragValue * duration).toLong()
+            onSeek = {
+                val target = (it * duration).toLong()
                 player?.seekTo(target)
                 current = target
-                progress = dragValue
+                progress = it
                 dragging = false
             },
-            colors =
-                SliderDefaults.colors(
-                    thumbColor = Color.White,
-                    activeTrackColor = Color.White,
-                    inactiveTrackColor = Color.White.copy(alpha = 0.3f),
-                ),
+            activeColor = Color.White,
         )
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
@@ -811,7 +807,7 @@ fun DiscoveryVideoRenderer(
                         detectTapGestures(
                             onTap = { showControls = !showControls },
                             onDoubleTap = { offset ->
-                                // Instagram/Telegram 式分区跳转：左 1/3 后退、右 1/3 前进、中间不动作
+                                // 左右分区跳转：左 1/3 后退、右 1/3 前进、中间不动作
                                 val w = size.width.toFloat()
                                 val pos = exoPlayer?.currentPosition ?: 0L
                                 val target =
@@ -953,27 +949,22 @@ private fun VideoProgressBar(
                 .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.8f))))
                 .padding(bottom = bottomPadding + (if (isFullScreen) 16.dp else 48.dp)),
     ) {
-        Slider(
-            value = if (dragging) dragValue else progress,
-            // 拖动时只更新本地位置；松手才真正 seek 一次。
-            // 原来每移一个像素就 seekTo 一次，播放器被连续 seek 打成不断重新缓冲，看着就是"卡+不准"。
-            onValueChange = {
+        // 拖动时只更新本地位置；松手才真正 seek 一次，避免连续 seek 造成重新缓冲。
+        PlayerProgressBar(
+            progress = if (dragging) dragValue else progress,
+            onScrub = {
                 dragging = true
                 dragValue = it
             },
-            onValueChangeFinished = {
-                val target = (dragValue * duration).toLong()
+            onSeek = {
+                val target = (it * duration).toLong()
                 exoPlayer?.seekTo(target)
                 currentTime = target
-                progress = dragValue
+                progress = it
                 dragging = false
             },
-            modifier =
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp)
-                    .height(32.dp),
-            colors = SliderDefaults.colors(thumbColor = Color.White, activeTrackColor = MaterialTheme.colorScheme.primary),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+            activeColor = Color.White,
         )
 
         Row(

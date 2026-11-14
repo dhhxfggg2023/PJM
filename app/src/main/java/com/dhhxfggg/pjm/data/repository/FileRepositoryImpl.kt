@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import com.dhhxfggg.pjm.data.db.FileDao
 import com.dhhxfggg.pjm.data.model.FileEntity
+import com.dhhxfggg.pjm.domain.util.FileUtils
 import com.dhhxfggg.pjm.domain.util.IngestionEngine
 import com.dhhxfggg.pjm.domain.util.IngestionSummary
 import com.dhhxfggg.pjm.domain.util.SettingsManager
@@ -115,6 +116,41 @@ class FileRepositoryImpl
             val picked = fileDao.getFileByOffset(category, offset) ?: return null
             lastRandomFileId[category] = picked.id
             return picked
+        }
+
+        /**
+         * 音频库内改名：把「显示名 = 磁盘 UUID」的条目换成标签标题。
+         * 磁盘上的文件从不重命名，只改数据库里的显示名。
+         */
+        override suspend fun backfillAudioNames() {
+            val audios = runCatching { fileDao.getFilesByCategoryOnce(VaultManager.CAT_AUDIOS) }.getOrDefault(emptyList())
+            if (audios.isEmpty()) return
+            var changed = 0
+            audios.forEach { entity ->
+                // 已经有可读名（这次或以前改过）就跳过；
+                // 哈希/UUID/纯数字这类机器名一律当「没名字」处理
+                if (!FileUtils.isMachineName(entity)) return@forEach
+                val file = runCatching { VaultManager.getFileFromEntity(context, entity) }.getOrNull() ?: return@forEach
+                if (!file.exists() || file.length() <= 0L) return@forEach
+                val title =
+                    runCatching {
+                        val retriever = android.media.MediaMetadataRetriever()
+                        try {
+                            retriever.setDataSource(file.absolutePath)
+                            retriever
+                                .extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_TITLE)
+                                ?.trim()
+                                ?.takeIf { it.isNotBlank() }
+                        } finally {
+                            runCatching { retriever.release() }
+                        }
+                    }.getOrNull()
+                if (title == null) return@forEach
+                val ext = entity.extension.lowercase().trim('.')
+                val newName = if (ext.isEmpty()) title else title + "." + ext
+                if (newName.length > 120) return@forEach
+                runCatching { fileDao.updateDisplayName(entity.relativePath, newName) }.onSuccess { changed++ }
+            }
         }
 
         override suspend fun getCoverFile(

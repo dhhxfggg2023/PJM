@@ -39,7 +39,7 @@ static void transformLegacyMask(
 /**
  * 正确模式：keyIndex = pos % keyLen，密钥的每一个字节都参与运算。
  *
- * 实现要点（真机实测，vivo V2196A / ARM64，1MiB 缓冲）：
+ * 实现要点（1 MiB 分块缓冲）：
  *  - 循环内直接取模：      908 MB/s
  *  - 递增 + 回头（if 判断）：717 MB/s —— **反而最慢**，因为它引入了跨迭代数据依赖，
  *    乱序执行无法把多轮重叠起来；

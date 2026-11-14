@@ -11,11 +11,11 @@ import com.dhhxfggg.pjm.domain.util.PjmLogger
 /**
  * 后台运行的唯一开关：系统「电池优化」白名单。
  *
- * 为什么必须有它：PJM 靠前台服务观察相册变化，而国产 ROM（这台是 vivo）会在锁屏后
+ * 为什么必须有它：PJM 靠前台服务观察相册变化，而部分国产 ROM 会在锁屏后
  * 冻结不在白名单里的进程 —— 前台服务记录还在、通知还挂着，但协程一行都不跑，
  * 表现就是「只有打开 App 才移动文件」。系统白名单是应用唯一能自己申请到的豁免。
  *
- * vivo 还有一层自己的「后台高耗电 / 自启动」开关，系统弹窗不一定覆盖，
+ * 这类 ROM 还有一层自己的「后台高耗电 / 自启动」开关，系统弹窗不一定覆盖，
  * 所以额外提供一条深链；都打不开就退回应用详情页，用户至少能自己翻。
  */
 object TakeoverBackgroundPermission {
@@ -24,7 +24,7 @@ object TakeoverBackgroundPermission {
     /** 两次系统弹窗之间的最小间隔：用户明确拒绝后不要每次开屏都弹 */
     private const val ASK_INTERVAL_MS = 6L * 60 * 60 * 1000
 
-    /** vivo 自启动管理 */
+    /** 国产 ROM 自启动管理页 */
     private const val AUTO_START_ACTION = "com.iqoo.secure.BGSTARTUPMANAGER"
 
     fun isExempt(context: Context): Boolean =
@@ -57,10 +57,10 @@ object TakeoverBackgroundPermission {
     /**
      * 打开系统「电池」页。
      *
-     * 为什么不直接开「后台耗电管理」：那一页被 vivo 用 signatureOrSystem 权限
+     * 为什么不直接开「后台耗电管理」：那一页被 ROM 用 signatureOrSystem 权限
      * （com.iqoo.powersaving.permission.action.openhpactivity）保护，
      * 第三方应用无论用 action 还是组件直连都会被 SecurityException 挡回来
-     * （实测 shell 的 am start 能开，是因为 shell 有这个权限）。所以这里把用户送到电池页，
+     * （shell 能直接 am start，是因为它本身持有该权限）。所以这里把用户送到电池页，
      * 它第一项就是「后台耗电管理」的入口。
      */
     fun openBatteryPage(context: Context): Boolean {

@@ -59,9 +59,11 @@ class MainViewModel
             // 预热分类列表：主界面点进任何一个分类前就查好，切换时直接命中缓存，几乎是瞬间打开。
             // 顺序按使用频率排：图片最大也最常用，先查；其余分类量很小。
             viewModelScope.launch(Dispatchers.IO) {
-                // 首屏先让人用起来：读完 4 万张图的列表要建几万个对象，会带来一次明显 GC。
+                // 首屏先让人用起来：读完大库列表要建大量对象，会带来一次明显 GC。
                 // 等界面稳定 1.2s 再预热，冷启动的点击/转场就不会被抢 CPU。
                 delay(1200)
+                // 音频显示名：库里还是磁盘 UUID 的，用标签标题换掉（只改库内显示名，磁盘不动）
+                runCatching { repository.backfillAudioNames() }
                 listOf(
                     VaultManager.CAT_IMAGES,
                     VaultManager.CAT_VIDEOS,
@@ -181,7 +183,11 @@ class MainViewModel
                         } else {
                             VaultManager.CAT_IMAGES
                         }
-                    covers[category] = repository.getCoverFile(source, daySeed)
+                    // 借图的分类（文本/音频/容器/其他）底层都查「图片」库，
+                    // 若直接用同一个 daySeed，借来的封面会全是同一张。
+                    // 把「当前分类」混进种子，各分类借到不同的图，同一天内各自稳定。
+                    val seed = daySeed?.let { it * 131 + category.hashCode() }
+                    covers[category] = repository.getCoverFile(source, seed)
                 }
                 _categoryCovers.value = covers
             }

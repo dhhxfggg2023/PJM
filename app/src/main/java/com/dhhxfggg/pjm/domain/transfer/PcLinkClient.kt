@@ -99,23 +99,93 @@ class PcLinkClient(
             }
         }.getOrDefault(emptyList())
 
-    /** 开始让电脑端把手机文件拉过去（手机端只负责下发任务+看进度） */
+    /**
+     * 开始让电脑端把手机文件拉过去（手机端只负责下发任务+看进度）。
+     *
+     * [dates] 为空 = 全部；否则只传这些日期（yyyy-MM-dd）的文件，支持任意多选。
+     */
     fun startPull(
         category: String,
-        fromMs: Long,
-        toMs: Long,
+        dates: List<String>,
     ): Boolean =
         runCatching {
+            val arr = org.json.JSONArray()
+            dates.forEach { arr.put(it) }
             val body =
                 JSONObject()
                     .put("category", category)
-                    .put("from", fromMs)
-                    .put("to", toMs)
+                    .put("dates", arr)
                     .toString()
             post("/api/pc/pull", body).contains("\"ok\":true")
         }.getOrDefault(false)
 
     fun stopPull(): Boolean = runCatching { post("/api/pc/stop", "{}").contains("\"ok\":true") }.getOrDefault(false)
+
+    /**
+     * 把一个文件直接推给电脑端（手机是发送方）。
+     *
+     * 进度、速度、剩余全部在手机本地算，不再依赖电脑端回报的任务状态：
+     * 传多大、传多快由手机这边的读取速度决定，电脑端只是被动收字节。
+     */
+    fun upload(
+        category: String,
+        date: String,
+        name: String,
+        uuid: String,
+        file: File,
+        index: Int,
+        total: Int,
+        isCancelled: () -> Boolean,
+        onBytes: (Long) -> Unit,
+    ): Boolean {
+        val length = file.length()
+        val conn =
+            (
+                URL(
+                    base + "/api/pc/upload?cat=" + enc(category) +
+                        "&date=" + enc(date) + "&name=" + enc(name) + "&uuid=" + enc(uuid),
+                ).openConnection() as HttpURLConnection
+            )
+        conn.connectTimeout = 8000
+        conn.readTimeout = 60000
+        conn.requestMethod = "POST"
+        conn.doOutput = true
+        conn.setRequestProperty("Content-Type", "application/octet-stream")
+        conn.setRequestProperty("X-PJM-Index", index.toString())
+        conn.setRequestProperty("X-PJM-Total", total.toString())
+        conn.setFixedLengthStreamingMode(length)
+        try {
+            var sent = 0L
+            conn.outputStream.buffered(256 * 1024).use { out ->
+                file.inputStream().buffered(256 * 1024).use { input ->
+                    val buffer = ByteArray(256 * 1024)
+                    while (true) {
+                        if (isCancelled()) error("已取消")
+                        val n = input.read(buffer)
+                        if (n <= 0) break
+                        out.write(buffer, 0, n)
+                        sent += n
+                        onBytes(sent)
+                    }
+                }
+            }
+            if (sent != length) error("读取长度不一致：" + length + " → " + sent)
+            val code = conn.responseCode
+            val text =
+                (if (code == 200) conn.inputStream else conn.errorStream)
+                    ?.bufferedReader(Charsets.UTF_8)
+                    ?.use { it.readText() }
+                    .orEmpty()
+            if (code != 200) error("HTTP " + code + " " + text)
+            // 电脑端按 uuid 记过账：这个文件它已经有了，只是手机这边不知道
+            return text.contains("\"skipped\":true")
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    /** 告诉电脑端这次推送结束（用于结束对端的「接收中」状态） */
+    fun uploadDone(): Boolean = runCatching { post("/api/pc/uploaddone", "{}").contains("\"ok\":true") }.getOrDefault(false)
 
     /** 把一个文件下载到 target（先写 .part，再由调用方改名） */
     fun download(

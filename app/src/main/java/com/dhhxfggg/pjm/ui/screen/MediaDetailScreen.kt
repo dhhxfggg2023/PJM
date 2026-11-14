@@ -1,5 +1,6 @@
 package com.dhhxfggg.pjm.ui.screen
 
+import com.dhhxfggg.pjm.ui.component.PjmSlider
 import android.content.ComponentName
 import android.content.Context
 import android.graphics.BitmapFactory
@@ -14,6 +15,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -34,17 +36,23 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -65,17 +73,21 @@ import com.dhhxfggg.pjm.R
 import com.dhhxfggg.pjm.data.model.FileEntity
 import com.dhhxfggg.pjm.domain.service.AudioPlaybackService
 import com.dhhxfggg.pjm.domain.util.AudioSettings
+import com.dhhxfggg.pjm.domain.util.EpubExtractor
 import com.dhhxfggg.pjm.domain.util.FileUtils
 import com.dhhxfggg.pjm.domain.util.VaultManager
+import com.dhhxfggg.pjm.ui.component.PlayerProgressBar
 import com.dhhxfggg.pjm.ui.component.VideoSurface
 import com.dhhxfggg.pjm.ui.component.rememberAudioInfo
 import com.dhhxfggg.pjm.ui.component.rememberIsAppVisible
 import com.dhhxfggg.pjm.ui.theme.rememberIconPack
 import com.dhhxfggg.pjm.ui.viewmodel.MediaDetailViewModel
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import me.saket.telephoto.zoomable.ZoomSpec
 import me.saket.telephoto.zoomable.coil3.ZoomableAsyncImage
@@ -365,7 +377,8 @@ private fun VideoPage(
     var isPlaying by remember { mutableStateOf(false) }
     var positionMs by remember { mutableLongStateOf(0L) }
     var durationMs by remember { mutableLongStateOf(0L) }
-    var showControls by remember { mutableStateOf(true) }
+    // 进入播放页不自动弹控制条：画面干净，需要时点一下再出现
+    var showControls by remember { mutableStateOf(false) }
     var scrubbing by remember { mutableStateOf(false) }
     var scrubMs by remember { mutableLongStateOf(0L) }
     var lastScrubSeekAt by remember { mutableLongStateOf(0L) }
@@ -373,17 +386,13 @@ private fun VideoPage(
     var seekHint by remember { mutableStateOf<String?>(null) }
     var videoError by remember { mutableStateOf<String?>(null) }
 
-    // Telegram 式「长按快进/快退」：按住开始 2x，按住的同时左右滑动调整倍速（0.5x~8x）。
-    // 左 1/3 为快退（暂停 + 定时回跳），右 1/3（短视频里是 1/3 右侧）为快进；中间 1/3 长视频不响应。
+    // 长按 = 加速（整个画面统一）：按住 2x，按住的同时左右滑动调整倍速（0.5x~8x）。
+    // 左半边不再有「快速倒退」——那个手势没有实用价值，还容易误触。
     var turboSpeed by remember { mutableFloatStateOf(0f) }
-    var turboForward by remember { mutableStateOf(true) }
     var wasPlayingBeforeTurbo by remember { mutableStateOf(false) }
-    var reverseJob by remember { mutableStateOf<Job?>(null) }
     val turboScope = rememberCoroutineScope()
 
     fun stopTurbo() {
-        reverseJob?.cancel()
-        reverseJob = null
         player.setPlaybackSpeed(1f)
         turboSpeed = 0f
         // 用 playWhenReady（用户是否想让它在播）而不是 isPlaying（此刻是否真的在播）：
@@ -392,31 +401,39 @@ private fun VideoPage(
         player.playWhenReady = wasPlayingBeforeTurbo
     }
 
-    fun startTurbo(forward: Boolean) {
+    fun startTurbo() {
         wasPlayingBeforeTurbo = player.playWhenReady
-        turboForward = forward
         turboSpeed = 2f
-        if (forward) {
-            player.setPlaybackSpeed(2f)
-        } else {
-            player.pause()
-            reverseJob =
-                turboScope.launch {
-                    while (true) {
-                        val step = (400f * turboSpeed).toLong()
-                        player.seekTo((player.currentPosition - step).coerceAtLeast(0L))
-                        delay(200)
-                    }
-                }
-        }
+        player.setPlaybackSpeed(2f)
     }
 
     fun adjustTurbo(deltaX: Float) {
         if (turboSpeed <= 0f) return
-        // 前进：往右拖倍数变大；后退：往左拖倍数变大（方向跟着手走才直觉）
-        val delta = if (turboForward) deltaX else -deltaX
-        turboSpeed = (turboSpeed + delta / 220f).coerceIn(0.5f, 8f)
-        if (turboForward) player.setPlaybackSpeed(turboSpeed)
+        // 往右拖倍数变大、往左拖变小：方向跟着手走才直觉
+        turboSpeed = (turboSpeed + deltaX / 220f).coerceIn(0.5f, 8f)
+        player.setPlaybackSpeed(turboSpeed)
+    }
+
+    // 全屏 / 竖屏由用户自己选：全屏 = 横屏 + 收起系统栏；竖屏 = 保持正常方向和系统栏。
+    // 默认竖屏，想全屏再点一下，不再一进播放页就强行全屏。
+    var fullscreen by remember { mutableStateOf(false) }
+    DisposableEffect(fullscreen) {
+        val activity = context as? android.app.Activity
+        val window = activity?.window
+        val controller = window?.let { androidx.core.view.WindowCompat.getInsetsController(it, it.decorView) }
+        controller?.systemBarsBehavior =
+            androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        if (fullscreen) {
+            activity?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            controller?.hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+        } else {
+            activity?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            controller?.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+        }
+        onDispose {
+            activity?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            controller?.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+        }
     }
 
     LaunchedEffect(player) {
@@ -444,17 +461,22 @@ private fun VideoPage(
                     .pointerInput(durationMs) {
                         detectTapGestures(
                             onTap = { showControls = !showControls },
-                            onDoubleTap = { offset ->
-                                // 按 Telegram PhotoViewer 的分区：左 1/3 后退 10 秒、右 1/3 前进 10 秒，
+                            onDoubleTap = doubleTap@{ offset ->
+                                // 按左右三分区：左 1/3 后退 10 秒、右 1/3 前进 10 秒，
                                 // 中间 1/3 不跳（避免误触），且要求总时长 > 15 秒、目标位置有效
                                 val width = size.width.toFloat()
                                 val position = player.currentPosition.coerceAtLeast(0L)
+                                if (offset.x >= width / 3f && offset.x <= width * 2f / 3f) {
+                                    // 中间双击 = 播放/暂停（最常见的手势，之前被吞了）
+                                    // 双击只做播放/暂停，不弹控制条（一快进就蹦出按钮和进度条很烦）
+                                    if (player.isPlaying) player.pause() else player.play()
+                                    return@doubleTap
+                                }
                                 val target =
                                     when {
                                         durationMs <= 15_000L -> position
                                         offset.x < width / 3f -> (position - 10_000L).coerceAtLeast(0L)
-                                        offset.x > width * 2f / 3f -> (position + 10_000L).coerceAtMost(durationMs)
-                                        else -> position
+                                        else -> (position + 10_000L).coerceAtMost(durationMs)
                                     }
                                 if (target != position) {
                                     player.seekTo(target)
@@ -464,23 +486,20 @@ private fun VideoPage(
                                         seekHint = null
                                     }
                                 }
-                                showControls = true
+                                // 双击只做跳转：不弹进度条、不弹中间按钮，画面保持干净
                             },
                         )
                     }.pointerInput(Unit) {
                         awaitEachGesture {
                             val down = awaitFirstDown(requireUnconsumed = false)
                             var active = false
-                            var forward = true
                             val holdJob =
                                 turboScope.launch {
                                     delay(viewConfiguration.longPressTimeoutMillis)
-                                    // 明确分区：屏幕右半边按住 = 加速，左半边按住 = 快退。
-                                    // 不再按 1/3 切，中间往往刚好落在大拇指位置，反而容易误判。
+                                    // 长按任意位置都是加速；几秒钟的短视频没必要（一下子就播完了）
                                     if (durationMs >= 5_000L) {
-                                        forward = down.position.x > size.width / 2f
                                         active = true
-                                        startTurbo(forward)
+                                        startTurbo()
                                     }
                                 }
                             var lastX = down.position.x
@@ -526,7 +545,7 @@ private fun VideoPage(
                         }
                     },
         )
-        // 双击跳转的一次性提示（像 YouTube / Telegram 那样给个即时反馈）
+        // 双击跳转的一次性提示（给个即时反馈）
         seekHint?.let { hint ->
             Box(
                 modifier =
@@ -581,7 +600,7 @@ private fun VideoPage(
                         .padding(horizontal = 14.dp, vertical = 6.dp),
             ) {
                 Text(
-                    text = (if (turboForward) "▶ " else "◀ ") + String.format("%.1fx", turboSpeed),
+                    text = String.format("%.1fx", turboSpeed),
                     color = Color.White,
                     fontSize = 14.sp,
                 )
@@ -596,15 +615,17 @@ private fun VideoPage(
                             showControls = true
                         },
                         modifier =
+                            // 中间按钮改成实心白圆 + 深色图标：原来半透明黑圆压在画面上，
+                            // 遇到暗场景几乎看不见按钮边界。
                             Modifier
-                                .size(72.dp)
-                                .background(Color.Black.copy(alpha = 0.45f), CircleShape),
+                                .size(54.dp)
+                                .background(Color.White.copy(alpha = 0.92f), CircleShape),
                     ) {
                         Icon(
                             imageVector = if (isPlaying) Lucide.Pause else Lucide.Play,
                             contentDescription = null,
-                            tint = Color.White,
-                            modifier = Modifier.size(38.dp),
+                            tint = Color.Black.copy(alpha = 0.8f),
+                            modifier = Modifier.size(28.dp),
                         )
                     }
                 }
@@ -617,22 +638,40 @@ private fun VideoPage(
                             .padding(horizontal = 16.dp, vertical = 8.dp),
                 ) {
                     val shownMs = if (scrubbing) scrubMs else positionMs
-                    Slider(
-                        value = shownMs.toFloat().coerceIn(0f, durationMs.coerceAtLeast(1L).toFloat()),
-                        valueRange = 0f..durationMs.coerceAtLeast(1L).toFloat(),
-                        onValueChange = {
+                    PlayerProgressBar(
+                        progress = if (durationMs > 0L) shownMs.toFloat() / durationMs else 0f,
+                        onScrub = {
                             scrubbing = true
-                            scrubMs = it.toLong()
+                            scrubMs = (it * durationMs).toLong()
                         },
-                        onValueChangeFinished = {
+                        onSeek = {
+                            scrubMs = (it * durationMs).toLong()
                             player.seekTo(scrubMs)
                             scrubbing = false
                         },
-                        colors = SliderDefaults.colors(inactiveTrackColor = Color.White.copy(alpha = 0.35f)),
+                        activeColor = Color.White,
+                        inactiveColor = Color.White.copy(alpha = 0.3f),
                     )
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Text(formatDuration(shownMs), color = Color.White, fontSize = 12.sp)
+                        Spacer(Modifier.weight(1f))
                         Text(formatDuration(durationMs), color = Color.White, fontSize = 12.sp)
+                        Spacer(Modifier.width(10.dp))
+                        // 全屏 / 竖屏切换：想躺着看就全屏，想竖着刷就保持竖屏
+                        IconButton(
+                            onClick = {
+                                fullscreen = !fullscreen
+                                showControls = true
+                            },
+                            modifier = Modifier.size(30.dp),
+                        ) {
+                            Icon(
+                                imageVector = if (fullscreen) Lucide.Minimize else Lucide.Maximize,
+                                contentDescription = if (fullscreen) "切换竖屏" else "切换全屏",
+                                tint = Color.White,
+                                modifier = Modifier.size(20.dp),
+                            )
+                        }
                     }
                 }
             }
@@ -673,12 +712,25 @@ private fun AudioViewer(
     var showPlaylist by remember { mutableStateOf(false) }
     var sleepSongs by remember { mutableIntStateOf(0) }
     var playedSinceSleep by remember { mutableIntStateOf(0) }
+    var showLyrics by remember { mutableStateOf(false) }
 
     // 整个音频分类就是播放队列：上一首/下一首/随机都能用，不用用户自己挑
     val queueFiles = remember(queue) { queue.map { VaultManager.getFileFromEntity(context, it) } }
     val start = startIndex.coerceIn(0, (queueFiles.size - 1).coerceAtLeast(0))
     val currentFile = queueFiles.getOrNull(currentIndex) ?: file
     val info = rememberAudioInfo(currentFile)
+    // 歌词：优先内嵌（ID3 USLT 等）。库里的文件都是 UUID 名，旁边不会有同名 .lrc
+    val lyrics by
+        androidx.compose.runtime.produceState(emptyList<Pair<Long, String>>(), currentFile) {
+            value =
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    runCatching {
+                        // 内嵌 ID3 的 USLT 没有系统 API 可读；这里读同目录同名的 .lrc（自己放进库里的歌词）
+                        val lrc = java.io.File(currentFile.parentFile, currentFile.nameWithoutExtension + ".lrc")
+                        if (lrc.isFile) parseLrc(lrc.readText()) else emptyList()
+                    }.getOrDefault(emptyList())
+                }
+        }
 
     DisposableEffect(Unit) {
         val token =
@@ -865,16 +917,18 @@ private fun AudioViewer(
             )
             Spacer(Modifier.weight(1f))
             Box(modifier = Modifier.fillMaxWidth()) {
-                Slider(
-                    value = if (durationMs > 0L) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f,
-                    onValueChange = { fraction ->
+                PlayerProgressBar(
+                    progress = if (durationMs > 0L) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f,
+                    onScrub = { fraction ->
                         dragging = true
                         positionMs = (fraction * durationMs).toLong()
                     },
-                    onValueChangeFinished = {
+                    onSeek = {
+                        positionMs = (it * durationMs).toLong()
                         controller?.seekTo(positionMs)
                         dragging = false
                     },
+                    activeColor = MaterialTheme.colorScheme.primary,
                 )
                 // 拖动时在上方冒一个时间气泡，松手才真正跳转
                 if (dragging) {
@@ -956,6 +1010,11 @@ private fun AudioViewer(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceEvenly,
             ) {
+                if (lyrics.isNotEmpty()) {
+                    TextButton(onClick = { showLyrics = true }) {
+                        Text("歌词", color = Color.White.copy(alpha = 0.85f), fontSize = 12.sp)
+                    }
+                }
                 // 倍速：弹菜单一次看到全部档位，点哪个是哪个（原来只能一个个轮换）
                 Box {
                     var speedMenu by remember { mutableStateOf(false) }
@@ -1095,27 +1154,100 @@ private fun AudioViewer(
                 }
             }
         }
+
+        // 歌词：内嵌歌词（LRC 格式）逐行显示，当前行高亮，点一句跳过去
+        if (showLyrics) {
+            ModalBottomSheet(onDismissRequest = { showLyrics = false }) {
+                val listState =
+                    androidx.compose.foundation.lazy
+                        .rememberLazyListState()
+                val activeIndex = lyrics.indexOfLast { it.first <= positionMs }
+                LaunchedEffect(activeIndex) {
+                    if (activeIndex > 0) {
+                        runCatching { listState.animateScrollToItem(activeIndex) }
+                    }
+                }
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 480.dp).padding(bottom = 24.dp),
+                ) {
+                    items(lyrics.size) { index ->
+                        val (startMs, text) = lyrics[index]
+                        val active = index == activeIndex
+                        Text(
+                            text = text,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
+                            modifier =
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clickable { controller?.seekTo(startMs) }
+                                    .padding(horizontal = 20.dp, vertical = 8.dp),
+                        )
+                    }
+                }
+            }
+        }
     }
+}
+
+/** LRC 歌词解析：[mm:ss.xx] / [mm:ss:xx] 都可，同一行多个时间标签按每个时间各算一行 */
+private val LRC_TAG = Regex("\\[(\\d{1,2}):(\\d{2})(?:[.:](\\d{1,3}))?\\]")
+
+private fun parseLrc(raw: String): List<Pair<Long, String>> {
+    val out = mutableListOf<Pair<Long, String>>()
+    raw.lineSequence().forEach { line ->
+        val matches = LRC_TAG.findAll(line).toList()
+        if (matches.isEmpty()) return@forEach
+        val text = line.replace(LRC_TAG, "").trim()
+        if (text.isEmpty()) return@forEach
+        matches.forEach { match ->
+            val minutes = match.groupValues[1].toLongOrNull() ?: 0L
+            val seconds = match.groupValues[2].toLongOrNull() ?: 0L
+            val frac = match.groupValues[3]
+            val millis =
+                when (frac.length) {
+                    0 -> 0L
+                    1 -> frac.toLongOrNull()?.times(100) ?: 0L
+                    2 -> frac.toLongOrNull()?.times(10) ?: 0L
+                    else -> frac.toLongOrNull() ?: 0L
+                }
+            out.add((minutes * 60_000L + seconds * 1000L + millis) to text)
+        }
+    }
+    return out.sortedBy { it.first }
 }
 
 // ---------------- 文本 ----------------
 
-/** 阅读器配色：夜间 / 米黄 / 护眼 */
+/** 阅读器配色方案 */
 private data class ReaderTheme(
+    val name: String,
     val background: Long,
     val foreground: Long,
 )
 
+// 常用阅读配色：夜间、纸黄、护眼、纯白、深蓝、高对比
 private val READER_THEMES =
     listOf(
-        ReaderTheme(0xFF0D0D0F, 0xFFE7E2D6),
-        ReaderTheme(0xFFF6EFE3, 0xFF3B332A),
-        ReaderTheme(0xFFCCE8CF, 0xFF20301F),
+        ReaderTheme("夜间", 0xFF0D0D0F, 0xFFE7E2D6),
+        ReaderTheme("纸黄", 0xFFF6EFE3, 0xFF3B332A),
+        ReaderTheme("护眼", 0xFFCCE8CF, 0xFF20301F),
+        ReaderTheme("纯白", 0xFFFFFFFF, 0xFF1D1D1F),
+        ReaderTheme("深蓝", 0xFF14202E, 0xFFC9D6E3),
+        ReaderTheme("高对比", 0xFF000000, 0xFFFFFFFF),
     )
 
 /** 常见网文章节标题（第 X 章/节/回/卷… 或 Chapter N，以及卷首语） */
 private val CHAPTER_PATTERN =
-    Regex("^\\s*(第[0-9零一二三四五六七八九十百千两]{1,10}[章节回卷集部篇].*|Chapter\\s+\\d+.*|序章|楔子|前言|后记)$", RegexOption.IGNORE_CASE)
+    Regex(
+        // 只认「第 X 章/节/回…」开头、后面可以跟冒号/空格/间隔号再接标题的行；
+        // 原来用 .* 吞掉整行，正文里以「第十一章」开头的句子也会被当成章节，
+        // 于是目录里出现几十个字的长标题、章节顺序看着像乱的。
+        "^\\s*(第[0-9零一二三四五六七八九十百千两]{1,10}[章节回卷集部篇](\\s*[:：、.·—\\-]\\s*.{0,30})?|Chapter\\s+[0-9]{1,4}(\\s*[:：.\\-]\\s*.{0,30})?|序章|楔子|前言|后记)\\s*$",
+        RegexOption.IGNORE_CASE,
+    )
 
 /**
  * 文本阅读器（分页小说模式，参考主流开源阅读器）：章节识别、目录跳转、三套配色、翻页记忆。
@@ -1137,6 +1269,10 @@ private fun TextViewer(
     val positionKey = remember(file.absolutePath) { "page_" + file.absolutePath.hashCode() }
 
     var rawText by remember { mutableStateOf<String?>(null) }
+    // 实际可用高度（px）：由 pager 测量得到，分页就按这个真值算，不再靠屏幕尺寸猜
+    var viewportHeightPx by remember { mutableIntStateOf(0) }
+    // EPUB 自带目录：段落序号 → 章节标题
+    var epubChapters by remember(file.absolutePath) { mutableStateOf<Map<Int, String>>(emptyMap()) }
     var pages by remember { mutableStateOf<List<List<String>>?>(null) }
     // 整本还没排完时给个明确提示：不然用户只看到页码在涨，以为卡住了
     var layoutDone by remember { mutableStateOf(false) }
@@ -1149,19 +1285,50 @@ private fun TextViewer(
     var showChapters by remember { mutableStateOf(false) }
     // 排版/配色等设置全部收进独立浮窗，工具条只留导航与进度
     var showSettings by remember { mutableStateOf(false) }
+    val focusRequester =
+        remember {
+            androidx.compose.ui.focus
+                .FocusRequester()
+        }
+    val bookmarkKey = "bm_" + file.absolutePath.hashCode()
+    var bookmarks by remember(file.absolutePath) {
+        mutableStateOf(
+            prefs
+                .getStringSet(bookmarkKey, emptySet())!!
+                .map { it.toIntOrNull() }
+                .filterNotNull()
+                .toSet(),
+        )
+    }
+
+    fun toggleBookmark(page: Int) {
+        bookmarks = if (page in bookmarks) bookmarks - page else bookmarks + page
+        prefs.edit().putStringSet(bookmarkKey, bookmarks.map { it.toString() }.toSet()).apply()
+    }
     val scope = rememberCoroutineScope()
     val pagerState = rememberPagerState(0) { (pages?.size ?: 1).coerceAtLeast(1) }
     val theme = READER_THEMES[themeIndex.coerceIn(0, READER_THEMES.size - 1)]
+    // 状态栏高度（dp）：页面上下留白要和分页时算的一致
+    val topInsetDp = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
 
     LaunchedEffect(file.absolutePath) {
+        val isEpub = file.extension.equals("epub", ignoreCase = true)
         rawText =
             withContext(Dispatchers.IO) {
-                runCatching { decodeText(readLimitedBytes(file, 3L * 1024 * 1024)) }.getOrNull()
+                if (isEpub) {
+                    val book = runCatching { EpubExtractor.extract(file) }.getOrNull()
+                    epubChapters = book?.chapters ?: emptyMap()
+                    book?.text
+                } else {
+                    runCatching { decodeText(readLimitedBytes(file, 3L * 1024 * 1024)) }.getOrNull()
+                }
             }
     }
 
-    LaunchedEffect(rawText, fontSize, lineSpacing, marginDp, configuration.screenWidthDp, configuration.screenHeightDp) {
+    LaunchedEffect(rawText, epubChapters, fontSize, lineSpacing, marginDp, configuration.screenWidthDp, viewportHeightPx, topInsetDp) {
         val body = rawText ?: return@LaunchedEffect
+        // 还没测量到可用高度就先不排：否则会按 0 高度算出满屏一页
+        if (viewportHeightPx <= 0) return@LaunchedEffect
         pages = null
         layoutDone = false
         val paragraphs =
@@ -1176,20 +1343,21 @@ private fun TextViewer(
                 lineHeight = (fontSize * lineSpacing).sp,
                 fontFamily = FontFamily.Serif,
                 color = Color(theme.foreground),
+                // 关掉字体额外内边距：否则每行上下各多几像素，行高越大偏差累加越多，
+                // 分页按「行数 × 行高」算，实际渲染更高，文字就会被顶到页面外。
+                platformStyle = PlatformTextStyle(includeFontPadding = false),
             )
         val pageWidth = with(density) { (configuration.screenWidthDp.dp - (marginDp * 2).dp).toPx() }
-        // 底部工具条（进度 + 按钮）比原来高，正文可用的高度相应减少
-        val pageHeight = with(density) { (configuration.screenHeightDp.dp - 176.dp).toPx() }
-        val gap = with(density) { 6.dp.toPx() }
+        // 正文可用高度 = pager 实测高度 − 状态栏 − 上下 padding（8 + 28）− 2dp 余量
+        // 用实测值而不是屏幕尺寸推算：差几 dp 就会表现为「底部空一块」或「最后一行被切掉」
+        val pageHeight =
+            (viewportHeightPx.toFloat() - with(density) { topInsetDp.toPx() } - with(density) { (8 + 28).dp.toPx() } - with(density) { 2.dp.toPx() })
+                .coerceAtLeast(1f)
+        // 必须和实际渲染的 padding(bottom = 4.dp) 一致，否则每段多算 2dp，段落一多就溢出
+        val gap = with(density) { 4.dp.toPx() }
         // 量行数改用 android.text.StaticLayout：和 Compose 用的是同一套 Minikin 断行，
         // 但可以在后台线程跑、不受「每帧只排几毫秒」的限制。行高用 style 里定死的 lineHeight。
         val lineHeightPx = with(density) { (fontSize * lineSpacing).sp.toPx() }
-        val measurePaint =
-            TextPaint().apply {
-                typeface = Typeface.SERIF
-                textSize = with(density) { fontSize.sp.toPx() }
-                isAntiAlias = true
-            }
         val measureWidth = pageWidth.toInt().coerceAtLeast(1)
 
         // 分页缓存：同一本书 + 同一套排版参数（字号/行距/边距/屏幕尺寸）直接复用上次算好的页边界，
@@ -1197,7 +1365,14 @@ private fun TextViewer(
         val cacheFile =
             readerCacheFile(
                 context,
-                readerCacheKey(file, fontSize, lineSpacing, marginDp, configuration.screenWidthDp, configuration.screenHeightDp),
+                readerCacheKey(
+                    file,
+                    fontSize,
+                    lineSpacing,
+                    marginDp,
+                    configuration.screenWidthDp,
+                    (viewportHeightPx - topInsetDp.value.toInt()).toInt(),
+                ),
             )
         readPageCache(cacheFile, paragraphs.size)?.let { cache ->
             val cachedPages = ArrayList<List<String>>(cache.starts.size)
@@ -1209,7 +1384,14 @@ private fun TextViewer(
             pages = cachedPages
             chapters = cache.chapters.map { (paragraphIndex, title) -> title to cache.pageOf(paragraphIndex) }
             val savedPage = prefs.getInt(positionKey, 0)
-            if (savedPage in cachedPages.indices) pagerState.scrollToPage(savedPage)
+            val savedRatio = prefs.getFloat(positionKey + "_ratio", -1f)
+            val resumePage =
+                when {
+                    savedPage in cachedPages.indices -> savedPage
+                    savedRatio in 0f..1f -> (savedRatio * (cachedPages.size - 1).coerceAtLeast(1)).toInt()
+                    else -> 0
+                }
+            if (resumePage in cachedPages.indices) pagerState.scrollToPage(resumePage)
             layoutDone = true
             return@LaunchedEffect
         }
@@ -1221,56 +1403,85 @@ private fun TextViewer(
         var current = mutableListOf<String>()
         var used = 0f
         val saved = prefs.getInt(positionKey, 0)
-        var restored = false
 
-        // 排版改成「后台整块量、主线程贴结果」：
-        // 旧实现把量高放在主线程、每帧只给 6ms，一本大书要排十几秒，期间一直"排版中"；
-        // 现在量高整块丢到 Default 线程，主线程不再被占，第一块排完（约 1-3 页）立刻出字。
+        // 量行是整个排版里最贵的一步：每段一次 StaticLayout，一本大书就是几万次。
+        // 段落高度只取决于「这一段 + 页面宽度」，彼此独立 —— 所以按核数切片并行量，
+        // 算完再顺序铺页；主线程只负责贴结果，不再一段一段等。
+        val heights = FloatArray(paragraphs.size)
+        suspend fun measureSlice(
+            from: Int,
+            to: Int,
+        ) {
+            // Paint 不是线程安全的：每条协程自己一份
+            val paint =
+                TextPaint().apply {
+                    typeface = Typeface.SERIF
+                    textSize = with(density) { fontSize.sp.toPx() }
+                    isAntiAlias = true
+                }
+            for (index in from until to) {
+                val paragraph = paragraphs[index]
+                heights[index] =
+                    if (paragraph.isEmpty()) {
+                        gap * 1.5f
+                    } else {
+                        val lines =
+                            StaticLayout
+                                .Builder
+                                .obtain(paragraph, 0, paragraph.length, paint, measureWidth)
+                                .setIncludePad(false)
+                                .setLineSpacing(0f, 1f)
+                                // 和 Compose 侧一致的简单断行；不做连字符/高质量断行，省掉多余开销
+                                .setBreakStrategy(android.text.Layout.BREAK_STRATEGY_SIMPLE)
+                                .setHyphenationFrequency(android.text.Layout.HYPHENATION_FREQUENCY_NONE)
+                                .build()
+                                .lineCount
+                        lines * lineHeightPx + gap
+                    }
+            }
+        }
+
         suspend fun publishChunk() {
             withContext(Dispatchers.Main) {
                 pages = result.toList()
                 chapters = chapterEntries.toList()
-                if (!restored && saved in result.indices) {
-                    restored = true
-                    pagerState.scrollToPage(saved)
-                }
             }
         }
 
+        val sliceCount = Runtime.getRuntime().availableProcessors().coerceIn(1, 8)
         var cursor = 0
         var chunk = 120 // 第一块小一点：点开就能看到字
         while (cursor < paragraphs.size) {
             val end = minOf(cursor + chunk, paragraphs.size)
-            withContext(Dispatchers.Default) {
-                for (index in cursor until end) {
-                    val paragraph = paragraphs[index]
-                    val height =
-                        if (paragraph.isEmpty()) {
-                            gap * 1.5f
-                        } else {
-                            val lines =
-                                StaticLayout
-                                    .Builder
-                                    .obtain(paragraph, 0, paragraph.length, measurePaint, measureWidth)
-                                    .setIncludePad(false)
-                                    .setLineSpacing(0f, 1f)
-                                    .build()
-                                    .lineCount
-                            lines * lineHeightPx + gap
-                        }
-                    if (used + height > pageHeight && current.isNotEmpty()) {
-                        result.add(current)
-                        current = mutableListOf()
-                        used = 0f
-                        pageStarts.add(index)
-                    }
-                    if (CHAPTER_PATTERN.matches(paragraph)) {
-                        chapterEntries.add(paragraph.trim() to result.size)
-                        chapterParagraphs.add(index to paragraph.trim())
-                    }
-                    current.add(paragraph)
-                    used += height
+            val step = ((end - cursor) + sliceCount - 1) / sliceCount
+            coroutineScope {
+                (0 until sliceCount)
+                    .mapNotNull { k ->
+                        val from = cursor + k * step
+                        if (from >= end) null else async(Dispatchers.Default) { measureSlice(from, minOf(from + step, end)) }
+                    }.awaitAll()
+            }
+            for (index in cursor until end) {
+                val height = heights[index]
+                if (used + height > pageHeight && current.isNotEmpty()) {
+                    result.add(current)
+                    current = mutableListOf()
+                    used = 0f
+                    pageStarts.add(index)
                 }
+                val paragraph = paragraphs[index]
+                // EPUB 用书内自带目录；txt 才靠标题正则识别（过长的不算，正文里「第 X 章」太多）
+                val explicitTitle = epubChapters[index]
+                val chapterTitle =
+                    explicitTitle
+                        ?: paragraph.trim().takeIf { it.length <= 48 && CHAPTER_PATTERN.matches(it) }
+                if (chapterTitle != null) {
+                    val clean = chapterTitle.replace(Regex("\\s+"), " ").trim()
+                    chapterEntries.add(clean to result.size)
+                    chapterParagraphs.add(index to clean)
+                }
+                current.add(paragraph)
+                used += height
             }
             cursor = end
             chunk = 600
@@ -1281,20 +1492,47 @@ private fun TextViewer(
         pages = result
         chapters = chapterEntries
         layoutDone = true
-        if (!restored && saved in result.indices) pagerState.scrollToPage(saved)
+        // 恢复阅读位置：优先按「整本百分比」——换字号/行距后页数会变，百分比才不会跳错地方
+        run {
+            val savedRatio = prefs.getFloat(positionKey + "_ratio", -1f)
+            val target =
+                when {
+                    savedRatio in 0f..1f -> (savedRatio * (result.size - 1).coerceAtLeast(1)).toInt()
+                    saved in result.indices -> saved
+                    else -> 0
+                }
+            if (target in result.indices) pagerState.scrollToPage(target)
+        }
         withContext(Dispatchers.IO) { writePageCache(cacheFile, paragraphs.size, pageStarts, chapterParagraphs) }
     }
 
     LaunchedEffect(pagerState, pages) {
         if (pages.isNullOrEmpty()) return@LaunchedEffect
         snapshotFlow { pagerState.currentPage }.collect { page ->
-            prefs.edit().putInt(positionKey, page).apply()
+            val total = (pages?.size ?: 0).coerceAtLeast(1)
+            val ratio = (page.toFloat() / (total - 1).coerceAtLeast(1)).coerceIn(0f, 1f)
+            prefs
+                .edit()
+                .putInt(positionKey, page)
+                .putFloat(positionKey + "_ratio", ratio)
+                .apply()
         }
     }
     LaunchedEffect(showChrome) {
         if (showChrome) {
             delay(2600)
             showChrome = false
+        }
+    }
+    LaunchedEffect(Unit) { runCatching { focusRequester.requestFocus() } }
+    DisposableEffect(Unit) {
+        onDispose {
+            val activity = context as? android.app.Activity
+            activity?.window?.let { window ->
+                val attrs = window.attributes
+                attrs.screenBrightness = android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+                window.attributes = attrs
+            }
         }
     }
 
@@ -1306,7 +1544,14 @@ private fun TextViewer(
             color = Color(theme.foreground),
         )
 
-    Box(modifier = Modifier.fillMaxSize().background(Color(theme.background))) {
+    // 视口高度在根容器上量：它一直都在，分页不必等 pager 组合出来才开始
+    Box(
+        modifier =
+            Modifier
+                .fillMaxSize()
+                .background(Color(theme.background))
+                .onSizeChanged { viewportHeightPx = it.height },
+    ) {
         val pageList = pages
         when {
             rawText == null || pageList == null ->
@@ -1327,7 +1572,28 @@ private fun TextViewer(
                     modifier =
                         Modifier
                             .fillMaxSize()
-                            .pointerInput(Unit) {
+                            .focusRequester(focusRequester)
+                            .focusable()
+                            .onPreviewKeyEvent { event ->
+                                if (event.type != androidx.compose.ui.input.key.KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                                when (event.key) {
+                                    androidx.compose.ui.input.key.Key.VolumeDown -> {
+                                        scope.launch {
+                                            pagerState.animateScrollToPage((pagerState.currentPage - 1).coerceAtLeast(0))
+                                        }
+                                        true
+                                    }
+                                    androidx.compose.ui.input.key.Key.VolumeUp -> {
+                                        scope.launch {
+                                            pagerState.animateScrollToPage(
+                                                (pagerState.currentPage + 1).coerceAtMost(pagerState.pageCount - 1),
+                                            )
+                                        }
+                                        true
+                                    }
+                                    else -> false
+                                }
+                            }.pointerInput(Unit) {
                                 detectTapGestures { offset ->
                                     when {
                                         offset.x < size.width * 0.3f ->
@@ -1340,7 +1606,11 @@ private fun TextViewer(
                                                     (pagerState.currentPage + 1).coerceAtMost(pagerState.pageCount - 1),
                                                 )
                                             }
-                                        else -> showChrome = !showChrome
+                                        else -> {
+                                            // 点中间 = 唤出底部阅读设置（不再只是开关工具条）
+                                            showChrome = false
+                                            showSettings = true
+                                        }
                                     }
                                 }
                             },
@@ -1352,7 +1622,9 @@ private fun TextViewer(
                             modifier =
                                 Modifier
                                     .fillMaxSize()
-                                    .padding(start = marginDp.dp, end = marginDp.dp, top = 18.dp, bottom = 36.dp),
+                                    // 顶部让开状态栏/挖孔，底部让开手势区：正文不贴边
+                                    .statusBarsPadding()
+                                    .padding(start = marginDp.dp, end = marginDp.dp, top = 8.dp, bottom = 28.dp),
                         ) {
                             page.forEach { paragraph ->
                                 Text(
@@ -1366,7 +1638,7 @@ private fun TextViewer(
                 }
                 AnimatedVisibility(visible = showChrome, enter = fadeIn(), exit = fadeOut()) {
                     Column(modifier = Modifier.fillMaxSize()) {
-                        // 顶栏只放导航：返回 / 标题 / 目录 / 设置（排版类全部进浮窗）
+                        // 顶栏只放导航：返回 / 标题 / 目录 / 书签（设置改成点屏幕中间唤出底部面板）
                         Row(
                             modifier =
                                 Modifier
@@ -1385,13 +1657,16 @@ private fun TextViewer(
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f),
                             )
-                            if (chapters.isNotEmpty()) {
-                                IconButton(onClick = { showChapters = true }) {
-                                    Icon(Lucide.ListTodo, "目录", tint = Color.White)
-                                }
+                            // 目录按钮常驻：即使这本书没识别到章节，面板里还有书签列表
+                            IconButton(onClick = { showChapters = true }) {
+                                Icon(Lucide.ListTodo, "目录与书签", tint = Color.White)
                             }
-                            IconButton(onClick = { showSettings = true }) {
-                                Icon(Lucide.Settings, "阅读设置", tint = Color.White)
+                            val bookmarked = pagerState.currentPage in bookmarks
+                            TextButton(onClick = { toggleBookmark(pagerState.currentPage) }) {
+                                Text(
+                                    text = if (bookmarked) "已书签" else "书签",
+                                    color = if (bookmarked) Color(0xFFF2C14E) else Color.White,
+                                )
                             }
                         }
                         Spacer(Modifier.weight(1f))
@@ -1402,24 +1677,7 @@ private fun TextViewer(
                                     .background(Color.Black.copy(alpha = 0.55f))
                                     .padding(horizontal = 8.dp, vertical = 4.dp),
                         ) {
-                            // 进度条：任意位置都能直接跳过去，不用一页页翻
-                            Slider(
-                                value = pagerState.currentPage.toFloat(),
-                                valueRange = 0f..(pageList.size - 1).coerceAtLeast(1).toFloat(),
-                                onValueChange = { value ->
-                                    scope.launch {
-                                        pagerState.scrollToPage(value.toInt().coerceIn(0, pageList.size - 1))
-                                    }
-                                },
-                                colors =
-                                    SliderDefaults.colors(
-                                        thumbColor = Color.White,
-                                        activeTrackColor = Color.White.copy(alpha = 0.85f),
-                                        inactiveTrackColor = Color.White.copy(alpha = 0.25f),
-                                    ),
-                                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
-                            )
-                            // 页码常显在页面右下角，这里只保留进度条
+                            // 阅读页不放进度条：翻页用点击左右区域/目录/音量键，页码常显在右下角
                         }
                     }
                 }
@@ -1427,8 +1685,7 @@ private fun TextViewer(
                 Text(
                     text =
                         (pagerState.currentPage + 1).toString() + " / " + pageList.size +
-                            "  ·  " + ((pagerState.currentPage + 1) * 100 / pageList.size) + "%" +
-                            (if (layoutDone) "" else " · 排版中"),
+                            "  ·  " + ((pagerState.currentPage + 1) * 100 / pageList.size) + "%",
                     color = Color(theme.foreground).copy(alpha = 0.5f),
                     fontSize = 11.sp,
                     modifier = Modifier.align(Alignment.BottomEnd).padding(end = 14.dp, bottom = 10.dp),
@@ -1443,6 +1700,17 @@ private fun TextViewer(
             lineSpacing = lineSpacing,
             marginDp = marginDp,
             themeIndex = themeIndex,
+            onOpenToc = {
+                showSettings = false
+                showChapters = true
+            },
+            onReset = {
+                fontSize = 17f
+                lineSpacing = 1.8f
+                marginDp = 18
+                themeIndex = 0
+                prefs.edit().putFloat("font_size", 17f).putFloat("line_spacing", 1.8f).putInt("margin_dp", 18).putInt("theme_index", 0).apply()
+            },
             onFontSize = {
                 fontSize = it
                 prefs.edit().putFloat("font_size", it).apply()
@@ -1466,6 +1734,46 @@ private fun TextViewer(
     if (showChapters) {
         ModalBottomSheet(onDismissRequest = { showChapters = false }) {
             LazyColumn(modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
+                if (bookmarks.isNotEmpty()) {
+                    item {
+                        Column {
+                            Text(
+                                text = "书签（" + bookmarks.size + "）",
+                                style = MaterialTheme.typography.titleSmall,
+                                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+                            )
+                            bookmarks.sorted().forEach { page ->
+                                Row(
+                                    modifier =
+                                        Modifier
+                                            .fillMaxWidth()
+                                            .clickable {
+                                                showChapters = false
+                                                scope.launch { pagerState.scrollToPage(page.coerceIn(0, (pages?.size ?: 1) - 1)) }
+                                            }.padding(horizontal = 20.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        text = "第 " + (page + 1) + " 页",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    TextButton(onClick = { toggleBookmark(page) }) {
+                                        Text("删除", color = MaterialTheme.colorScheme.error)
+                                    }
+                                }
+                            }
+                            HorizontalDivider()
+                        }
+                    }
+                }
+                item {
+                    Text(
+                        text = "目录（" + chapters.size + " 章）",
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+                    )
+                }
                 items(chapters.size) { index ->
                     val (chapterTitle, page) = chapters[index]
                     val current = chapters.indexOfLast { it.second <= pagerState.currentPage } == index
@@ -1516,6 +1824,8 @@ private fun ReaderSettingsSheet(
     onLineSpacing: (Float) -> Unit,
     onMargin: (Int) -> Unit,
     onTheme: (Int) -> Unit,
+    onOpenToc: () -> Unit,
+    onReset: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
@@ -1523,39 +1833,75 @@ private fun ReaderSettingsSheet(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 28.dp),
         ) {
             Text("阅读设置", style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(10.dp))
-            LabeledSlider("字号", fontSize, 14f..30f, 15) { onFontSize(it.coerceIn(14f, 30f)) }
-            LabeledSlider("行距", lineSpacing, 1.2f..2.6f, 13) { onLineSpacing(it.coerceIn(1.2f, 2.6f)) }
-            LabeledSlider("左右边距", marginDp.toFloat(), 8f..40f, 31) { onMargin(it.toInt().coerceIn(8, 40)) }
-            Spacer(Modifier.height(10.dp))
-            Text(
-                "配色",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            Spacer(Modifier.height(6.dp))
+            // 常用设置放在最外层：字号 / 行高 / 左右边距
+            StepperRow("字号", fontSize.toInt().toString(), { onFontSize((fontSize - 1f).coerceAtLeast(14f)) }, { onFontSize((fontSize + 1f).coerceAtMost(30f)) })
+            StepperRow(
+                "行高",
+                String.format(Locale.US, "%.1f×", lineSpacing),
+                { onLineSpacing((lineSpacing - 0.1f).coerceAtLeast(1.2f)) },
+                { onLineSpacing((lineSpacing + 0.1f).coerceAtMost(2.6f)) },
             )
+            StepperRow("左右边距", marginDp.toString(), { onMargin((marginDp - 2).coerceAtLeast(8)) }, { onMargin((marginDp + 2).coerceAtMost(40)) })
             Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("配色", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 READER_THEMES.forEachIndexed { index, item ->
-                    Box(
-                        modifier =
-                            Modifier
-                                .size(48.dp)
-                                .clip(CircleShape)
-                                .background(Color(item.background))
-                                .border(
-                                    width = if (index == themeIndex) 2.dp else 1.dp,
-                                    color =
-                                        if (index == themeIndex) {
-                                            MaterialTheme.colorScheme.primary
-                                        } else {
-                                            Color(item.foreground).copy(alpha = 0.5f)
-                                        },
-                                    shape = CircleShape,
-                                ).clickable { onTheme(index) },
-                    )
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Box(
+                            modifier =
+                                Modifier
+                                    .size(44.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(item.background))
+                                    .border(
+                                        width = if (index == themeIndex) 2.dp else 1.dp,
+                                        color =
+                                            if (index == themeIndex) {
+                                                MaterialTheme.colorScheme.primary
+                                            } else {
+                                                Color(item.foreground).copy(alpha = 0.5f)
+                                            },
+                                        shape = CircleShape,
+                                    ).clickable { onTheme(index) },
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            item.name,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (index == themeIndex) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
+            Spacer(Modifier.height(4.dp))
+            TextButton(onClick = onReset) { Text("恢复默认排版") }
         }
+    }
+}
+
+@Composable
+private fun StepperRow(
+    label: String,
+    valueText: String,
+    onMinus: () -> Unit,
+    onPlus: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, style = MaterialTheme.typography.bodySmall, modifier = Modifier.width(72.dp))
+        Spacer(Modifier.weight(1f))
+        TextButton(onClick = onMinus) { Text("−", style = MaterialTheme.typography.titleLarge) }
+        Text(
+            text = valueText,
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.width(60.dp),
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+        )
+        TextButton(onClick = onPlus) { Text("+", style = MaterialTheme.typography.titleLarge) }
     }
 }
 
@@ -1569,11 +1915,11 @@ private fun LabeledSlider(
 ) {
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(label, style = MaterialTheme.typography.bodySmall, modifier = Modifier.width(64.dp))
-        Slider(
+        // 用应用内统一的细轨滑条，不用 Material 默认那个又厚又碎的样式
+        PjmSlider(
             value = value,
             onValueChange = onChange,
             valueRange = range,
-            steps = steps,
             modifier = Modifier.weight(1f),
         )
         Text(

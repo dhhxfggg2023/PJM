@@ -136,7 +136,10 @@ class MainActivity : ComponentActivity() {
             val settings = uiState.settings
             // 核心修复：多任务进度模型 —— 并行的后台任务各自独立进度条
             val activeTasks by VaultManager.activeTasks.collectAsState()
-            val opTasks = activeTasks.filter { it.isActive }.take(3) // 最多同时显示 3 个
+            // 同一时间只显示一条进度：多个任务叠三根进度条既挤又互相遮挡
+            val activeList = activeTasks.filter { it.isActive }
+            val opTasks = activeList.take(1)
+            val otherTaskCount = (activeList.size - 1).coerceAtLeast(0)
             val opState = opTasks.firstOrNull()
 
             // 实时同步全局焦点

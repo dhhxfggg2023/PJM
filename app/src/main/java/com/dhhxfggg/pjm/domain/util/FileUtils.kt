@@ -70,6 +70,7 @@ object FileUtils {
     private val TEXT_EXT =
         setOf(
             "txt",
+            "epub",
             "md",
             "markdown",
             "log",
@@ -140,7 +141,7 @@ object FileUtils {
      */
     fun normalizedDisplayName(entity: FileEntity): String {
         if (entity.extension.equals("pjm", ignoreCase = true)) return entity.name
-        if (!entity.isImage && entity.name.isNotBlank() && !isDiskName(entity)) return entity.name
+        if (!entity.isImage && entity.name.isNotBlank() && !isMachineName(entity)) return entity.name
         // 用「入库时间」而不是文件自身时间：重命名/复制过的文件 lastModified 会变，入库时间不会
         val ts = compactTsFormat.get()?.format(Date(entity.importedAt.takeIf { it > 0 } ?: entity.lastModified)) ?: "unknown"
         // 只保留时间，不再加 PJM_ 前缀（保持和老库里的命名一致）
@@ -150,6 +151,19 @@ object FileUtils {
 
     /** 名字是否就是磁盘文件名（UUID）——说明这个文件没留下可读原名 */
     private fun isDiskName(entity: FileEntity): Boolean = entity.name.equals(entity.relativePath.substringAfterLast('/'), ignoreCase = true)
+
+    /**
+     * 名字是不是「机器名」：磁盘 UUID、纯十六进制哈希、纯数字时间戳。
+     * 这类名字在列表里认不出是什么文件，界面上应该换成可读的名字。
+     */
+    fun isMachineName(entity: FileEntity): Boolean {
+        if (isDiskName(entity)) return true
+        val base = entity.name.substringBeforeLast('.').trim()
+        if (base.isEmpty()) return true
+        if (base.length >= 8 && base.all { it.isDigit() || it in 'a'..'f' || it in 'A'..'F' }) return true
+        if (base.length >= 9 && base.all { it.isDigit() }) return true
+        return false
+    }
 
     /**
      * 获得一个“文件名为规范名、且可被 FileProvider 暴露/分享”的副本。

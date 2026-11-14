@@ -15,6 +15,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.composables.icons.lucide.CircleCheck
 import com.composables.icons.lucide.Lucide
 import com.dhhxfggg.pjm.data.model.FileEntity
@@ -86,13 +87,9 @@ fun FileCard(
                 modifier
                     .fillMaxWidth()
                     .clip(shape)
-                    .background(
-                        if (isSelected) {
-                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
-                        } else {
-                            MaterialTheme.colorScheme.surface
-                        },
-                    ).then(selectionBorder)
+                    // 图片铺满整格：底色用接近中性的深色，缩略图还没解码出来时也不会是一块浅灰
+                    .background(Color.Black.copy(alpha = 0.06f))
+                    .then(selectionBorder)
                     .combinedClickable(onClick = onClick, onLongClick = onLongClick),
             contentAlignment = Alignment.Center,
         ) {
@@ -110,16 +107,12 @@ fun FileCard(
                     fileEntity = fileEntity,
                     size = thumbnailSizeFor(gridSpanCount),
                     crossfade = false, // 相册滚动时逐张淡入会持续触发动画，明显掉帧
+                    // 必须裁剪填充：Fit 会在两侧/上下留出底色，看起来就是一圈浅灰色
+                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
                     modifier = Modifier.fillMaxSize(),
                 )
             }
             if (isSelected) {
-                Box(
-                    modifier =
-                        Modifier
-                            .fillMaxSize()
-                            .background(Color.Black.copy(alpha = 0.2f)),
-                )
                 Icon(
                     imageVector = Lucide.CircleCheck,
                     contentDescription = null,
@@ -153,15 +146,14 @@ fun FileCard(
                     onLongClick = onLongClick,
                 ),
         elevation = CardDefaults.cardElevation(defaultElevation = if (gridSpanCount >= 6) 0.dp else 1.dp),
-        colors =
-            CardDefaults.cardColors(
-                containerColor =
-                    if (isSelected) {
-                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
-                    } else {
-                        MaterialTheme.colorScheme.surface
-                    },
-            ),
+        // 选中态只用「一圈描边」，不再叠加浅色底块 —— 之前是外层灰卡 + 内层浅色块两层视觉。
+        border =
+            if (isSelected) {
+                androidx.compose.foundation.BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary)
+            } else {
+                null
+            },
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
     ) {
         Row(
             modifier = Modifier.padding(12.dp),
@@ -194,12 +186,6 @@ fun FileCard(
                     )
                 }
                 if (isSelected) {
-                    Box(
-                        modifier =
-                            Modifier
-                                .fillMaxSize()
-                                .background(Color.Black.copy(alpha = 0.2f)),
-                    )
                     Icon(
                         imageVector = Lucide.CircleCheck,
                         contentDescription = null,
@@ -213,8 +199,8 @@ fun FileCard(
                 // 列表里必须能看见文件名：只给日期和大小根本认不出是哪个文件
                 Text(
                     text = FileUtils.normalizedDisplayName(fileEntity),
-                    // 列表模式的文件名要一眼能读：原 bodyMedium(14sp) 偏小，换成 16sp
-                    style = MaterialTheme.typography.bodyLarge,
+                    // 列表模式的文件名要一眼能读：再放大 0.2 倍（16sp → 19sp）
+                    style = MaterialTheme.typography.bodyLarge.copy(fontSize = 19.sp),
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                     color = if (isSelected) MaterialTheme.colorScheme.primary else Color.Unspecified,

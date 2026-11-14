@@ -9,7 +9,7 @@ package com.dhhxfggg.pjm.domain.util
  *
  * ## 做法
  * 把 64 位 dHash 切成 [CHUNK_COUNT] 个 [CHUNK_BITS] 位块，对每个块建立
- * 「块值 → 图片下标」倒排表（CSR，紧凑 int 数组，38k 张图约 1.6MB）。
+ * 「块值 → 图片下标」倒排表（CSR，紧凑 int 数组，大库约 1.6MB）。
  * 查询时枚举与当前块值汉明距离 ≤ [RADIUS] 的所有键（预生成的 697 个掩码）。
  *
  * **召回保证**：若一对图片的总汉明距离 ≤ [MAX_DISTANCE]，则 4 个块中必有一块
@@ -17,7 +17,7 @@ package com.dhhxfggg.pjm.domain.util
  * 索引只负责"不漏"，不负责"不多"—— 距离超标、宽高比/面积不符的对由调用方过滤。
  *
  * ## 复杂度
- * 建表 O(CHUNK_COUNT × n)；查询 O(n × CHUNK_COUNT × |PROBE_MASKS|)，38k 张图
+ * 建表 O(CHUNK_COUNT × n)；查询 O(n × CHUNK_COUNT × |PROBE_MASKS|)，大库
  * 约 1.06 亿次定长数组区间扫描，与 n 近似线性。
  */
 internal class DHashIndex(

@@ -25,6 +25,16 @@ interface FileDao {
     suspend fun getImportCountsByDay(): List<ImportDayCount>
 
     /**
+     * 库里出现过的「入库日期」（本地时区，yyyy-MM-dd），新的在前。
+     * 「发到电脑」按日期挑选时用它列出可选日期，而不是固定给「今天/近 7 天」。
+     */
+    @Query(
+        "SELECT DISTINCT date(COALESCE(NULLIF(importedAt, 0), lastModified) / 1000, 'unixepoch', 'localtime') AS day " +
+            "FROM files ORDER BY day DESC LIMIT :limit",
+    )
+    suspend fun getRecentDates(limit: Int): List<String>
+
+    /**
      * Retrieves all files within a specific category, ordered by modification date descending.
      * @param category The folder/category name to filter by.
      * @return A [Flow] emitting the list of files whenever the database changes.
@@ -221,7 +231,7 @@ interface FileDao {
 
     /**
      * 大库优化：基于主键游标的分页查询（按 id 顺序取页），
-     * 避免 ORDER BY RANDOM() 在全表排序（50GB/万级记录时极慢）。
+     * 避免 ORDER BY RANDOM() 在全表排序（大库时极慢）。
      * 用于发现页"已看完全部后"的翻页浏览。
      */
     @Query("SELECT * FROM files WHERE category = :category AND id > :afterId ORDER BY id LIMIT :limit")

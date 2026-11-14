@@ -286,9 +286,12 @@ fun SettingsScreen(
         },
         containerColor = Color.Transparent,
     ) { padding ->
-        // 核心修复：bottomPadding（BottomNavBar 高度）此前传入但从未使用，
-        // 导致设置页底部内容被底部导航遮挡，最下方的功能无法点击。
-        Box(modifier = Modifier.padding(padding).fillMaxSize().padding(bottom = bottomPadding)) {
+        // 内容一直铺到屏幕最底：底栏本身是透明的，列表从它下面穿过去才会「连续」。
+        // 之前这里整体抬高了 bottomPadding，底栏位置就露出一条纯壁纸，
+        // 卡片被一条水平线硬切断 —— 看着像单独一块背景。
+        // 底栏高度改由列表末尾的空白补偿（见 MainCategoryList 的 bottomPadding），
+        // 最后一项仍然能完整滚到导航栏上方、点得到。
+        Box(modifier = Modifier.padding(padding).fillMaxSize()) {
             // 返回手势进行中，下层把「上一页（设置列表）」一起滑进来：
             // 上层二级页面同时右移并垫上不透明底色，避免两层文字叠在一起。
             // 列表常驻在下层；平时整体移出屏幕左侧（不可见），手势时跟手滑入。
@@ -308,6 +311,7 @@ fun SettingsScreen(
                     settings = settings,
                     settingsViewModel = settingsViewModel,
                     managedAppCount = managedApps.size,
+                    bottomPadding = bottomPadding,
                     onNavigate = { currentPage = it },
                 )
             }
@@ -393,6 +397,13 @@ fun SettingsScreen(
                                             //   · image_fingerprints/（感知指纹 .txt + 灰度 .g32）
                                             // 这些是耗时生成的数据，删除后需重新解码/计算（用户痛点）。
                                             context.cacheDir.deleteRecursively()
+                                            // 磁盘目录删了不代表内存里没有：Coil 的内存缓存还留着旧缩略图，
+                                            // 不清掉的话列表看起来「清了缓存还是老样子」。
+                                            runCatching {
+                                                val loader = coil3.SingletonImageLoader.get(context)
+                                                loader.memoryCache?.clear()
+                                                loader.diskCache?.clear()
+                                            }
                                             VaultManager.updateProgress(1f, systemCleanedMsg, taskId = VaultManager.TASK_CLEAR_CACHE)
                                             withContext(
                                                 Dispatchers.Main,

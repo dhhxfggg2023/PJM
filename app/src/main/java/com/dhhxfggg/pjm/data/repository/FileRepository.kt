@@ -29,6 +29,12 @@ interface FileRepository {
         name: String,
     )
 
+    /**
+     * 用音频文件内嵌标签里的标题改写「库内显示名」（磁盘上的文件名不动）。
+     * 只处理显示名仍等于磁盘 UUID 名的条目，已改过的不会重复处理。
+     */
+    suspend fun backfillAudioNames()
+
     suspend fun getRandomFileByCategory(category: String): FileEntity?
 
     /**

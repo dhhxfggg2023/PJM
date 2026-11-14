@@ -95,12 +95,14 @@ fun BottomNavBar(
                 .navigationBarsPadding()
                 .padding(horizontal = 18.dp, vertical = 10.dp),
     ) {
+        // 底栏不再做成「浮在大背景上的一张卡片」：底色直接取页面背景、去掉描边与投影，
+        // 只有选中项的高亮胶囊浮出来，不会出现「底栏一层、背景一层」的割裂感。
         Surface(
             modifier = Modifier.fillMaxWidth().height(60.dp),
             shape = CircleShape,
-            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
-            border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant),
-            shadowElevation = 10.dp,
+            color = Color.Transparent,
+            border = null,
+            shadowElevation = 0.dp,
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -138,14 +140,19 @@ private fun NavBarItem(
     val interaction = remember { MutableInteractionSource() }
 
     Box(
-        modifier = modifier.fillMaxHeight().padding(horizontal = 4.dp, vertical = 7.dp),
+        // 整格仍然是点击区域，但不再画背景、不再有内边距分割 ——
+        // 三个 Tab 共用底栏这一张背景，视觉上是一整条，而不是三块独立按钮。
+        modifier =
+            modifier
+                .fillMaxHeight()
+                .clickable(interactionSource = interaction, indication = null, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         // 关键：选中与未选中**使用完全相同的布局**（图标在上、文字在下），
         // 只切换背景胶囊的显隐。
         //
         // 此前选中态把文字挪到图标右侧变成「横排胶囊」—— 切换 Tab 时，
-        // 那个 Tab 的文字会从图标下方跳到右侧（用户反馈"会左右移动一下"）。
+        // 那个 Tab 的文字会从图标下方跳到右侧，切换时有明显的横向跳动。
         // 让文字位置恒定后，视觉变化只发生在背景，不再有位移。
         val pill =
             if (selected) {
@@ -153,33 +160,28 @@ private fun NavBarItem(
             } else {
                 Modifier
             }
-        Box(
+        Column(
             modifier =
                 Modifier
-                    .fillMaxSize()
                     .clip(CircleShape)
                     .then(pill)
-                    .clickable(interactionSource = interaction, indication = null, onClick = onClick),
-            contentAlignment = Alignment.Center,
+                    .padding(horizontal = 14.dp, vertical = 5.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
         ) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-            ) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = label,
-                    tint = if (selected) Color.White else scheme.onSurfaceVariant,
-                    modifier = Modifier.size(21.dp),
-                )
-                Text(
-                    text = label,
-                    color = if (selected) Color.White else scheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                    modifier = Modifier.padding(top = 2.dp),
-                )
-            }
+            Icon(
+                imageVector = icon,
+                contentDescription = label,
+                tint = if (selected) Color.White else scheme.onSurfaceVariant,
+                modifier = Modifier.size(21.dp),
+            )
+            Text(
+                text = label,
+                color = if (selected) Color.White else scheme.onSurfaceVariant,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                modifier = Modifier.padding(top = 2.dp),
+            )
         }
     }
 }

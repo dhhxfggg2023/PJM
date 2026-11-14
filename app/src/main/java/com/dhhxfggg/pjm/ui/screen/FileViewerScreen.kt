@@ -328,14 +328,7 @@ fun FileViewerScreen(
                             contentDescription = null,
                             onClick = { settingsViewModel.toggleViewMode() },
                         )
-                        if (flattenedItems.isNotEmpty()) {
-                            Spacer(Modifier.width(6.dp))
-                            PjmIconButton(
-                                icon = Lucide.ListTodo,
-                                contentDescription = stringResource(R.string.action_batch_select),
-                                onClick = { fileViewModel.setBatchMode(true) },
-                            )
-                        }
+                        // 多选统一由「长按」进入；这里不再放一个重复的按钮。
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
@@ -356,15 +349,9 @@ fun FileViewerScreen(
                         )
                     }
                 } else {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        // 改版：原来是居中一行灰字，让人以为页面坏了。
-                        // 现在给出视觉锚点 + 「为什么空」+ 明确的入库方式。
-                        PjmEmptyState(
-                            icon = iconPack.stateEmpty,
-                            title = stringResource(R.string.empty_vault_msg),
-                            description = stringResource(R.string.empty_vault_hint),
-                        )
-                    }
+                    // 空分类只留背景：不再显示图标与「暂无加密资源 / 把文件分享到 PJM」这类文字，
+                    // 页面上没有内容时就是干净的背景，不要任何提示块。
+                    Box(modifier = Modifier.fillMaxSize())
                 }
             } else if (settings.fileViewMode == "grid") {
                 Box(modifier = Modifier.fillMaxSize()) {

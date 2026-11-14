@@ -41,7 +41,7 @@ import kotlin.time.Duration.Companion.milliseconds
  *
  * 两条触发通道：
  * 1. ContentObserver（相册/下载一有变化就回调）→ 只跑媒体库扫描；
- * 2. 定时器（3 分钟）→ 媒体库扫描 + 目录扫描（Telegram/pixiv 这类不写媒体库的应用）。
+ * 2. 定时器（3 分钟）→ 媒体库扫描 + 目录扫描（不写媒体库的应用也能被捡到）。
  *
  * 另外 JobScheduler 还有一条独立兜底（[TakeoverJobService]）：ROM 冻结后台进程时，
  * 它会在自己进程里直接跑同一套扫描，不依赖本服务能否被拉起。

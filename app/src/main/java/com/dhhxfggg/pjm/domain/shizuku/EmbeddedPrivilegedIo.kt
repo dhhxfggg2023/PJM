@@ -171,7 +171,7 @@ object EmbeddedPrivilegedIo {
      * 旧实现返回 `List<String>`，把已经从服务端拿到的 size **丢掉了**。
      * 调用方（BiliBridge 要按体积挑出最大的视频/音频 m4s）只能**逐个文件**
      * 再调一次 `listFiles` 去查体积 —— 那是一次完整的 IPC，而每次 IPC 的下限是
-     * [POLL_INTERVAL]（100ms）。实测 903 个文件的目录因此多花了 258 次往返。
+     * [POLL_INTERVAL]（100ms）。大批量目录因此会多出成倍的往返次数。
      *
      * 手里已有的信息就不要再跨进程问第二遍。
      *

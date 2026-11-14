@@ -48,7 +48,7 @@ object TakeoverScanEngine {
      *
      * @param doSweep 是否同时扫「应用自己的保存目录」。
      *   媒体库通道可以高频（相册一有变化就回调），目录深扫只在定时兜底轮做 ——
-     *   否则 Pictures/QQ 这类上万文件的目录会把存储 IO 拖满、整机变卡。
+     *   否则聊天软件、截图这类上万文件的目录会把存储 IO 拖满、整机变卡。
      */
     suspend fun scanOnce(
         context: Context,
@@ -64,7 +64,7 @@ object TakeoverScanEngine {
 
         // 水位线用 MediaStore 的 _id，而不是 date_added：
         // date_added 是「写入媒体库的时间」，系统/厂商可能延迟索引、甚至写 NULL；
-        // 用时间做水位会把这期间保存的文件永久跳过（实测踩过）。
+        // 用时间做水位会把这期间保存的文件永久跳过。
         val storedId = prefs.getLong(KEY_LAST_ID, 0L)
         var lastId = storedId
         if (storedId <= 0L) {
@@ -314,7 +314,7 @@ object TakeoverScanEngine {
         val selection = MediaStore.MediaColumns._ID + " > ?"
         val selectionArgs = arrayOf(lastId.toString())
         val sortOrder = MediaStore.MediaColumns._ID + " ASC"
-        // 这里**只能**用普通查询。Bundle 的 QUERY_ARG_*（LIMIT）在这台机器上会静默返回
+        // 这里**只能**用普通查询。Bundle 的 QUERY_ARG_*（LIMIT）在部分机型上会静默返回
         // 空游标：不抛异常、也走不到回退分支，结果就是"相册里有 4 张新图，媒体库通道一次都没看到"，
         // 只能等 3 分钟一次的目录深扫兜底 —— 用户看到的就是"只有打开 App 才动"。
         // 普通查询本身不需要 LIMIT：readCandidates 收满 SCAN_LIMIT 就 break。
