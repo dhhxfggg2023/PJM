@@ -179,4 +179,41 @@ class FileUtilsTest {
             FileUtils.normalizedDisplayName(entityAt(importedAt = 1_784_981_057_941L, lastModified = 1_700_000_000_000L)),
         )
     }
+
+    @Test
+    fun normalizedDisplayName_uuidNameFallsBackToImportTime() {
+        val e =
+            FileEntity(
+                relativePath = "videos/0eb14345-45ad-49cf-b5bb-5b2b9c916a02.mp4",
+                name = "0eb14345-45ad-49cf-b5bb-5b2b9c916a02.mp4",
+                size = 1,
+                category = "videos",
+                lastModified = 1784981057941L,
+                importedAt = 1784981057941L,
+                isImage = false,
+                extension = "mp4",
+                contentHash = null,
+            )
+        val name = FileUtils.normalizedDisplayName(e)
+        // 磁盘名是 UUID 时不能把 UUID 甩到界面上，退回入库时间
+        assertFalse("不该显示 UUID: $name", name.contains("0eb14345"))
+        assertTrue("应是 时间.mp4: $name", Regex("^\\d{8}_\\d{6}\\.mp4$").matches(name))
+    }
+
+    @Test
+    fun normalizedDisplayName_keepsReadableNameForNonImages() {
+        val e =
+            FileEntity(
+                relativePath = "videos/0eb14345-45ad-49cf-b5bb-5b2b9c916a02.mp4",
+                name = "旅行.mp4",
+                size = 1,
+                category = "videos",
+                lastModified = 1784981057941L,
+                isImage = false,
+                extension = "mp4",
+                contentHash = null,
+            )
+        // 有可读原名（导入时的文件名）就用原名，方便辨认
+        assertEquals("旅行.mp4", FileUtils.normalizedDisplayName(e))
+    }
 }

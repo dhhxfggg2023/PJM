@@ -134,19 +134,22 @@ object FileUtils {
     /**
      * 规范化显示名（用于列表/详情/导出/分享的文件名，磁盘物理文件不变）。
      * - PJM 加密容器：本身已是规范命名（Export_/Pack_/Random_ + 可读时间），原样返回；
-     * - 图片：统一为 `PJM_yyyyMMdd_HHmmss.扩展名`（时间取入库时间 lastModified）—— 相册里不暴露原始文件名；
-     * - 其他类型（视频/文档/压缩包…）：**保留导入时的原始文件名**，方便辨认。
+     * - 图片：统一为 `yyyyMMdd_HHmmss.扩展名`（时间取入库时间）—— 相册里不暴露原始文件名；
+     * - 其他类型（视频/文档/压缩包…）：**保留导入时的原始文件名**，方便辨认；
+     *   如果名字根本就是磁盘上的 UUID（没导入过可读原名），也退回入库时间，别把 UUID 甩到界面上。
      */
     fun normalizedDisplayName(entity: FileEntity): String {
         if (entity.extension.equals("pjm", ignoreCase = true)) return entity.name
-        if (!entity.isImage) return entity.name
+        if (!entity.isImage && entity.name.isNotBlank() && !isDiskName(entity)) return entity.name
         // 用「入库时间」而不是文件自身时间：重命名/复制过的文件 lastModified 会变，入库时间不会
         val ts = compactTsFormat.get()?.format(Date(entity.importedAt.takeIf { it > 0 } ?: entity.lastModified)) ?: "unknown"
         // 只保留时间，不再加 PJM_ 前缀（保持和老库里的命名一致）
-        val base = ts
         val ext = entity.extension.lowercase().trim('.')
-        return if (ext.isEmpty()) base else "$base.$ext"
+        return if (ext.isEmpty()) ts else "$ts.$ext"
     }
+
+    /** 名字是否就是磁盘文件名（UUID）——说明这个文件没留下可读原名 */
+    private fun isDiskName(entity: FileEntity): Boolean = entity.name.equals(entity.relativePath.substringAfterLast('/'), ignoreCase = true)
 
     /**
      * 获得一个“文件名为规范名、且可被 FileProvider 暴露/分享”的副本。

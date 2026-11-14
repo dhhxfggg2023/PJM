@@ -622,7 +622,8 @@ fun FileViewerScreen(
 
     renameTarget?.let { entity ->
         PjmRenameDialog(
-            initialName = entity.name,
+            // 预填界面上看到的显示名（图片是入库时间），而不是数据库里可能是 UUID 的 name
+            initialName = FileUtils.normalizedDisplayName(entity),
             onDismiss = { renameTarget = null },
             onConfirm = { newName ->
                 fileViewModel.renameDisplayName(entity, newName)
