@@ -49,5 +49,9 @@ Thumbs.db
 # ===== 日志 =====
 *.log
 
+# ===== 电脑端工具的运行期产物（adb 与打包 zip 不入库）=====
+tools/pc-link/adb/
+tools/PJM-Link.zip
+
 # ===== Room schema（入库，供迁移测试）=====
 !app/schemas/

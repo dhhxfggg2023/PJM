@@ -45,8 +45,11 @@ class VaultTransferServer(
         val socket =
             runCatching {
                 var s: ServerSocket? = null
+                // 只绑回环：PC 端通过 adb forward 接 127.0.0.1:8787，
+                // 同一 Wi-Fi/局域网的任何人都连不上这台手机
+                val loopback = java.net.InetAddress.getByName("127.0.0.1")
                 for (p in preferredPort..(preferredPort + 8)) {
-                    s = runCatching { ServerSocket(p) }.getOrNull()
+                    s = runCatching { ServerSocket(p, 50, loopback) }.getOrNull()
                     if (s != null) break
                 }
                 s
@@ -90,11 +93,66 @@ class VaultTransferServer(
             val query = parseQuery(target.substringAfter('?', ""))
             when {
                 path == "/" || path == "/index.html" -> writeIndex(out, query)
-                path == "/file" -> writeFile(out, method, query["path"].orEmpty(), headers["range"])
+                path == "/file" || path == "/api/file" -> writeFile(out, method, query["path"].orEmpty(), headers["range"])
+                path == "/api/hello" -> writeHello(out)
+                path == "/api/files" -> writeFilesJson(out, query)
                 else -> writeText(out, 404, "text/plain; charset=utf-8", "404")
             }
             out.flush()
         }
+    }
+
+    /** PC 工具握手：确认对面是 PJM 手机端，并拿到文件总数 */
+    private fun writeHello(out: OutputStream) {
+        val json = "{\"app\":\"pjm\",\"files\":" + filesProvider().size + "}"
+        writeText(out, 200, "application/json; charset=utf-8", json)
+    }
+
+    /** 文件清单（PC 工具据此决定拉哪些、跳过哪些）；筛选按入库时间 */
+    private fun writeFilesJson(
+        out: OutputStream,
+        query: Map<String, String>,
+    ) {
+        val category = query["category"].orEmpty()
+        val fromMs = query["from"]?.toLongOrNull() ?: 0L
+        val toMs = query["to"]?.toLongOrNull() ?: 0L
+        val json = java.lang.StringBuilder()
+        json.append('[')
+        var first = true
+        filesProvider().forEach { entity ->
+            val stamp = entity.importedAt.takeIf { it > 0 } ?: entity.lastModified
+            val keep =
+                (category.isEmpty() || entity.category == category) &&
+                    (fromMs <= 0L || stamp >= fromMs) &&
+                    (toMs <= 0L || stamp <= toMs)
+            if (keep) {
+                if (!first) json.append(',')
+                first = false
+                json.append("{\"p\":\"").append(jsonEscape(entity.relativePath))
+                json.append("\",\"n\":\"").append(jsonEscape(displayName(entity)))
+                json.append("\",\"s\":").append(entity.size)
+                json.append(",\"m\":").append(entity.lastModified)
+                json.append(",\"i\":").append(entity.importedAt)
+                json.append(",\"c\":\"").append(jsonEscape(entity.category)).append("\"}")
+            }
+        }
+        json.append(']')
+        writeText(out, 200, "application/json; charset=utf-8", json.toString())
+    }
+
+    private fun jsonEscape(value: String): String {
+        val sb = java.lang.StringBuilder(value.length + 8)
+        value.forEach { ch ->
+            when (ch) {
+                '"' -> sb.append("\\\"")
+                '\\' -> sb.append("\\\\")
+                '\n' -> sb.append("\\n")
+                '\r' -> sb.append("\\r")
+                '\t' -> sb.append("\\t")
+                else -> if (ch < ' ') sb.append(' ') else sb.append(ch)
+            }
+        }
+        return sb.toString()
     }
 
     private fun writeIndex(
