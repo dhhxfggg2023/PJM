@@ -1,5 +1,6 @@
 package com.dhhxfggg.pjm.domain.service
 
+import android.app.PendingIntent
 import android.content.Intent
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
@@ -26,9 +27,25 @@ class AudioPlaybackService : MediaSessionService() {
             ExoPlayer.Builder(this).build().apply {
                 repeatMode = Player.REPEAT_MODE_ONE
                 setWakeMode(androidx.media3.common.C.WAKE_MODE_NETWORK)
+                // 拔耳机/断蓝牙自动暂停，避免突然外放
+                setHandleAudioBecomingNoisy(true)
             }
         player.volume = AudioSettings.appVolume(this)
-        mediaSession = MediaSession.Builder(this, player).build()
+        // 拔耳机/断蓝牙自动暂停（成熟播放器都这么做，避免声音突然外放）
+        // 点通知/锁屏回到 App
+        val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
+        val sessionBuilder = MediaSession.Builder(this, player)
+        if (launchIntent != null) {
+            sessionBuilder.setSessionActivity(
+                PendingIntent.getActivity(
+                    this,
+                    0,
+                    launchIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                ),
+            )
+        }
+        mediaSession = sessionBuilder.build()
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = mediaSession

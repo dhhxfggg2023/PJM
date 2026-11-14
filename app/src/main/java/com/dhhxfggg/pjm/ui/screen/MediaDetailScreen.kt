@@ -4,6 +4,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.graphics.BitmapFactory
 import android.graphics.Typeface
+import android.os.Build
 import android.text.StaticLayout
 import android.text.TextPaint
 import androidx.compose.animation.AnimatedVisibility
@@ -31,7 +32,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
@@ -666,6 +669,10 @@ private fun AudioViewer(
     var playbackSpeed by remember { mutableFloatStateOf(1f) }
     var shuffle by remember { mutableStateOf(false) }
     var repeatOne by remember { mutableStateOf(false) }
+    // 封面点一下 = 播放列表；定时支持「播完 N 首」
+    var showPlaylist by remember { mutableStateOf(false) }
+    var sleepSongs by remember { mutableIntStateOf(0) }
+    var playedSinceSleep by remember { mutableIntStateOf(0) }
 
     // 整个音频分类就是播放队列：上一首/下一首/随机都能用，不用用户自己挑
     val queueFiles = remember(queue) { queue.map { VaultManager.getFileFromEntity(context, it) } }
@@ -729,8 +736,66 @@ private fun AudioViewer(
         sleepMinutes = 0
     }
 
+    // 睡眠定时（按首数）：只在「自动切到下一首」时计数，手动切歌不算
+    DisposableEffect(controller) {
+        val c = controller
+        if (c == null) return@DisposableEffect onDispose { }
+        val listener =
+            object : Player.Listener {
+                override fun onMediaItemTransition(
+                    mediaItem: MediaItem?,
+                    reason: Int,
+                ) {
+                    if (sleepSongs > 0 && reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) {
+                        playedSinceSleep += 1
+                        if (playedSinceSleep >= sleepSongs) {
+                            c.pause()
+                            sleepSongs = 0
+                            playedSinceSleep = 0
+                        }
+                    }
+                }
+            }
+        c.addListener(listener)
+        onDispose { c.removeListener(listener) }
+    }
+
     val iconPack = rememberIconPack()
+    val backdrop = info?.artwork
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+        // 封面做整页背景：高斯模糊（API 31+）+ 纵向压暗，Poweramp 那种感觉
+        if (backdrop != null) {
+            Image(
+                bitmap = backdrop.asImageBitmap(),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                alpha = 0.55f,
+                modifier =
+                    Modifier
+                        .fillMaxSize()
+                        .then(
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                                Modifier.blur(56.dp)
+                            } else {
+                                Modifier
+                            },
+                        ),
+            )
+            Box(
+                modifier =
+                    Modifier
+                        .fillMaxSize()
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(
+                                    Color.Black.copy(alpha = 0.45f),
+                                    Color.Black.copy(alpha = 0.75f),
+                                    Color.Black.copy(alpha = 0.94f),
+                                ),
+                            ),
+                        ),
+            )
+        }
         Column(
             modifier = Modifier.fillMaxSize().padding(horizontal = 28.dp).padding(top = 88.dp, bottom = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -743,6 +808,8 @@ private fun AudioViewer(
                         .aspectRatio(1f)
                         .clip(RoundedCornerShape(24.dp))
                         .background(Color(0xFF17171A))
+                        // 点封面 = 打开播放列表（不额外占按钮位）
+                        .pointerInput(Unit) { detectTapGestures { showPlaylist = true } }
                         // 上下滑切上/下一首：图片、视频、音频三个查看器统一"上下翻页"
                         .pointerInput(currentIndex) {
                             var dy = 0f
@@ -797,17 +864,34 @@ private fun AudioViewer(
                 overflow = TextOverflow.Ellipsis,
             )
             Spacer(Modifier.weight(1f))
-            Slider(
-                value = if (durationMs > 0L) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f,
-                onValueChange = { fraction ->
-                    dragging = true
-                    positionMs = (fraction * durationMs).toLong()
-                },
-                onValueChangeFinished = {
-                    controller?.seekTo(positionMs)
-                    dragging = false
-                },
-            )
+            Box(modifier = Modifier.fillMaxWidth()) {
+                Slider(
+                    value = if (durationMs > 0L) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f,
+                    onValueChange = { fraction ->
+                        dragging = true
+                        positionMs = (fraction * durationMs).toLong()
+                    },
+                    onValueChangeFinished = {
+                        controller?.seekTo(positionMs)
+                        dragging = false
+                    },
+                )
+                // 拖动时在上方冒一个时间气泡，松手才真正跳转
+                if (dragging) {
+                    Surface(
+                        modifier = Modifier.align(Alignment.TopCenter).offset(y = (-30).dp),
+                        shape = RoundedCornerShape(10.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.96f),
+                        shadowElevation = 3.dp,
+                    ) {
+                        Text(
+                            text = formatDuration(positionMs),
+                            style = MaterialTheme.typography.labelLarge,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                        )
+                    }
+                }
+            }
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text(formatDuration(positionMs), color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
                 Text(formatDuration(durationMs), color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
@@ -903,10 +987,10 @@ private fun AudioViewer(
                     TextButton(onClick = { sleepMenu = true }) {
                         Text(
                             text =
-                                if (sleepLeftMs > 0L) {
-                                    "定时 " + formatDuration(sleepLeftMs)
-                                } else {
-                                    "定时关闭"
+                                when {
+                                    sleepSongs > 0 -> "定时 " + sleepSongs + " 首"
+                                    sleepLeftMs > 0L -> "定时 " + formatDuration(sleepLeftMs)
+                                    else -> "定时关闭"
                                 },
                             color = Color.White.copy(alpha = 0.85f),
                             fontSize = 12.sp,
@@ -914,7 +998,7 @@ private fun AudioViewer(
                     }
                     DropdownMenu(expanded = sleepMenu, onDismissRequest = { sleepMenu = false }) {
                         listOf(0, 15, 30, 45, 60, 90).forEach { minutes ->
-                            val current = sleepMinutes == minutes
+                            val current = sleepMinutes == minutes && sleepSongs == 0
                             DropdownMenuItem(
                                 text = {
                                     Text(
@@ -924,6 +1008,25 @@ private fun AudioViewer(
                                 },
                                 onClick = {
                                     sleepMinutes = minutes
+                                    sleepSongs = 0
+                                    playedSinceSleep = 0
+                                    sleepMenu = false
+                                },
+                            )
+                        }
+                        listOf(1, 3, 5, 10).forEach { songs ->
+                            val current = sleepSongs == songs
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        text = "播完 " + songs + " 首后停",
+                                        color = if (current) MaterialTheme.colorScheme.primary else Color.Unspecified,
+                                    )
+                                },
+                                onClick = {
+                                    sleepMinutes = 0
+                                    sleepSongs = songs
+                                    playedSinceSleep = 0
                                     sleepMenu = false
                                 },
                             )
@@ -933,6 +1036,65 @@ private fun AudioViewer(
             }
         }
         ViewerTopBar(title = "", onBack = onBack, modifier = Modifier.align(Alignment.TopCenter))
+        // 播放列表：整个音频分类都在队列里，点任意一首就切过去
+        if (showPlaylist) {
+            ModalBottomSheet(onDismissRequest = { showPlaylist = false }) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = "播放列表 · 共 " + queue.size + " 首",
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+                    )
+                    LazyColumn(modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
+                        items(queue.size) { index ->
+                            val entity = queue[index]
+                            val isCurrent = index == currentIndex
+                            Row(
+                                modifier =
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            showPlaylist = false
+                                            controller?.seekTo(index, 0L)
+                                            controller?.play()
+                                        }.background(
+                                            if (isCurrent) {
+                                                MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                                            } else {
+                                                Color.Transparent
+                                            },
+                                        ).padding(horizontal = 20.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = (index + 1).toString(),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    modifier = Modifier.width(32.dp),
+                                )
+                                Text(
+                                    text = FileUtils.normalizedDisplayName(entity),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                    fontWeight = if (isCurrent) FontWeight.SemiBold else FontWeight.Normal,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                if (isCurrent) {
+                                    Icon(
+                                        imageVector = Lucide.Play,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
