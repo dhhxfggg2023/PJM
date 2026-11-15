@@ -130,6 +130,9 @@ internal fun TransferSettings(transferViewModel: TransferViewModel = hiltViewMod
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
             )
         }
+
+        // 末尾补出底栏高度（和设置页其它子页一致，见 SettingsBottomSpacer）
+        SettingsBottomSpacer()
     }
 }
 

@@ -1619,11 +1619,18 @@ private fun TextViewer(
                             IconButton(onClick = { showSettings = true }) {
                                 Icon(Lucide.SlidersHorizontal, stringResource(R.string.reader_cd_settings), tint = Color.White)
                             }
+                            // 书签：当前页加/取消。之前这里是一个纯文字小按钮，
+                            // 顶栏四个图标里它的位置最靠边、又被文字挤窄，用户根本看不出来能点。
+                            // 改成图标按钮（书签图标 + 已加时实心金色），和左右两个图标同一视觉层级。
                             val bookmarked = pagerState.currentPage in bookmarks
-                            TextButton(onClick = { toggleBookmark(pagerState.currentPage) }) {
-                                Text(
-                                    text = stringResource(if (bookmarked) R.string.reader_bookmarked else R.string.reader_bookmark),
-                                    color = if (bookmarked) Color(0xFFF2C14E) else Color.White,
+                            IconButton(onClick = { toggleBookmark(pagerState.currentPage) }) {
+                                Icon(
+                                    imageVector = if (bookmarked) Lucide.BookmarkCheck else Lucide.Bookmark,
+                                    contentDescription =
+                                        stringResource(
+                                            if (bookmarked) R.string.reader_remove_bookmark else R.string.reader_add_bookmark,
+                                        ),
+                                    tint = if (bookmarked) Color(0xFFF2C14E) else Color.White,
                                 )
                             }
                         }
@@ -1689,66 +1696,121 @@ private fun TextViewer(
 
     if (showChapters) {
         ModalBottomSheet(onDismissRequest = { showChapters = false }) {
-            LazyColumn(modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
-                if (bookmarks.isNotEmpty()) {
-                    item {
-                        Column {
+            // 目录 / 书签做成两个按钮，同一时刻只显示一个列表：
+            // 并排两栏在手机上各只剩半屏宽，书签一多还会把章节顶到看不见的地方。
+            var tocTab by remember { mutableIntStateOf(0) }
+            val bookmarkPages = bookmarks.sorted()
+            Column(modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    SheetTab(
+                        label = stringResource(R.string.reader_toc_title, chapters.size),
+                        selected = tocTab == 0,
+                        modifier = Modifier.weight(1f),
+                    ) { tocTab = 0 }
+                    SheetTab(
+                        label = stringResource(R.string.reader_bookmarks_count, bookmarks.size),
+                        selected = tocTab == 1,
+                        modifier = Modifier.weight(1f),
+                    ) { tocTab = 1 }
+                }
+                if (tocTab == 0) {
+                    LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 440.dp)) {
+                        items(chapters.size) { index ->
+                            val (chapterTitle, page) = chapters[index]
+                            val current = chapters.indexOfLast { it.second <= pagerState.currentPage } == index
                             Text(
-                                text = stringResource(R.string.reader_bookmarks_count, bookmarks.size),
-                                style = MaterialTheme.typography.titleSmall,
-                                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+                                text = chapterTitle,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color =
+                                    if (current) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurface
+                                    },
+                                fontWeight = if (current) FontWeight.SemiBold else FontWeight.Normal,
+                                modifier =
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .background(
+                                            if (current) {
+                                                MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                                            } else {
+                                                Color.Transparent
+                                            },
+                                        ).clickable {
+                                            showChapters = false
+                                            scope.launch {
+                                                pagerState.scrollToPage(page.coerceIn(0, (pages?.size ?: 1) - 1))
+                                            }
+                                        }.padding(horizontal = 20.dp, vertical = 12.dp),
                             )
-                            bookmarks.sorted().forEach { page ->
-                                Row(
-                                    modifier =
-                                        Modifier
-                                            .fillMaxWidth()
-                                            .clickable {
-                                                showChapters = false
-                                                scope.launch { pagerState.scrollToPage(page.coerceIn(0, (pages?.size ?: 1) - 1)) }
-                                            }.padding(horizontal = 20.dp, vertical = 10.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
+                        }
+                    }
+                } else if (bookmarkPages.isEmpty()) {
+                    Text(
+                        text = stringResource(R.string.reader_bookmarks_empty),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp),
+                    )
+                } else {
+                    LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 440.dp)) {
+                        items(bookmarkPages.size) { index ->
+                            val page = bookmarkPages[index]
+                            Row(
+                                modifier =
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            showChapters = false
+                                            scope.launch {
+                                                pagerState.scrollToPage(page.coerceIn(0, (pages?.size ?: 1) - 1))
+                                            }
+                                        }.padding(start = 20.dp, end = 8.dp, top = 2.dp, bottom = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.reader_page_label, page + 1),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                TextButton(onClick = { toggleBookmark(page) }) {
                                     Text(
-                                        text = stringResource(R.string.reader_page_label, page + 1),
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        modifier = Modifier.weight(1f),
+                                        text = stringResource(R.string.action_delete),
+                                        color = MaterialTheme.colorScheme.error,
                                     )
-                                    TextButton(onClick = { toggleBookmark(page) }) {
-                                        Text(stringResource(R.string.action_delete), color = MaterialTheme.colorScheme.error)
-                                    }
                                 }
                             }
-                            HorizontalDivider()
                         }
                     }
                 }
-                item {
-                    Text(
-                        text = stringResource(R.string.reader_toc_title, chapters.size),
-                        style = MaterialTheme.typography.titleSmall,
-                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
-                    )
-                }
-                items(chapters.size) { index ->
-                    val (chapterTitle, page) = chapters[index]
-                    val current = chapters.indexOfLast { it.second <= pagerState.currentPage } == index
-                    Text(
-                        text = chapterTitle,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = if (current) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                        fontWeight = if (current) FontWeight.SemiBold else FontWeight.Normal,
-                        modifier =
-                            Modifier
-                                .fillMaxWidth()
-                                .background(if (current) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent)
-                                .clickable {
-                                    showChapters = false
-                                    scope.launch { pagerState.scrollToPage(page.coerceIn(0, (pages?.size ?: 1) - 1)) }
-                                }.padding(horizontal = 20.dp, vertical = 12.dp),
-                    )
-                }
             }
+        }
+    }
+}
+
+@Composable
+private fun SheetTab(
+    label: String,
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    Surface(
+        modifier = modifier.clickable(onClick = onClick),
+        shape = RoundedCornerShape(50),
+        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+    ) {
+        Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(vertical = 10.dp)) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.titleSmall,
+                color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+            )
         }
     }
 }

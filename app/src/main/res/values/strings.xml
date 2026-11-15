@@ -522,6 +522,8 @@
     <string name="heatmap_legend_none">无入库</string>
     <string name="heatmap_size_title">单个文件大小分布</string>
     <string name="heatmap_size_total">共 %1$d 个</string>
+    <string name="heatmap_size_range">%1$s – %2$s</string>
+    <string name="heatmap_size_range_last">%1$s 以上</string>
     <string name="heatmap_monthly_title">最近 6 个月</string>
     <string name="heatmap_dow_mon">一</string>
     <string name="heatmap_dow_wed">三</string>
@@ -556,6 +558,8 @@
     <string name="label_unknown_artist">未知艺术家</string>
     <string name="video_seek_back_10">-10 秒</string>
     <string name="video_seek_forward_10">+10 秒</string>
+    <string name="cd_seek_back">后退 10 秒</string>
+    <string name="cd_seek_forward">快进 10 秒</string>
     <string name="cd_toggle_portrait">切换竖屏</string>
     <string name="cd_toggle_fullscreen">切换全屏</string>
     <string name="audio_default_title">PJM 音频</string>
@@ -584,6 +588,9 @@
     <string name="reader_cd_settings">阅读设置</string>
     <string name="reader_bookmarked">已书签</string>
     <string name="reader_bookmark">书签</string>
+    <string name="reader_add_bookmark">标记书签</string>
+    <string name="reader_remove_bookmark">取消书签</string>
+    <string name="reader_bookmarks_empty">还没有书签。点右上角书签图标，把当前页加入书签，下次从这里继续。</string>
     <string name="reader_bookmarks_count">书签（%1$d）</string>
     <string name="reader_page_label">第 %1$d 页</string>
     <string name="reader_toc_title">目录（%1$d 章）</string>

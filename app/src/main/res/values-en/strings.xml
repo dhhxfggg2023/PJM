@@ -517,6 +517,8 @@
     <string name="heatmap_legend_none">None</string>
     <string name="heatmap_size_title">File size distribution</string>
     <string name="heatmap_size_total">%1$d files</string>
+    <string name="heatmap_size_range">%1$s – %2$s</string>
+    <string name="heatmap_size_range_last">%1$s and up</string>
     <string name="heatmap_monthly_title">Last 6 months</string>
     <string name="heatmap_dow_mon">M</string>
     <string name="heatmap_dow_wed">W</string>
@@ -551,6 +553,8 @@
     <string name="label_unknown_artist">Unknown artist</string>
     <string name="video_seek_back_10">-10 s</string>
     <string name="video_seek_forward_10">+10 s</string>
+    <string name="cd_seek_back">Back 10 seconds</string>
+    <string name="cd_seek_forward">Forward 10 seconds</string>
     <string name="cd_toggle_portrait">Switch to portrait</string>
     <string name="cd_toggle_fullscreen">Switch to fullscreen</string>
     <string name="audio_default_title">PJM audio</string>
@@ -579,6 +583,9 @@
     <string name="reader_cd_settings">Reading settings</string>
     <string name="reader_bookmarked">Bookmarked</string>
     <string name="reader_bookmark">Bookmark</string>
+    <string name="reader_add_bookmark">Add bookmark</string>
+    <string name="reader_remove_bookmark">Remove bookmark</string>
+    <string name="reader_bookmarks_empty">No bookmarks yet. Tap the bookmark icon at the top right to save this page and pick it up later.</string>
     <string name="reader_bookmarks_count">Bookmarks (%1$d)</string>
     <string name="reader_page_label">Page %1$d</string>
     <string name="reader_toc_title">Contents (%1$d chapters)</string>

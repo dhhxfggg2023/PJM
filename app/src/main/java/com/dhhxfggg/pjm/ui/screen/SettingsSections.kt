@@ -212,6 +212,7 @@ internal fun MainCategoryList(
         // 列表铺到屏幕底部（底栏是透明的），末尾补出底栏高度，
         // 保证「系统诊断与维护」这类最后一项仍能完整滚出来、点得到
         Spacer(Modifier.height(24.dp))
+        SettingsBottomSpacer()
     }
 }
 
@@ -287,6 +288,7 @@ internal fun AudioPlaybackSettings() {
                 )
             }
         }
+        SettingsBottomSpacer()
     }
 }
 
@@ -339,6 +341,7 @@ internal fun DiscoverySettings(
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             )
         }
+        SettingsBottomSpacer()
     }
 }
 
@@ -453,6 +456,7 @@ internal fun AppearanceSettings(
                 }
             }
         }
+        SettingsBottomSpacer()
     }
 }
 
@@ -522,6 +526,7 @@ internal fun IngestionSettings(
                 }
             }
         }
+        SettingsBottomSpacer()
     }
 }
 
@@ -658,6 +663,7 @@ internal fun BilibiliSettings(
                 },
             )
         }
+        SettingsBottomSpacer()
     }
 
     // 电脑 adb 启动 PJM 内置特权服务命令对话框（命令带设备序列号，避免模拟器混淆）
@@ -793,5 +799,6 @@ internal fun MaintenanceSettings(
             SettingsButton(icon = Lucide.Bug, title = stringResource(R.string.settings_title_export_logs), onClick = onExportLogs)
             SettingsButton(icon = Lucide.RotateCcw, title = stringResource(R.string.settings_title_factory_reset), onClick = onFactoryReset)
         }
+        SettingsBottomSpacer()
     }
 }

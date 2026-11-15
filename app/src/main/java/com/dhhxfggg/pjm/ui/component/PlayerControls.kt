@@ -28,9 +28,11 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.media3.common.Player
+import com.composables.icons.lucide.FastForward
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.Maximize
 import com.composables.icons.lucide.Minimize
+import com.composables.icons.lucide.Rewind
 import com.dhhxfggg.pjm.R
 import kotlinx.coroutines.delay
 import java.util.Locale
@@ -93,6 +95,13 @@ class PlayerProgressState internal constructor() {
     fun scrubTo(ms: Long) {
         scrubbing = true
         scrubPositionMs = clampToDuration(ms)
+    }
+
+    /** 跳转后立即对齐显示值（快进/快退按钮、外部 seek），不用等下一轮轮询 */
+    fun commitSeek(targetMs: Long) {
+        val target = clampToDuration(targetMs)
+        positionMs = target
+        scrubPositionMs = target
     }
 
     /** 结束拖动并对齐显示值：[committedMs] 是已经 seek 到的位置（取消时传原位置） */
@@ -184,6 +193,8 @@ fun VideoControlBar(
     bottomPadding: Dp = 12.dp,
     fullscreen: Boolean = false,
     onToggleFullscreen: (() -> Unit)? = null,
+    /** 快退/快进按钮一次跳多少毫秒；传 0 就不显示这两个按钮 */
+    seekStepMs: Long = 10_000L,
 ) {
     Column(
         modifier =
@@ -210,7 +221,35 @@ fun VideoControlBar(
         ) {
             Text(formatPlaybackTime(progress.shownPositionMs), color = Color.White, fontSize = 12.sp)
             Spacer(Modifier.weight(1f))
-            Text(formatPlaybackTime(progress.durationMs), color = Color.White, fontSize = 12.sp)
+            // 快退 / 快进：从前只在双击左/右三分区里藏着，撤掉后用户找不到入口，
+            // 变成了「快进没了」。这里做成常驻按钮，双击手势保留（两者都能用）。
+            if (seekStepMs > 0L) {
+                IconButton(
+                    onClick = { seekBy(player, progress, -seekStepMs) },
+                    modifier = Modifier.size(34.dp),
+                ) {
+                    Icon(
+                        imageVector = Lucide.Rewind,
+                        contentDescription = stringResource(R.string.cd_seek_back),
+                        tint = Color.White,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+                Text(formatPlaybackTime(progress.durationMs), color = Color.White, fontSize = 12.sp)
+                IconButton(
+                    onClick = { seekBy(player, progress, seekStepMs) },
+                    modifier = Modifier.size(34.dp),
+                ) {
+                    Icon(
+                        imageVector = Lucide.FastForward,
+                        contentDescription = stringResource(R.string.cd_seek_forward),
+                        tint = Color.White,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+            } else {
+                Text(formatPlaybackTime(progress.durationMs), color = Color.White, fontSize = 12.sp)
+            }
             if (onToggleFullscreen != null) {
                 Spacer(Modifier.width(10.dp))
                 IconButton(onClick = onToggleFullscreen, modifier = Modifier.size(30.dp)) {
@@ -233,6 +272,19 @@ private fun fractionToMs(
     fraction: Float,
     durationMs: Long,
 ): Long = (fraction.coerceIn(0f, 1f) * durationMs).toLong()
+
+/** 相对当前位置跳 [deltaMs]（负数 = 后退），并让进度条立刻反映新位置 */
+private fun seekBy(
+    player: Player?,
+    progress: PlayerProgressState,
+    deltaMs: Long,
+) {
+    val p = player ?: return
+    val total = progress.durationMs
+    val target = (p.currentPosition + deltaMs).coerceIn(0L, if (total > 0L) total else Long.MAX_VALUE)
+    p.seekTo(target)
+    progress.commitSeek(target)
+}
 
 /**
  * 播放时间文本：`分:秒`。

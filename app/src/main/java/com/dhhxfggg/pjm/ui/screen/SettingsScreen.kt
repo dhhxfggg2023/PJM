@@ -12,9 +12,6 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.asPaddingValues
-import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -39,8 +36,6 @@ import com.dhhxfggg.pjm.domain.util.ShareUtils
 import com.dhhxfggg.pjm.domain.util.UpdateChecker
 import com.dhhxfggg.pjm.domain.util.UpdateController
 import com.dhhxfggg.pjm.domain.util.VaultManager
-import com.dhhxfggg.pjm.ui.component.BottomNavBarContentHeight
-import com.dhhxfggg.pjm.ui.component.BottomNavBarVerticalPadding
 import com.dhhxfggg.pjm.ui.component.PjmAeroDialog
 import com.dhhxfggg.pjm.ui.component.PjmDuplicateCompareDialog
 import com.dhhxfggg.pjm.ui.component.PjmFolderPickerDialog
@@ -295,18 +290,16 @@ fun SettingsScreen(
         },
         containerColor = Color.Transparent,
     ) { padding ->
-        // 内容区直接裁到「底栏胶囊上方」：底栏是浮在内容之上的透明胶囊，
-        // 高度 = 系统导航条 + 上下留白 + 胶囊本体。列表和二级页面都在这个区域里滚，
-        // 滚到底时最后一项天然贴着胶囊上沿，不存在被挡住或划不下去。
-        val navBarInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-        val contentBottom =
-            navBarInset + BottomNavBarVerticalPadding * 2 + BottomNavBarContentHeight
+        // 和首页保持一致：内容铺满整屏、一直滚到底，
+        // 每条列表末尾用 SettingsBottomSpacer() 补出底栏高度。
+        //
+        // 之前这里是把内容区整体裁到「底栏胶囊上方」—— 底栏那条永远是空白壁纸，
+        // 三个按钮看起来像单独浮在外面，和下面的内容不是一张纸。
         Box(
             modifier =
                 Modifier
                     .fillMaxSize()
-                    .padding(top = padding.calculateTopPadding())
-                    .padding(bottom = maxOf(contentBottom, bottomPadding)),
+                    .padding(top = padding.calculateTopPadding()),
         ) {
             // 返回手势进行中，下层把「上一页（设置列表）」一起滑进来：
             // 上层二级页面同时右移并垫上不透明底色，避免两层文字叠在一起。

@@ -29,6 +29,22 @@ import com.dhhxfggg.pjm.ui.theme.PresetRose
 import com.dhhxfggg.pjm.ui.theme.PresetSage
 import kotlin.math.absoluteValue
 
+/**
+ * 设置页各列表末尾的留白：底栏是浮在内容之上的透明胶囊，
+ * 内容必须能滚到它下面，最后一项才不会被挡住 —— 首页就是这么做的。
+ *
+ * 之前设置页是把内容区整体裁到胶囊上方，结果底栏那一条永远是空白壁纸，
+ * 三个按钮看着像单独坐在一条船上，和下面的内容割裂开。
+ */
+@Composable
+internal fun SettingsBottomSpacer() {
+    val inset =
+        WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() +
+            com.dhhxfggg.pjm.ui.component.BottomNavBarVerticalPadding * 2 +
+            com.dhhxfggg.pjm.ui.component.BottomNavBarContentHeight
+    Spacer(Modifier.height(inset))
+}
+
 @Composable
 internal fun SettingsCategory(
     title: String,
