@@ -174,8 +174,9 @@ fun SelectableFileCard(
                     Spacer(modifier = Modifier.width(16.dp))
 
                     Column(modifier = Modifier.weight(1f)) {
+                        // 标题必须是文件名：只显示时间的话，一排卡片根本分不清哪个是哪个
                         Text(
-                            text = FileUtils.formatFileTime(fileEntity.lastModified),
+                            text = FileUtils.normalizedDisplayName(fileEntity),
                             style = MaterialTheme.typography.titleMedium,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,

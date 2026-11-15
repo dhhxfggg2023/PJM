@@ -69,6 +69,7 @@ import com.dhhxfggg.pjm.ui.component.PjmDeleteConfirmDialog
 import com.dhhxfggg.pjm.ui.component.PlayerProgressBar
 import com.dhhxfggg.pjm.ui.component.PjmEmptyState
 import com.dhhxfggg.pjm.ui.component.VideoSurface
+import com.dhhxfggg.pjm.ui.component.ZoomableVaultImage
 import com.dhhxfggg.pjm.ui.component.rememberAudioInfo
 import com.dhhxfggg.pjm.ui.component.rememberIsAppVisible
 import com.dhhxfggg.pjm.ui.theme.rememberIconPack
@@ -602,126 +603,12 @@ fun DiscoveryImageRenderer(
     onLockChange: (Boolean) -> Unit,
     onLongPress: () -> Unit,
 ) {
-    val scale = remember { Animatable(1f) }
-    val offsetX = remember { Animatable(0f) }
-    val offsetY = remember { Animatable(0f) }
-    val scope = rememberCoroutineScope()
-
-    BoxWithConstraints(
-        modifier =
-            Modifier
-                .fillMaxSize()
-                .pointerInput(item.displayId) {
-                    detectTapGestures(
-                        onDoubleTap = {
-                            scope.launch {
-                                if (scale.value > 1.05f) {
-                                    onLockChange(false)
-                                    launch { scale.animateTo(1f) }
-                                    launch { offsetX.animateTo(0f) }
-                                    launch { offsetY.animateTo(0f) }
-                                } else {
-                                    onLockChange(true)
-                                    scale.animateTo(3f)
-                                }
-                            }
-                        },
-                        onLongPress = { onLongPress() },
-                    )
-                }.pointerInput(item.displayId) {
-                    awaitEachGesture {
-                        var pan = Offset.Zero
-                        var zoom = 1f
-                        var pastTouchSlop = false
-                        val touchSlop = viewConfiguration.touchSlop
-
-                        awaitFirstDown(requireUnconsumed = false)
-                        do {
-                            val event = awaitPointerEvent()
-                            val canceled = event.changes.any { it.isConsumed }
-                            if (!canceled) {
-                                val zoomChange = event.calculateZoom()
-                                val panChange = event.calculatePan()
-
-                                if (!pastTouchSlop) {
-                                    zoom *= zoomChange
-                                    pan += panChange
-                                    val centroidSize = event.calculateCentroidSize(useCurrent = false)
-                                    val zoomMotion = abs(1 - zoom) * centroidSize
-                                    val panMotion = pan.getDistance()
-
-                                    if ((zoomMotion > touchSlop) || (panMotion > touchSlop)) {
-                                        pastTouchSlop = true
-                                    }
-                                }
-
-                                if (pastTouchSlop) {
-                                    val isMultiTouch = event.changes.size > 1
-                                    val isZooming = abs(1f - zoomChange) > 0.01f
-                                    val isPanningWhenZoomed = scale.value > 1.05f
-
-                                    if (isMultiTouch || isZooming || isPanningWhenZoomed) {
-                                        event.changes.forEach { it.consume() }
-                                        scope.launch {
-                                            val newScale = (scale.value * zoomChange).coerceIn(1f, 5f)
-                                            scale.snapTo(newScale)
-                                            val zoomed = newScale > 1.05f
-                                            onLockChange(zoomed)
-                                            if (zoomed) {
-                                                offsetX.snapTo(offsetX.value + panChange.x)
-                                                offsetY.snapTo(offsetY.value + panChange.y)
-                                            } else if (newScale <= 1.01f) {
-                                                offsetX.snapTo(0f)
-                                                offsetY.snapTo(0f)
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        } while (!canceled && event.changes.any { it.pressed })
-                    }
-                },
-        contentAlignment = Alignment.Center,
-    ) {
-        val context = LocalContext.current
-        // 核心优化：按屏幕尺寸解码而非 Size.ORIGINAL（避免整张原始分辨率位图常驻内存 → OOM）。
-        // 用屏幕像素 * 2 作为采样上限（支持两级缩放不糊），Coil 会自动按 inSampleSize 采样，
-        // 既保留足够清晰度（可缩放到接近原图细节）又不让单张位图爆内存。
-        val density = LocalDensity.current
-        val decodeSize =
-            remember(item.file, density) {
-                val wPx = with(density) { maxWidth.toPx() }.toInt()
-                val hPx = with(density) { maxHeight.toPx() }.toInt()
-                Size(wPx * 2, hPx * 2)
-            }
-        val imageRequest =
-            remember(item.file, decodeSize, density) {
-                ImageRequest
-                    .Builder(context)
-                    .data(item.file)
-                    .size(decodeSize)
-                    .bitmapConfig(Bitmap.Config.ARGB_8888)
-                    .precision(Precision.INEXACT)
-                    .allowHardware(enable = true)
-                    .crossfade(true)
-                    .build()
-            }
-
-        AsyncImage(
-            model = imageRequest,
-            contentDescription = null,
-            modifier =
-                Modifier
-                    .fillMaxSize()
-                    .graphicsLayer {
-                        scaleX = scale.value
-                        scaleY = scale.value
-                        translationX = offsetX.value
-                        translationY = offsetY.value
-                    },
-            contentScale = ContentScale.Fit,
-        )
-    }
+    // 和库内查看器共用同一个缩放组件：边界由组件统一算，放大后不会把图拖出屏幕
+    ZoomableVaultImage(
+        file = item.file,
+        onZoomedChange = onLockChange,
+        onLongPress = onLongPress,
+    )
 }
 
 /**

@@ -191,6 +191,9 @@ interface FileDao {
     /**
      * Synchronous count for a specific category.
      */
+    @Query("SELECT size FROM files WHERE category = :category")
+    suspend fun getSizesByCategory(category: String): List<Long>
+
     @Query("SELECT COUNT(*) FROM files WHERE category = :category")
     suspend fun getCountByCategory(category: String): Int
 

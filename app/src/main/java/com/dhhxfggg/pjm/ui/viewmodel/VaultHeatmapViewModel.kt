@@ -3,6 +3,7 @@ package com.dhhxfggg.pjm.ui.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.dhhxfggg.pjm.data.db.FileDao
+import com.dhhxfggg.pjm.domain.util.VaultManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -27,6 +28,8 @@ data class HeatmapUiState(
     val last30: Int = 0,
     val currentStreak: Int = 0,
     val longestStreak: Int = 0,
+    /** 各分类内每个文件的大小（字节），热力图下方的「大小分布」用 */
+    val sizeSamples: Map<String, List<Long>> = emptyMap(),
     val isLoading: Boolean = true,
 )
 
@@ -72,6 +75,21 @@ class VaultHeatmapViewModel
                 // 53 列，最后一列是本周；列首均为周一
                 val startDay = today - todayWeekday - 52L * 7L
                 val last30 = (today - 29L..today).sumOf { counts[it] ?: 0 }
+                // 热力图下方的「单个文件大小分布」：按分类取全部 size，只做直方图，不落表
+                val sampleCategories =
+                    listOf(
+                        VaultManager.CAT_IMAGES,
+                        VaultManager.CAT_VIDEOS,
+                        VaultManager.CAT_BILI_VIDEOS,
+                        VaultManager.CAT_AUDIOS,
+                        VaultManager.CAT_TEXTS,
+                        VaultManager.CAT_OTHERS,
+                        VaultManager.CAT_PJM,
+                    )
+                val sizeSamples =
+                    sampleCategories.associateWith { category ->
+                        runCatching { fileDao.getSizesByCategory(category) }.getOrDefault(emptyList())
+                    }
                 var current = 0
                 var cursor = if ((counts[today] ?: 0) > 0) today else today - 1
                 while ((counts[cursor] ?: 0) > 0) {
@@ -95,6 +113,7 @@ class VaultHeatmapViewModel
                         last30 = last30,
                         currentStreak = current,
                         longestStreak = longest,
+                        sizeSamples = sizeSamples,
                         isLoading = false,
                     )
             }

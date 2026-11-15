@@ -141,7 +141,16 @@ object FileUtils {
      */
     fun normalizedDisplayName(entity: FileEntity): String {
         if (entity.extension.equals("pjm", ignoreCase = true)) return entity.name
-        if (!entity.isImage && entity.name.isNotBlank() && !isMachineName(entity)) return entity.name
+        if (!entity.isImage) {
+            // 非图片入库时磁盘名就是导入时的原名，数据库里的 name 也存的是它
+            val stored = entity.name.trim()
+            if (stored.isNotEmpty() && !isUnreadableName(stored)) return stored
+            // 数据库记的名字读不出来（老库/容器的机器名）时，再看磁盘名
+            val diskName = entity.relativePath.substringAfterLast('/').trim()
+            if (diskName.isNotEmpty() && !diskName.equals(stored, ignoreCase = true) && !isUnreadableName(diskName)) {
+                return diskName
+            }
+        }
         // 用「入库时间」而不是文件自身时间：重命名/复制过的文件 lastModified 会变，入库时间不会
         val ts = compactTsFormat.get()?.format(Date(entity.importedAt.takeIf { it > 0 } ?: entity.lastModified)) ?: "unknown"
         // 只保留时间，不再加 PJM_ 前缀（保持和老库里的命名一致）
@@ -149,21 +158,26 @@ object FileUtils {
         return if (ext.isEmpty()) ts else "$ts.$ext"
     }
 
-    /** 名字是否就是磁盘文件名（UUID）——说明这个文件没留下可读原名 */
-    private fun isDiskName(entity: FileEntity): Boolean = entity.name.equals(entity.relativePath.substringAfterLast('/'), ignoreCase = true)
-
     /**
-     * 名字是不是「机器名」：磁盘 UUID、纯十六进制哈希、纯数字时间戳。
+     * 名字是不是「读不出内容」的机器名：UUID、纯十六进制哈希、纯数字时间戳。
      * 这类名字在列表里认不出是什么文件，界面上应该换成可读的名字。
+     *
+     * 不要再用「名字 == 磁盘文件名」当判据：非图片入库时磁盘名就是用户原名，
+     * 那样会把「我的视频.mp4」也判成机器名，列表里就只剩入库时间了。
      */
-    fun isMachineName(entity: FileEntity): Boolean {
-        if (isDiskName(entity)) return true
-        val base = entity.name.substringBeforeLast('.').trim()
+    fun isMachineName(entity: FileEntity): Boolean = isUnreadableName(entity.name)
+
+    private fun isUnreadableName(raw: String): Boolean {
+        val base = raw.substringBeforeLast('.').trim()
         if (base.isEmpty()) return true
-        if (base.length >= 8 && base.all { it.isDigit() || it in 'a'..'f' || it in 'A'..'F' }) return true
+        if (UUID_PATTERN.matches(base)) return true
+        if (base.length >= 16 && base.all { it.isDigit() || it in 'a'..'f' || it in 'A'..'F' }) return true
         if (base.length >= 9 && base.all { it.isDigit() }) return true
         return false
     }
+
+    private val UUID_PATTERN =
+        Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
     /**
      * 获得一个“文件名为规范名、且可被 FileProvider 暴露/分享”的副本。

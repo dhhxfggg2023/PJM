@@ -324,6 +324,8 @@ fun SettingsScreen(
                     modifier =
                         Modifier
                             .fillMaxSize()
+                            // 二级页面自己滚到底时要留出底栏高度，否则最后一行会被导航栏挡住点不到
+                            .padding(bottom = bottomPadding)
                             .graphicsLayer {
                                 translationX = size.width * (1f - pageOpen.value)
                             },

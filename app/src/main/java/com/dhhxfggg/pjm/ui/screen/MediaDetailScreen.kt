@@ -78,6 +78,7 @@ import com.dhhxfggg.pjm.domain.util.FileUtils
 import com.dhhxfggg.pjm.domain.util.VaultManager
 import com.dhhxfggg.pjm.ui.component.PlayerProgressBar
 import com.dhhxfggg.pjm.ui.component.VideoSurface
+import com.dhhxfggg.pjm.ui.component.ZoomableVaultImage
 import com.dhhxfggg.pjm.ui.component.rememberAudioInfo
 import com.dhhxfggg.pjm.ui.component.rememberIsAppVisible
 import com.dhhxfggg.pjm.ui.theme.rememberIconPack
@@ -248,68 +249,8 @@ private fun ImagePager(
  */
 @Composable
 private fun ZoomableImagePage(file: File) {
-    val context = LocalContext.current
-    val density = LocalDensity.current
-    // 只读文件头取像素尺寸（不解码整张图），用来算"最大放大到 1:1 是几倍"
-    val dims by
-        produceState<IntArray?>(initialValue = null, file.absolutePath) {
-            value =
-                withContext(Dispatchers.IO) {
-                    runCatching {
-                        val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                        BitmapFactory.decodeFile(file.absolutePath, options)
-                        if (options.outWidth > 0 && options.outHeight > 0) {
-                            intArrayOf(options.outWidth, options.outHeight)
-                        } else {
-                            null
-                        }
-                    }.getOrNull()
-                }
-        }
-    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        val viewWidthPx = with(density) { maxWidth.toPx() }.coerceAtLeast(1f)
-        val viewHeightPx = with(density) { maxHeight.toPx() }.coerceAtLeast(1f)
-        val maxZoomFactor =
-            remember(dims, viewWidthPx, viewHeightPx) {
-                maxZoomFor(dims, viewWidthPx, viewHeightPx)
-            }
-        key(file.absolutePath) {
-            // 缩放状态按「文件」隔离：Telephoto 用 rememberSaveable，不隔离会把上一张的缩放带到下一张
-            val zoomableState = rememberZoomableState(zoomSpec = ZoomSpec(maxZoomFactor = maxZoomFactor))
-            ZoomableAsyncImage(
-                model =
-                    ImageRequest
-                        .Builder(context)
-                        .data(file)
-                        .size(2560)
-                        .precision(Precision.INEXACT)
-                        // 本地文件不需要 Coil 的磁盘缓存副本（解码结果它也不缓存）
-                        .diskCachePolicy(CachePolicy.DISABLED)
-                        .build(),
-                contentDescription = null,
-                state = rememberZoomableImageState(zoomableState),
-                modifier = Modifier.fillMaxSize(),
-            )
-        }
-    }
-}
-
-/**
- * 最大缩放倍率 = 解码目标（2560px）与 Fit 缩放之比。
- * 比如 4000x3000 的图在 1080 宽的屏上，Fit 缩放是 0.27、解码缩放是 0.64 → 能放到约 2.4 倍正好 1:1。
- */
-private fun maxZoomFor(
-    dims: IntArray?,
-    viewWidthPx: Float,
-    viewHeightPx: Float,
-): Float {
-    if (dims == null || dims[0] <= 0 || dims[1] <= 0) return 3f
-    val fileWidth = dims[0].toFloat()
-    val fileHeight = dims[1].toFloat()
-    val fitScale = minOf(viewWidthPx / fileWidth, viewHeightPx / fileHeight)
-    if (fitScale <= 0f) return 3f
-    val decodeScale = minOf(1f, 2560f / maxOf(fileWidth, fileHeight))
-    return (decodeScale / fitScale).coerceIn(2f, 12f)
+    // 缩放/边界/双击全部交给共用组件，库内查看器与发现页行为一致
+    ZoomableVaultImage(file = file, modifier = Modifier.fillMaxSize())
 }
 
 // ---------------- 视频 ----------------

@@ -213,7 +213,7 @@ internal fun MainCategoryList(
         }
         // 列表铺到屏幕底部（底栏是透明的），末尾补出底栏高度，
         // 保证「系统诊断与维护」这类最后一项仍能完整滚出来、点得到
-        Spacer(Modifier.height(bottomPadding))
+        Spacer(Modifier.height(bottomPadding + 16.dp))
     }
 }
 
@@ -320,11 +320,13 @@ internal fun DiscoverySettings(
                         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
                     ) {
+                        // 同一行两个选项宽度对半分：四个按钮大小一致，不会一个宽一个窄
                         row.forEach { (value, label) ->
                             FilterChip(
                                 selected = settings.discoveryDefaultMode == value,
                                 onClick = { settingsViewModel.updateSetting(Settings.KEY_DISCOVERY_DEFAULT_MODE, value) },
                                 label = { Text(label) },
+                                modifier = Modifier.weight(1f),
                             )
                         }
                     }
