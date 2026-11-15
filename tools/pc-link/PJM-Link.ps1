@@ -984,7 +984,10 @@ function Start-MainWindow {
     $statusCard.BackColor = $card
     $statusCard.Location = [System.Drawing.Point]::new(20, 84)
     $statusCard.Size = [System.Drawing.Size]::new(720, 118)
-    $statusCard.Paint.Add({
+    # PS 5.1 里 WinForms 事件不是属性：$statusCard.Paint 取出来是 $null，
+    # 对它调 .Add() 会抛「不能对 Null 值表达式调用方法」，工具一启动就崩。
+    # 必须用事件访问器 add_Paint 对应的 Add_Paint 方法。
+    $statusCard.Add_Paint({
         param($sender, $e)
         $pen = [System.Drawing.Pen]::new($line, 1)
         try { $e.Graphics.DrawRectangle($pen, 0, 0, $sender.Width - 1, $sender.Height - 1) } finally { $pen.Dispose() }
@@ -1265,7 +1268,12 @@ if ($null -ne $jobVar -and $jobVar.Value -is [hashtable]) {
 try {
     Start-MainWindow
 } catch {
-    Write-Log ('启动失败：' + $_.Exception.Message) '错误'
+    $errDetail = $_.Exception.Message
+    $pos = $_.InvocationInfo.PositionMessage
+    if (-not [string]::IsNullOrWhiteSpace($pos)) {
+        $errDetail = $errDetail + ' | ' + (($pos -replace '\s+', ' ').Trim())
+    }
+    Write-Log ('启动失败：' + $errDetail) '错误'
     try {
         Add-Type -AssemblyName System.Windows.Forms
         [void][System.Windows.Forms.MessageBox]::Show('PJM Link 启动失败：' + $_.Exception.Message, 'PJM Link', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
