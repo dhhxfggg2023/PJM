@@ -20,8 +20,8 @@ import java.util.concurrent.atomic.AtomicInteger
  * · 每个连接一个线程（固定 8 个），多个文件并行下载不会互相卡；
  * · 目录页带分类/时间段筛选，点条目直接下载，文件名用库内显示名。
  *
- * USB 场景下电脑执行一次 `adb forward tcp:8787 tcp:8787`，然后开 http://127.0.0.1:8787/；
- * 同一 WiFi 下直接用手机 IP 访问。
+ * 只监听 127.0.0.1：电脑端执行一次 `adb forward tcp:8787 tcp:8787` 后访问 http://127.0.0.1:8787/。
+ * 服务本身没有口令，局域网直连必须保持关闭，安全边界就靠这条回环限制。
  */
 class VaultTransferServer(
     private val vaultRoot: File,
@@ -30,8 +30,15 @@ class VaultTransferServer(
     private val preferredPort: Int = 8787,
 ) {
     private var serverSocket: ServerSocket? = null
-    private val pool = Executors.newFixedThreadPool(8)
+    private var pool = newPool()
     private val connectionId = AtomicInteger(0)
+
+    private companion object {
+        /** 并发下载连接数上限 */
+        const val POOL_SIZE = 8
+    }
+
+    private fun newPool() = Executors.newFixedThreadPool(POOL_SIZE)
 
     @Volatile
     var isRunning: Boolean = false
@@ -42,6 +49,8 @@ class VaultTransferServer(
 
     fun start(): Boolean {
         if (isRunning) return true
+        // 停止时线程池已关闭，重新开启要换一个新的
+        if (pool.isShutdown) pool = newPool()
         val socket =
             runCatching {
                 var s: ServerSocket? = null
@@ -59,7 +68,9 @@ class VaultTransferServer(
         Thread({
             while (isRunning) {
                 val client = runCatching { socket.accept() }.getOrNull() ?: break
-                pool.execute { runCatching { handle(client) } }
+                val executor = pool
+                if (executor.isShutdown) break
+                runCatching { executor.execute { runCatching { handle(client) } } }
             }
         }, "pjm-transfer-accept").start()
         return true
@@ -69,6 +80,8 @@ class VaultTransferServer(
         isRunning = false
         runCatching { serverSocket?.close() }
         serverSocket = null
+        // 不关池会一直挂着 8 个线程：反复开关服务会把线程越堆越多
+        runCatching { pool.shutdownNow() }
     }
 
     private fun handle(socket: Socket) {
@@ -167,9 +180,11 @@ class VaultTransferServer(
         val all = filesProvider()
         val filtered =
             all.filter { entity ->
+                // 与 /api/files 用同一个时间口径（入库时间），否则页面和 PC 端拿到的集合不一致
+                val stamp = entity.importedAt.takeIf { it > 0 } ?: entity.lastModified
                 (category.isEmpty() || entity.category == category) &&
-                    (fromMs == null || entity.lastModified >= fromMs) &&
-                    (toMs == null || entity.lastModified <= toMs)
+                    (fromMs == null || stamp >= fromMs) &&
+                    (toMs == null || stamp <= toMs)
             }
         val totalBytes = filtered.sumOf { it.size }
         val body = StringBuilder()
@@ -236,12 +251,38 @@ class VaultTransferServer(
         var end = length - 1
         var partial = false
         if (!range.isNullOrBlank() && range.startsWith("bytes=")) {
-            val spec = range.removePrefix("bytes=").substringBefore(',')
-            val a = spec.substringBefore('-').trim().toLongOrNull()
-            val b = spec.substringAfter('-', "").trim().toLongOrNull()
-            if (a != null) start = a
-            if (b != null) end = b.coerceAtMost(length - 1)
-            partial = true
+            val spec = range.removePrefix("bytes=").substringBefore(',').trim()
+            val firstPart = spec.substringBefore('-').trim()
+            val lastPart = spec.substringAfter('-', "").trim()
+            when {
+                // bytes=-N：最后 N 个字节（后缀范围以前会被忽略，直接返回整个文件）
+                firstPart.isEmpty() && lastPart.isNotEmpty() -> {
+                    val suffix = lastPart.toLongOrNull() ?: 0L
+                    if (suffix > 0L) {
+                        start = (length - suffix).coerceAtLeast(0L)
+                        partial = true
+                    }
+                }
+                firstPart.isNotEmpty() -> {
+                    val a = firstPart.toLongOrNull()
+                    if (a != null) {
+                        start = a
+                        lastPart.toLongOrNull()?.let { end = it.coerceAtMost(length - 1) }
+                        partial = true
+                    }
+                }
+            }
+        }
+        if (length <= 0L || start >= length || (partial && end < start)) {
+            // 416：范围不可满足必须明说，否则下载器会拿着 206 + 0 长度一直重试
+            writeText(
+                out = out,
+                code = 416,
+                contentType = "text/plain; charset=utf-8",
+                body = "range not satisfiable",
+                extraHeaders = "Content-Range: bytes */" + length + "\r\n",
+            )
+            return
         }
         val contentLength = (end - start + 1).coerceAtLeast(0L)
         val header = StringBuilder()
@@ -286,14 +327,27 @@ class VaultTransferServer(
         code: Int,
         contentType: String,
         body: String,
+        extraHeaders: String = "",
     ) {
         val bytes = body.toByteArray(Charsets.UTF_8)
         val head =
-            "HTTP/1.1 " + code + " OK\r\nContent-Type: " + contentType +
-                "\r\nContent-Length: " + bytes.size + "\r\nConnection: close\r\n\r\n"
+            "HTTP/1.1 " + statusText(code) + "\r\nContent-Type: " + contentType +
+                "\r\nContent-Length: " + bytes.size + "\r\n" + extraHeaders +
+                "Connection: close\r\n\r\n"
         out.write(head.toByteArray(Charsets.UTF_8))
         out.write(bytes)
     }
+
+    /** 状态码必须写对：以前不管传什么都输出 "200 OK"，PC 端会把 404 当成功 */
+    private fun statusText(code: Int): String =
+        when (code) {
+            200 -> "200 OK"
+            206 -> "206 Partial Content"
+            400 -> "400 Bad Request"
+            404 -> "404 Not Found"
+            416 -> "416 Range Not Satisfiable"
+            else -> code.toString()
+        }
 
     private fun parseQuery(raw: String): Map<String, String> {
         if (raw.isEmpty()) return emptyMap()

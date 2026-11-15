@@ -444,6 +444,7 @@ private fun VideoPage(
                                     }
                                 }
                             var lastX = down.position.x
+                            val slop = viewConfiguration.touchSlop
                             while (true) {
                                 val event = awaitPointerEvent()
                                 val change = event.changes.firstOrNull { it.id == down.id } ?: break
@@ -452,6 +453,15 @@ private fun VideoPage(
                                     adjustTurbo(change.position.x - lastX)
                                     lastX = change.position.x
                                     change.consume()
+                                } else {
+                                    // 分界：手指先动 → 交给横向拖动去快进；按住不动到长按时长才进加速。
+                                    // 之前长按计时和拖动同时跑，往右拖快进时会被判成长按加速，两个一起动。
+                                    val dx = change.position.x - down.position.x
+                                    val dy = change.position.y - down.position.y
+                                    if (dx * dx + dy * dy > slop * slop) {
+                                        holdJob.cancel()
+                                        break
+                                    }
                                 }
                             }
                             holdJob.cancel()
@@ -1215,6 +1225,8 @@ private fun TextViewer(
     // EPUB 自带目录：段落序号 → 章节标题
     var epubChapters by remember(file.absolutePath) { mutableStateOf<Map<Int, String>>(emptyMap()) }
     var pages by remember { mutableStateOf<List<List<String>>?>(null) }
+    // 超过上限的文本只读前 3MB：必须在界面上说清楚，否则用户以为整本就这么长
+    var textTruncated by remember(file.absolutePath) { mutableStateOf(false) }
     // 整本还没排完时给个明确提示：不然用户只看到页码在涨，以为卡住了
     var layoutDone by remember { mutableStateOf(false) }
     var chapters by remember { mutableStateOf<List<Pair<String, Int>>>(emptyList()) }
@@ -1235,7 +1247,8 @@ private fun TextViewer(
     var bookmarks by remember(file.absolutePath) {
         mutableStateOf(
             prefs
-                .getStringSet(bookmarkKey, emptySet())!!
+                .getStringSet(bookmarkKey, emptySet())
+                .orEmpty()
                 .map { it.toIntOrNull() }
                 .filterNotNull()
                 .toSet(),
@@ -1253,6 +1266,7 @@ private fun TextViewer(
     val topInsetDp = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
 
     LaunchedEffect(file.absolutePath) {
+        withContext(Dispatchers.IO) { clearStaleReaderCaches(context) }
         val isEpub = file.extension.equals("epub", ignoreCase = true)
         rawText =
             withContext(Dispatchers.IO) {
@@ -1261,7 +1275,8 @@ private fun TextViewer(
                     epubChapters = book?.chapters ?: emptyMap()
                     book?.text
                 } else {
-                    runCatching { decodeText(readLimitedBytes(file, 3L * 1024 * 1024)) }.getOrNull()
+                    textTruncated = file.length() > TEXT_READ_LIMIT_BYTES
+                    runCatching { decodeText(readLimitedBytes(file, TEXT_READ_LIMIT_BYTES)) }.getOrNull()
                 }
             }
     }
@@ -1312,7 +1327,8 @@ private fun TextViewer(
                     lineSpacing,
                     marginDp,
                     configuration.screenWidthDp,
-                    (viewportHeightPx - topInsetDp.value.toInt()).toInt(),
+                    // px 与 px 相减：之前拿 px 去减 dp 的数值，旋转/分屏后 key 变化会导致整本重排
+                    (viewportHeightPx - with(density) { topInsetDp.toPx() }.toInt()).toInt(),
                 ),
             )
         readPageCache(cacheFile, paragraphs.size)?.let { cache ->
@@ -1480,9 +1496,12 @@ private fun TextViewer(
     val style =
         TextStyle(
             fontSize = fontSize.sp,
-            lineHeight = (fontSize * 1.8f).sp,
+            // 行高必须跟着设置走：之前这里写死 1.8×，调行高只有分页变了、正文没变
+            lineHeight = (fontSize * lineSpacing).sp,
             fontFamily = FontFamily.Serif,
             color = Color(theme.foreground),
+            // 和分页时的量高保持一致：带字体额外内边距会让每行多几像素
+            platformStyle = PlatformTextStyle(includeFontPadding = false),
         )
 
     // 视口高度在根容器上量：它一直都在，分页不必等 pager 组合出来才开始
@@ -1547,11 +1566,8 @@ private fun TextViewer(
                                                     (pagerState.currentPage + 1).coerceAtMost(pagerState.pageCount - 1),
                                                 )
                                             }
-                                        else -> {
-                                            // 点中间 = 唤出底部阅读设置（不再只是开关工具条）
-                                            showChrome = false
-                                            showSettings = true
-                                        }
+                                        // 点中间 = 显示/隐藏工具条（目录、书签、设置都在顶栏上）
+                                        else -> showChrome = !showChrome
                                     }
                                 }
                             },
@@ -1602,6 +1618,9 @@ private fun TextViewer(
                             IconButton(onClick = { showChapters = true }) {
                                 Icon(Lucide.ListTodo, "目录与书签", tint = Color.White)
                             }
+                            IconButton(onClick = { showSettings = true }) {
+                                Icon(Lucide.SlidersHorizontal, "阅读设置", tint = Color.White)
+                            }
                             val bookmarked = pagerState.currentPage in bookmarks
                             TextButton(onClick = { toggleBookmark(pagerState.currentPage) }) {
                                 Text(
@@ -1611,22 +1630,14 @@ private fun TextViewer(
                             }
                         }
                         Spacer(Modifier.weight(1f))
-                        Column(
-                            modifier =
-                                Modifier
-                                    .fillMaxWidth()
-                                    .background(Color.Black.copy(alpha = 0.55f))
-                                    .padding(horizontal = 8.dp, vertical = 4.dp),
-                        ) {
-                            // 阅读页不放进度条：翻页用点击左右区域/目录/音量键，页码常显在右下角
-                        }
                     }
                 }
                 // 页码/百分比常显：不用唤出工具条也能看到读到哪
                 Text(
                     text =
                         (pagerState.currentPage + 1).toString() + " / " + pageList.size +
-                            "  ·  " + ((pagerState.currentPage + 1) * 100 / pageList.size) + "%",
+                            "  ·  " + ((pagerState.currentPage + 1) * 100 / pageList.size) + "%" +
+                            if (textTruncated) "  ·  " + stringResource(R.string.viewer_text_truncated) else "",
                     color = Color(theme.foreground).copy(alpha = 0.5f),
                     fontSize = 11.sp,
                     modifier = Modifier.align(Alignment.BottomEnd).padding(end = 14.dp, bottom = 10.dp),
@@ -1846,31 +1857,6 @@ private fun StepperRow(
     }
 }
 
-@Composable
-private fun LabeledSlider(
-    label: String,
-    value: Float,
-    range: ClosedFloatingPointRange<Float>,
-    steps: Int,
-    onChange: (Float) -> Unit,
-) {
-    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(label, style = MaterialTheme.typography.bodySmall, modifier = Modifier.width(64.dp))
-        // 用应用内统一的细轨滑条，不用 Material 默认那个又厚又碎的样式
-        PjmSlider(
-            value = value,
-            onValueChange = onChange,
-            valueRange = range,
-            modifier = Modifier.weight(1f),
-        )
-        Text(
-            text = if (label == "行距") String.format(Locale.US, "%.1f", value) else value.toInt().toString(),
-            style = MaterialTheme.typography.labelSmall,
-            modifier = Modifier.width(42.dp),
-        )
-    }
-}
-
 private fun readerCacheKey(
     file: File,
     fontSize: Float,
@@ -1879,8 +1865,8 @@ private fun readerCacheKey(
     widthDp: Int,
     heightDp: Int,
 ): String {
-    // v3：分页算法从「Compose 逐段量高」换成 StaticLayout 后台量行，旧缓存的页边界不能再用
-    val parts = listOf("v3", file.length(), file.lastModified(), fontSize, lineSpacing, marginDp, widthDp, heightDp)
+    // v4：正文行高改为跟随设置、关掉字体额外内边距，v3 及更早的页边界全部作废
+    val parts = listOf("v4", file.length(), file.lastModified(), fontSize, lineSpacing, marginDp, widthDp, heightDp)
     return parts.joinToString("-")
 }
 
@@ -1889,7 +1875,16 @@ private fun readerCacheFile(
     key: String,
 ): File {
     val dir = File(context.cacheDir, "reader_pages").apply { mkdirs() }
-    return File(dir, key.hashCode().toString() + ".pag")
+    return File(dir, "v4-" + key.hashCode().toString() + ".pag")
+}
+
+/** 排版算法升级后，旧版本的 .pag 直接删掉：留着只会占空间，也不会再被读到 */
+private fun clearStaleReaderCaches(context: Context) {
+    val dir = File(context.cacheDir, "reader_pages")
+    if (!dir.isDirectory) return
+    dir.listFiles()?.forEach { file ->
+        if (!file.name.startsWith("v4-")) runCatching { file.delete() }
+    }
 }
 
 private fun readPageCache(
@@ -1937,6 +1932,9 @@ private fun writePageCache(
 }
 
 /** 只读取前 limit 字节，避免大文件直接把内存吃满 */
+/** 文本阅读上限：超过就只读前 3MB，页脚会标注（不是整本，别让用户以为书就这么长） */
+private const val TEXT_READ_LIMIT_BYTES = 3L * 1024 * 1024
+
 private fun readLimitedBytes(
     file: File,
     limit: Long,

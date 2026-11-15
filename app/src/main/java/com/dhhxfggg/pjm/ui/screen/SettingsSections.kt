@@ -124,7 +124,6 @@ internal fun MainCategoryList(
     settingsViewModel: SettingsViewModel,
     managedAppCount: Int,
     onNavigate: (SettingsPage) -> Unit,
-    bottomPadding: Dp = 0.dp,
 ) {
     Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         // 「通用」：日常最常改的两项（外观 + 接管），按大多数软件的层级习惯放在最上面
@@ -213,7 +212,7 @@ internal fun MainCategoryList(
         }
         // 列表铺到屏幕底部（底栏是透明的），末尾补出底栏高度，
         // 保证「系统诊断与维护」这类最后一项仍能完整滚出来、点得到
-        Spacer(Modifier.height(bottomPadding + 16.dp))
+        Spacer(Modifier.height(24.dp))
     }
 }
 
@@ -720,6 +719,7 @@ internal fun MaintenanceSettings(
     onClearLogs: () -> Unit,
     onFactoryReset: () -> Unit,
     onRandomShare: () -> Unit,
+    refreshToken: Int = 0,
 ) {
     Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         SettingsCategory(title = stringResource(R.string.settings_cat_asset_maintenance)) {
@@ -760,8 +760,23 @@ internal fun MaintenanceSettings(
         SettingsCategory(title = stringResource(R.string.settings_cat_diagnostics)) {
             val ctx = LocalContext.current
             // 显示各自现在占多大：缓存 = 缩略图 + 临时文件 + 阅读器分页缓存；日志 = files/logs
-            val cacheBytes by produceState(0L) { value = withContext(Dispatchers.IO) { dirSizeBytes(ctx.cacheDir) } }
-            val logBytes by produceState(0L) { value = withContext(Dispatchers.IO) { dirSizeBytes(File(ctx.filesDir, "logs")) } }
+            // 显示的只是「点一下能被清掉」的部分：cacheDir 里的临时文件与阅读器分页缓存。
+            // 缩略图（filesDir/thumbnails、filesDir/pjm_thumbnail_cache）不在这里，也不会被「清除缓存」删除：
+            // 它们由 ThumbnailCache 跟着源文件走，源文件删掉时同步删除，不需要用户手动清。
+            val cacheBytes by
+                produceState(0L, refreshToken) {
+                    while (true) {
+                        value = withContext(Dispatchers.IO) { dirSizeBytes(ctx.cacheDir) }
+                        delay(2000)
+                    }
+                }
+            val logBytes by
+                produceState(0L, refreshToken) {
+                    while (true) {
+                        value = withContext(Dispatchers.IO) { dirSizeBytes(File(ctx.filesDir, "logs")) }
+                        delay(2000)
+                    }
+                }
             // 核心修复：清除缓存与清除日志分离
             SettingsButton(
                 icon = Lucide.Brush,

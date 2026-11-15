@@ -33,6 +33,7 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -40,6 +41,12 @@ import com.dhhxfggg.pjm.R
 import com.dhhxfggg.pjm.ui.navigation.Screen
 import com.dhhxfggg.pjm.ui.theme.IconPack
 import com.dhhxfggg.pjm.ui.theme.PrimaryDark
+
+/** 底栏胶囊本身的高度（不含上下留白与系统导航条） */
+val BottomNavBarContentHeight: Dp = 60.dp
+
+/** 胶囊上下的留白 */
+val BottomNavBarVerticalPadding: Dp = 10.dp
 
 /**
  * 浮动胶囊式底部导航。
@@ -93,12 +100,12 @@ fun BottomNavBar(
             Modifier
                 .fillMaxWidth()
                 .navigationBarsPadding()
-                .padding(horizontal = 18.dp, vertical = 10.dp),
+                .padding(horizontal = 18.dp, vertical = BottomNavBarVerticalPadding),
     ) {
         // 底栏不再做成「浮在大背景上的一张卡片」：底色直接取页面背景、去掉描边与投影，
         // 只有选中项的高亮胶囊浮出来，不会出现「底栏一层、背景一层」的割裂感。
         Surface(
-            modifier = Modifier.fillMaxWidth().height(60.dp),
+            modifier = Modifier.fillMaxWidth().height(BottomNavBarContentHeight),
             shape = CircleShape,
             color = Color.Transparent,
             border = null,

@@ -12,6 +12,9 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -36,6 +39,8 @@ import com.dhhxfggg.pjm.domain.util.ShareUtils
 import com.dhhxfggg.pjm.domain.util.UpdateChecker
 import com.dhhxfggg.pjm.domain.util.UpdateController
 import com.dhhxfggg.pjm.domain.util.VaultManager
+import com.dhhxfggg.pjm.ui.component.BottomNavBarContentHeight
+import com.dhhxfggg.pjm.ui.component.BottomNavBarVerticalPadding
 import com.dhhxfggg.pjm.ui.component.PjmAeroDialog
 import com.dhhxfggg.pjm.ui.component.PjmDuplicateCompareDialog
 import com.dhhxfggg.pjm.ui.component.PjmFolderPickerDialog
@@ -81,6 +86,9 @@ fun SettingsScreen(
     val managedApps by takeoverViewModel.managedApps.collectAsState()
 
     var currentPage by remember { mutableStateOf<SettingsPage?>(null) }
+
+    // 清理缓存/日志后让诊断页立刻重新算占用，不用退出再进来
+    var maintenanceRefresh by remember { mutableIntStateOf(0) }
 
     // 正在显示（或正在滑出）的二级页面：关闭后等滑出动画跑完再撤掉
     var lastPage by remember { mutableStateOf<SettingsPage?>(null) }
@@ -286,12 +294,19 @@ fun SettingsScreen(
         },
         containerColor = Color.Transparent,
     ) { padding ->
-        // 内容一直铺到屏幕最底：底栏本身是透明的，列表从它下面穿过去才会「连续」。
-        // 之前这里整体抬高了 bottomPadding，底栏位置就露出一条纯壁纸，
-        // 卡片被一条水平线硬切断 —— 看着像单独一块背景。
-        // 底栏高度改由列表末尾的空白补偿（见 MainCategoryList 的 bottomPadding），
-        // 最后一项仍然能完整滚到导航栏上方、点得到。
-        Box(modifier = Modifier.padding(padding).fillMaxSize()) {
+        // 内容区直接裁到「底栏胶囊上方」：底栏是浮在内容之上的透明胶囊，
+        // 高度 = 系统导航条 + 上下留白 + 胶囊本体。列表和二级页面都在这个区域里滚，
+        // 滚到底时最后一项天然贴着胶囊上沿，不存在被挡住或划不下去。
+        val navBarInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+        val contentBottom =
+            navBarInset + BottomNavBarVerticalPadding * 2 + BottomNavBarContentHeight
+        Box(
+            modifier =
+                Modifier
+                    .fillMaxSize()
+                    .padding(top = padding.calculateTopPadding())
+                    .padding(bottom = maxOf(contentBottom, bottomPadding)),
+        ) {
             // 返回手势进行中，下层把「上一页（设置列表）」一起滑进来：
             // 上层二级页面同时右移并垫上不透明底色，避免两层文字叠在一起。
             // 列表常驻在下层；平时整体移出屏幕左侧（不可见），手势时跟手滑入。
@@ -311,7 +326,6 @@ fun SettingsScreen(
                     settings = settings,
                     settingsViewModel = settingsViewModel,
                     managedAppCount = managedApps.size,
-                    bottomPadding = bottomPadding,
                     onNavigate = { currentPage = it },
                 )
             }
@@ -324,8 +338,6 @@ fun SettingsScreen(
                     modifier =
                         Modifier
                             .fillMaxSize()
-                            // 二级页面自己滚到底时要留出底栏高度，否则最后一行会被导航栏挡住点不到
-                            .padding(bottom = bottomPadding)
                             .graphicsLayer {
                                 translationX = size.width * (1f - pageOpen.value)
                             },
@@ -363,6 +375,7 @@ fun SettingsScreen(
                         SettingsPage.Maintenance ->
                             MaintenanceSettings(
                                 settingsViewModel = settingsViewModel,
+                                refreshToken = maintenanceRefresh,
                                 onCheckUpdate = {
                                     if (isCheckingUpdate) return@MaintenanceSettings
                                     // 先显示弹窗，再开始网络检查
@@ -407,9 +420,10 @@ fun SettingsScreen(
                                                 loader.diskCache?.clear()
                                             }
                                             VaultManager.updateProgress(1f, systemCleanedMsg, taskId = VaultManager.TASK_CLEAR_CACHE)
-                                            withContext(
-                                                Dispatchers.Main,
-                                            ) { Toast.makeText(context, systemCleanedMsg, Toast.LENGTH_SHORT).show() }
+                                            withContext(Dispatchers.Main) {
+                                                Toast.makeText(context, systemCleanedMsg, Toast.LENGTH_SHORT).show()
+                                                maintenanceRefresh++
+                                            }
                                             delay(1200)
                                             VaultManager.clearProgress(VaultManager.TASK_CLEAR_CACHE)
                                         } finally {
@@ -441,6 +455,7 @@ fun SettingsScreen(
                                                         context.getString(R.string.status_logs_cleared),
                                                         Toast.LENGTH_SHORT,
                                                     ).show()
+                                                maintenanceRefresh++
                                             }
                                             delay(1200)
                                             VaultManager.clearProgress(VaultManager.TASK_CLEAR_LOGS)

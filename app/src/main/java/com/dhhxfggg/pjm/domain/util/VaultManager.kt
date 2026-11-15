@@ -375,9 +375,9 @@ object VaultManager {
                     ThumbnailCache.delete(context, it)
                     ImageFingerprintCache.delete(context, it)
                 }
-            } catch (
-                _: Exception,
-            ) {
+            } catch (e: Exception) {
+                // 缓存删不掉不影响文件已经删掉这件事，但必须留痕，否则只能看到空间对不上
+                PjmLogger.w(TAG, "清理缩略图/指纹失败: $relativePath", e)
             }
             fileDao.deleteByRelativePath(relativePath)
             triggerRefresh()
@@ -406,9 +406,8 @@ object VaultManager {
                         ThumbnailCache.delete(context, it)
                         ImageFingerprintCache.delete(context, it)
                     }
-                } catch (
-                    _: Exception,
-                ) {
+                } catch (e: Exception) {
+                    PjmLogger.w(TAG, "清理缩略图/指纹失败: $relPath", e)
                 }
             }
             val deletedPaths = relativePaths - failedPaths.toSet()

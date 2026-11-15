@@ -113,10 +113,10 @@ fun VaultHeatmapScreen(
 
         Spacer(Modifier.height(12.dp))
         HeatmapLegend()
-        Spacer(Modifier.height(20.dp))
-        SizeDistribution(samples = state.sizeSamples)
         Spacer(Modifier.height(18.dp))
         MonthlyStats(counts = state.counts, today = state.today)
+        Spacer(Modifier.height(20.dp))
+        SizeDistribution(samples = state.sizeSamples)
     }
 }
 

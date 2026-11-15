@@ -89,6 +89,7 @@ object FileServerMain {
 
         // 请求去重：保证同一个请求只会被处理一次（见 RequestDispatcher 说明）
         val dispatcher = RequestDispatcher()
+        val workerPool = java.util.concurrent.Executors.newFixedThreadPool(4)
 
         while (true) {
             try {
@@ -104,7 +105,8 @@ object FileServerMain {
                     if (!dispatcher.tryAcquire(reqFile.name)) return@forEach
                     // 核心修复：每请求一个线程处理（并发），
                     // 避免删除大目录（10G+）的 deleteRecursively 阻塞整个服务，导致其他命令全部超时。
-                    Thread {
+                    // 固定线程池：以前是一个请求一个 Thread，请求一多就是几百个线程
+                    workerPool.execute {
                         try {
                             handleRequest(reqFile, ioDir)
                         } catch (e: Exception) {
@@ -116,7 +118,7 @@ object FileServerMain {
                             reqFile.delete()
                             dispatcher.release(reqFile.name)
                         }
-                    }.start()
+                    }
                 }
             } catch (e: Exception) {
                 println("PJM privileged server: poll error: ${e.message}")

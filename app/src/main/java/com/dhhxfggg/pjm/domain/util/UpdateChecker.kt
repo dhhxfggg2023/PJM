@@ -291,6 +291,11 @@ object UpdateChecker {
                 // GitHub release 下载是 302 到 objects.githubusercontent.com，自动跟随
                 conn.instanceFollowRedirects = true
 
+                // 302 之后的真实地址也要再校验一次：白名单只管住了初始 URL
+                if (!isTrustedDownloadUrl(conn.url.toString())) {
+                    PjmLogger.e(TAG, "下载被重定向到未授权地址: " + conn.url)
+                    return@withContext DownloadResult.Error("下载地址不可信，已阻止")
+                }
                 val code = conn.responseCode
                 if (code != 200) {
                     return@withContext DownloadResult.Error("下载失败 (HTTP $code)")

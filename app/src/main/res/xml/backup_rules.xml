@@ -2,7 +2,7 @@
   API < 31 的自动备份规则（由 android:fullBackupContent 引用）。
 
   本应用是【本地隐私保险库】：保险库明文文件、数据库索引、缩略图、指纹与日志
-  一律不参与云备份，避免「本地加密」的资料被静默同步到云端。
+  一律不参与云备份，避免「本地混淆」的资料被静默同步到云端。
   参见 https://developer.android.com/guide/topics/data/autobackup
 -->
 <full-backup-content>

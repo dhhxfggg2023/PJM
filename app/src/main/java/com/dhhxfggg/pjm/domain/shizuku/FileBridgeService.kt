@@ -79,7 +79,17 @@ class FileBridgeService : IFileBridgeService.Stub() {
 
     override fun deletePath(path: String): Boolean {
         return try {
-            val f = File(path)
+            // 这一层跑在 shell 身份下，删错就是系统级破坏：只接受绝对路径、
+            // 至少两级目录、且不含 ".."（请求文件本身也可能被伪造）
+            val normalized = path.trim()
+            if (!normalized.startsWith("/") ||
+                normalized.contains("..") ||
+                normalized.trimEnd('/').count { it == '/' } < 2
+            ) {
+                Log.e(TAG, "deletePath 拒绝可疑路径: $path")
+                return false
+            }
+            val f = File(normalized)
             if (!f.exists()) return true
             if (f.isDirectory) {
                 f.deleteRecursively()

@@ -21,6 +21,7 @@ import com.dhhxfggg.pjm.R
  * Designed for personal use with zero-friction redirection to system settings.
  */
 @OptIn(ExperimentalMaterial3Api::class)
+@Suppress("UNUSED_PARAMETER")
 @Composable
 fun PermissionScreen(
     onOpenSettings: () -> Unit,

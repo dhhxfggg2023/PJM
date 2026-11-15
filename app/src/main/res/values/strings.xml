@@ -14,7 +14,7 @@
     <string name="action_export_to_gallery">导出到相册</string>
     <string name="action_back">返回</string>
     <string name="action_confirm">确定</string>
-    <string name="action_pack_and_encrypt">🔒 打包并加密</string>
+    <string name="action_pack_and_encrypt">🔒 打包并混淆</string>
     <string name="action_extract_now">立即提取</string>
     <string name="action_close">关闭</string>
     <string name="action_shred_now">立即粉碎</string>
@@ -28,8 +28,8 @@
     <string name="action_import_bili_merged_now">立即入库</string>
 
     <!-- Shortcuts -->
-    <string name="shortcut_encrypt">加密</string>
-    <string name="shortcut_encrypt_long">立即开始加密文件</string>
+    <string name="shortcut_encrypt">混淆</string>
+    <string name="shortcut_encrypt_long">立即开始混淆文件</string>
     <string name="shortcut_cabinet">查看文件</string>
     <string name="shortcut_cabinet_long">打开文件柜查看已还原文件</string>
 
@@ -37,13 +37,13 @@
     <string name="status_ready">就绪</string>
     <string name="status_processing">正在处理文件...</string>
     <string name="status_storing">正在存放...</string>
-    <string name="status_encrypting">正在加密...</string>
+    <string name="status_encrypting">正在混淆...</string>
     <string name="status_decrypting">正在解密: %1$s</string>
     <string name="status_storing_with_progress">正在存放 (%1$d%%)</string>
-    <string name="status_encrypt_success">加密完成</string>
+    <string name="status_encrypt_success">混淆完成</string>
     <string name="status_cache_cleared">缓存已清空</string>
     <string name="status_export_success">成功导出资源</string>
-    <string name="status_processing_split_volume">正在处理加密分卷: %1$s</string>
+    <string name="status_processing_split_volume">正在处理混淆分卷: %1$s</string>
     <string name="status_ingesting_file">正在入库: %1$s</string>
     <string name="status_updating_index">正在更新索引...</string>
     <string name="status_ingestion_complete_with_skips">入库完成 (跳过 %1$d 个重复文件)</string>
@@ -79,7 +79,7 @@
     <string name="status_verifying_fingerprints">正在校验指纹...</string>
 
     <!-- Errors -->
-    <string name="error_encrypt_failed">加密失败: %1$s</string>
+    <string name="error_encrypt_failed">混淆失败: %1$s</string>
     <string name="error_decrypt_failed">解密失败: %1$s</string>
     <string name="error_open_file_failed">无法打开文件: %1$s</string>
     <string name="error_delete_failed">删除失败: %1$s</string>
@@ -92,7 +92,7 @@
     <string name="viewer_text_empty">（空文件）</string>
     <string name="viewer_text_paginating">正在排版…</string>
     <string name="audio_sleep_timer">定时关闭</string>
-    <string name="viewer_text_truncated">文件较大，只显示前 1.5MB</string>
+    <string name="viewer_text_truncated">文件较大，只显示前 3MB</string>
     <string name="error_media_load_failed">无法加载媒体内容</string>
     <string name="error_export_failed_simple">导出失败</string>
     <string name="error_password_empty">密码不能为空</string>
@@ -101,13 +101,13 @@
     <string name="empty_folder">文件夹为空或无法访问</string>
     <string name="selected_count">已选择 %1$d 项</string>
     <string name="share_to_pjm">分享到 PJM</string>
-    <string name="cat_pjm_display">PJM 加密包</string>
+    <string name="cat_pjm_display">PJM 混淆包</string>
     <string name="cat_images_display">图片库</string>
     <string name="cat_videos_display">视频库</string>
     <string name="cat_texts_display">文本</string>
     <string name="cat_audios_display">音频库</string>
     <string name="cat_others_display">其他</string>
-    <string name="empty_vault_msg">暂无加密资源</string>
+    <string name="empty_vault_msg">还没有文件</string>
     <string name="empty_vault_hint">把文件「分享」到 PJM 即可自动入库</string>
     <string name="discovery_empty_title">这里还没有内容</string>
     <string name="discovery_empty_hint">把图片或视频分享到 PJM，这里就会出现</string>
@@ -121,7 +121,7 @@
     <string name="dialog_title_encrypted_archive">加密归档</string>
     <string name="dialog_msg_password_required">文件 %1$s 已加密，请输入密码：</string>
     <string name="dialog_msg_new_file_found">发现新文件，如何存放？</string>
-    <string name="toast_pjm_archive_detected">识别到 PJM 加密包，自动存放中...</string>
+    <string name="toast_pjm_archive_detected">识别到 PJM 混淆包，自动存放中...</string>
     <string name="dialog_delete_msg_discovery">确定要永久移除这项资源吗？</string>
     <string name="dialog_title_details">详情</string>
     <string name="dialog_title_shred_confirm">安全粉碎确认</string>
@@ -129,7 +129,7 @@
     <string name="dialog_delete_msg_batch">确定要抹除选中的 %1$d 个文件吗？</string>
     <string name="toast_ingest_summary">导入完成：成功 %1$d · 跳过 %2$d</string>
     <string name="toast_ingest_summary_failed">导入完成：成功 %1$d · 跳过 %2$d · 失败 %3$d</string>
-    <string name="toast_encrypt_volumes">加密完成：生成 %1$d 个分卷</string>
+    <string name="toast_encrypt_volumes">混淆完成：生成 %1$d 个分卷</string>
     <string name="dialog_title_integrity_results">自检结果</string>
     <string name="dialog_title_clean_duplicates_confirm">清理重复内容</string>
     <string name="action_deselect_all">取消全选</string>
@@ -181,9 +181,9 @@
     <string name="settings_title_auto_extract">压缩包自动提取入库</string>
     <string name="settings_desc_auto_extract">存入 ZIP/7z/RAR 时自动将其解压并分类存储</string>
     <string name="settings_title_random_share">随机图片分享</string>
-    <string name="settings_desc_random_share">从 PJM 图片库随机抽取图片，可加密打包成 PJM，也可直接发原图</string>
+    <string name="settings_desc_random_share">从 PJM 图片库随机抽取图片，可混淆打包成 PJM，也可直接发原图</string>
     <string name="dialog_title_random_share">随机图片盲盒</string>
-    <string name="dialog_msg_random_share">从 PJM 图片库（图片分类）随机抽取指定数量的图片：可加密打包成 PJM 存入库中稍后分享，也可直接把原图交给系统分享。</string>
+    <string name="dialog_msg_random_share">从 PJM 图片库（图片分类）随机抽取指定数量的图片：可混淆打包成 PJM 存入库中稍后分享，也可直接把原图交给系统分享。</string>
     <string name="label_random_count">抽取数量</string>
     <string name="label_random_mode">分享方式</string>
     <string name="mode_random_package">打包成 PJM</string>
@@ -194,7 +194,7 @@
     <string name="action_start_random">开始抽取</string>
     <string name="status_random_pick">正在从图片库随机抽取图片...</string>
     <string name="toast_random_pick_empty">图片库中暂无可用图片</string>
-    <string name="toast_random_pick_done">已随机加密 %1$d 张图片到 PJM 库</string>
+    <string name="toast_random_pick_done">已随机混淆 %1$d 张图片到 PJM 库</string>
     <string name="settings_title_split_size">导出分卷大小 (MB)</string>
     <string name="settings_desc_split_size">打包导出时每个分卷的最大容量</string>
     <string name="settings_title_bili_import">Bilibili 视频导入</string>
@@ -249,7 +249,7 @@
     <string name="label_recommended_keep_short">推荐保留</string>
     <string name="action_delete_mark">将删除</string>
     <string name="action_keep">保留</string>
-    <string name="msg_pjm_archive_info">这是加密归档，您可以将其内容提取。</string>
+    <string name="msg_pjm_archive_info">这是 PJM 混淆归档，您可以将其内容提取。</string>
 
     <!-- Passwords -->
     <string name="strength_weak_desc">密码太弱 (建议至少6位)</string>
@@ -397,7 +397,7 @@
 
     <!-- 压缩包解压 -->
     <string name="status_archive_failed">压缩包解压失败，已按原文件存入：%1$s</string>
-    <!-- 应用接管（MediaStore 观察者：新保存的文件自动加密入库并删除原文件） -->
+    <!-- 应用接管（MediaStore 观察者：新保存的文件自动混淆入库并删除原文件） -->
     <string name="settings_cat_app_takeover">应用接管</string>
     <string name="settings_title_app_takeover">接管保存到相册</string>
     <string name="settings_desc_app_takeover_summary">已接管 %1$d 个应用</string>
