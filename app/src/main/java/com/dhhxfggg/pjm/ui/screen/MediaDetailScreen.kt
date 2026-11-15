@@ -1,9 +1,7 @@
 package com.dhhxfggg.pjm.ui.screen
 
-import com.dhhxfggg.pjm.ui.component.PjmSlider
 import android.content.ComponentName
 import android.content.Context
-import android.graphics.BitmapFactory
 import android.graphics.Typeface
 import android.os.Build
 import android.text.StaticLayout
@@ -50,9 +48,9 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -65,9 +63,6 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
-import coil3.request.CachePolicy
-import coil3.request.ImageRequest
-import coil3.size.Precision
 import com.composables.icons.lucide.*
 import com.dhhxfggg.pjm.R
 import com.dhhxfggg.pjm.data.model.FileEntity
@@ -77,25 +72,33 @@ import com.dhhxfggg.pjm.domain.util.EpubExtractor
 import com.dhhxfggg.pjm.domain.util.FileUtils
 import com.dhhxfggg.pjm.domain.util.VaultManager
 import com.dhhxfggg.pjm.ui.component.PlayerProgressBar
+import com.dhhxfggg.pjm.ui.component.VideoControlBar
 import com.dhhxfggg.pjm.ui.component.VideoSurface
 import com.dhhxfggg.pjm.ui.component.ZoomableVaultImage
+import com.dhhxfggg.pjm.ui.component.formatPlaybackTime
 import com.dhhxfggg.pjm.ui.component.rememberAudioInfo
 import com.dhhxfggg.pjm.ui.component.rememberIsAppVisible
+import com.dhhxfggg.pjm.ui.component.rememberPlayerProgress
 import com.dhhxfggg.pjm.ui.theme.rememberIconPack
 import com.dhhxfggg.pjm.ui.viewmodel.MediaDetailViewModel
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import me.saket.telephoto.zoomable.ZoomSpec
-import me.saket.telephoto.zoomable.coil3.ZoomableAsyncImage
-import me.saket.telephoto.zoomable.rememberZoomableImageState
-import me.saket.telephoto.zoomable.rememberZoomableState
 import java.io.File
 import java.util.Locale
+
+/**
+ * 断行策略：最简单的按词断行，不做连字符/高质量断行（几万段排版省掉多余开销）。
+ *
+ * 值就是 0：`LineBreaker.BREAK_STRATEGY_SIMPLE` 是 API 29 才有的类，本应用 minSdk 24 引用不了，
+ * 而 `Layout.BREAK_STRATEGY_SIMPLE` 与它同值 —— lint 的 WrongConstant 只认前者，这里显式忽略。
+ */
+@Suppress("WrongConstant")
+private const val SIMPLE_BREAK_STRATEGY = android.text.Layout.BREAK_STRATEGY_SIMPLE
 
 /**
  * 统一的文件查看器：图片 / 视频 / 音频 / 文本。
@@ -107,7 +110,7 @@ import java.util.Locale
  *
  * 不支持的类型只给一句说明 + 一个「用系统应用打开」，不再假装能预览。
  */
-@OptIn(UnstableApi::class)
+@androidx.annotation.OptIn(UnstableApi::class)
 @Composable
 fun MediaDetailScreen(
     relativePath: String,
@@ -290,13 +293,16 @@ private fun VideoPager(
     }
 }
 
-@OptIn(UnstableApi::class)
+@androidx.annotation.OptIn(UnstableApi::class)
 @Composable
 private fun VideoPage(
     file: File,
     isActive: Boolean,
 ) {
     val context = LocalContext.current
+    // 文案在组合期取好（跟随语言/配置变化），双击手势回调里直接用
+    val seekForward10Label = stringResource(R.string.video_seek_forward_10)
+    val seekBack10Label = stringResource(R.string.video_seek_back_10)
     val player =
         remember(file.absolutePath) {
             ExoPlayer.Builder(context.applicationContext).build().apply {
@@ -315,13 +321,11 @@ private fun VideoPage(
         if (!isActive) player.pause()
     }
 
-    var isPlaying by remember { mutableStateOf(false) }
-    var positionMs by remember { mutableLongStateOf(0L) }
-    var durationMs by remember { mutableLongStateOf(0L) }
+    // 进度/时长/播放状态和发现页共用同一份轮询。以前这里是 200ms 轮询 + 把位置写在本层，
+    // 控制条一显示就每 200ms 重组整页（含播放器 AndroidView）。
+    val progress = rememberPlayerProgress(player)
     // 进入播放页不自动弹控制条：画面干净，需要时点一下再出现
     var showControls by remember { mutableStateOf(false) }
-    var scrubbing by remember { mutableStateOf(false) }
-    var scrubMs by remember { mutableLongStateOf(0L) }
     var lastScrubSeekAt by remember { mutableLongStateOf(0L) }
     // 双击跳转的一次性提示（"+10s" / "-10s"），700ms 后自动消失
     var seekHint by remember { mutableStateOf<String?>(null) }
@@ -361,32 +365,37 @@ private fun VideoPage(
     DisposableEffect(fullscreen) {
         val activity = context as? android.app.Activity
         val window = activity?.window
-        val controller = window?.let { androidx.core.view.WindowCompat.getInsetsController(it, it.decorView) }
+        val controller =
+            window?.let {
+                androidx.core.view.WindowCompat
+                    .getInsetsController(it, it.decorView)
+            }
         controller?.systemBarsBehavior =
             androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         if (fullscreen) {
             activity?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-            controller?.hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+            controller?.hide(
+                androidx.core.view.WindowInsetsCompat.Type
+                    .systemBars(),
+            )
         } else {
             activity?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-            controller?.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+            controller?.show(
+                androidx.core.view.WindowInsetsCompat.Type
+                    .systemBars(),
+            )
         }
         onDispose {
             activity?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-            controller?.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+            controller?.show(
+                androidx.core.view.WindowInsetsCompat.Type
+                    .systemBars(),
+            )
         }
     }
 
-    LaunchedEffect(player) {
-        while (true) {
-            positionMs = player.currentPosition.coerceAtLeast(0L)
-            durationMs = player.duration.coerceAtLeast(0L)
-            isPlaying = player.isPlaying
-            delay(200)
-        }
-    }
-    LaunchedEffect(showControls, isPlaying) {
-        if (showControls && isPlaying) {
+    LaunchedEffect(showControls, progress.isPlaying) {
+        if (showControls && progress.isPlaying) {
             delay(2600)
             showControls = false
         }
@@ -399,7 +408,7 @@ private fun VideoPage(
             modifier =
                 Modifier
                     .fillMaxSize()
-                    .pointerInput(durationMs) {
+                    .pointerInput(Unit) {
                         detectTapGestures(
                             onTap = { showControls = !showControls },
                             onDoubleTap = doubleTap@{ offset ->
@@ -407,6 +416,8 @@ private fun VideoPage(
                                 // 中间 1/3 不跳（避免误触），且要求总时长 > 15 秒、目标位置有效
                                 val width = size.width.toFloat()
                                 val position = player.currentPosition.coerceAtLeast(0L)
+                                // 手势开始的一刻直接问播放器，不用等轮询（也就不会用到过期时长）
+                                val total = player.duration.coerceAtLeast(0L)
                                 if (offset.x >= width / 3f && offset.x <= width * 2f / 3f) {
                                     // 中间双击 = 播放/暂停（最常见的手势，之前被吞了）
                                     // 双击只做播放/暂停，不弹控制条（一快进就蹦出按钮和进度条很烦）
@@ -415,13 +426,13 @@ private fun VideoPage(
                                 }
                                 val target =
                                     when {
-                                        durationMs <= 15_000L -> position
+                                        total <= 15_000L -> position
                                         offset.x < width / 3f -> (position - 10_000L).coerceAtLeast(0L)
-                                        else -> (position + 10_000L).coerceAtMost(durationMs)
+                                        else -> (position + 10_000L).coerceAtMost(total)
                                     }
                                 if (target != position) {
                                     player.seekTo(target)
-                                    seekHint = if (target > position) "+10 秒" else "-10 秒"
+                                    seekHint = if (target > position) seekForward10Label else seekBack10Label
                                     turboScope.launch {
                                         delay(700)
                                         seekHint = null
@@ -438,7 +449,7 @@ private fun VideoPage(
                                 turboScope.launch {
                                     delay(viewConfiguration.longPressTimeoutMillis)
                                     // 长按任意位置都是加速；几秒钟的短视频没必要（一下子就播完了）
-                                    if (durationMs >= 5_000L) {
+                                    if (player.duration >= 5_000L) {
                                         active = true
                                         startTurbo()
                                     }
@@ -467,31 +478,43 @@ private fun VideoPage(
                             holdJob.cancel()
                             if (active) stopTurbo()
                         }
-                    }.pointerInput(durationMs) {
-                        if (durationMs <= 0L) return@pointerInput
+                    }.pointerInput(Unit) {
+                        // 时长在每次拖动开始时取一次；播放器还没就绪就忽略这次拖动。
+                        // 不把时长塞进 pointerInput 的 key —— 那会让手势层随进度更新反复重启。
+                        var dragDuration = 0L
                         detectHorizontalDragGestures(
                             onDragStart = {
                                 if (turboSpeed > 0f) return@detectHorizontalDragGestures
-                                scrubbing = true
-                                scrubMs = player.currentPosition.coerceAtLeast(0L)
+                                dragDuration = player.duration.takeIf { it > 0L } ?: 0L
+                                if (dragDuration <= 0L) return@detectHorizontalDragGestures
+                                progress.scrubTo(player.currentPosition.coerceAtLeast(0L))
                             },
                             onDragEnd = {
-                                if (!scrubbing) return@detectHorizontalDragGestures
-                                player.seekTo(scrubMs)
-                                scrubbing = false
+                                if (!progress.scrubbing) return@detectHorizontalDragGestures
+                                val target = progress.shownPositionMs
+                                player.seekTo(target)
+                                progress.endScrub(target)
                             },
-                            onDragCancel = { scrubbing = false },
+                            onDragCancel = {
+                                // 节流 seek 可能没跟上最后一段距离，抬手时补一次
+                                val target = progress.shownPositionMs
+                                player.seekTo(target)
+                                progress.endScrub(target)
+                            },
                         ) { change, dragAmount ->
-                            if (turboSpeed > 0f || !scrubbing) return@detectHorizontalDragGestures
+                            if (turboSpeed > 0f || !progress.scrubbing || dragDuration <= 0L) {
+                                return@detectHorizontalDragGestures
+                            }
                             change.consume()
                             // 横向拖动灵敏度调低（全屏宽 = 时长的 35%），避免一拖就飞过头
-                            val deltaMs = (dragAmount / size.width * durationMs * 0.35f).toLong()
-                            scrubMs = (scrubMs + deltaMs).coerceIn(0L, durationMs)
+                            val deltaMs = (dragAmount / size.width * dragDuration * 0.35f).toLong()
+                            val target = (progress.shownPositionMs + deltaMs).coerceIn(0L, dragDuration)
+                            progress.scrubTo(target)
                             // 画面跟着手指走：节流 seek（80ms 一次），边拖边看到拖到了哪一帧
                             val now = System.currentTimeMillis()
                             if (now - lastScrubSeekAt > 80L) {
                                 lastScrubSeekAt = now
-                                player.seekTo(scrubMs)
+                                player.seekTo(target)
                             }
                         }
                     },
@@ -526,8 +549,8 @@ private fun VideoPage(
                 )
             }
         }
-        // 拖动进度：只显示一个时间提示，不唤起整条控制栏
-        if (scrubbing) {
+        // 全屏拖进度时不弹控制栏，只给一个中间的时间提示（控制栏可见时它自己会显示位置）
+        if (progress.scrubbing && !showControls) {
             Box(
                 modifier =
                     Modifier
@@ -536,7 +559,7 @@ private fun VideoPage(
                         .padding(horizontal = 16.dp, vertical = 10.dp),
             ) {
                 Text(
-                    text = formatDuration(scrubMs) + " / " + formatDuration(durationMs),
+                    text = formatPlaybackTime(progress.shownPositionMs) + " / " + formatPlaybackTime(progress.durationMs),
                     color = Color.White,
                 )
             }
@@ -565,66 +588,33 @@ private fun VideoPage(
                             if (player.isPlaying) player.pause() else player.play()
                             showControls = true
                         },
+                        // 中间按钮改成实心白圆 + 深色图标：原来半透明黑圆压在画面上，
+                        // 遇到暗场景几乎看不见按钮边界。
                         modifier =
-                            // 中间按钮改成实心白圆 + 深色图标：原来半透明黑圆压在画面上，
-                            // 遇到暗场景几乎看不见按钮边界。
                             Modifier
                                 .size(54.dp)
                                 .background(Color.White.copy(alpha = 0.92f), CircleShape),
                     ) {
                         Icon(
-                            imageVector = if (isPlaying) Lucide.Pause else Lucide.Play,
+                            imageVector = if (progress.isPlaying) Lucide.Pause else Lucide.Play,
                             contentDescription = null,
                             tint = Color.Black.copy(alpha = 0.8f),
                             modifier = Modifier.size(28.dp),
                         )
                     }
                 }
-                Column(
-                    modifier =
-                        Modifier
-                            .align(Alignment.BottomCenter)
-                            .fillMaxWidth()
-                            .background(Color.Black.copy(alpha = 0.5f))
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
-                ) {
-                    val shownMs = if (scrubbing) scrubMs else positionMs
-                    PlayerProgressBar(
-                        progress = if (durationMs > 0L) shownMs.toFloat() / durationMs else 0f,
-                        onScrub = {
-                            scrubbing = true
-                            scrubMs = (it * durationMs).toLong()
-                        },
-                        onSeek = {
-                            scrubMs = (it * durationMs).toLong()
-                            player.seekTo(scrubMs)
-                            scrubbing = false
-                        },
-                        activeColor = Color.White,
-                        inactiveColor = Color.White.copy(alpha = 0.3f),
-                    )
-                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Text(formatDuration(shownMs), color = Color.White, fontSize = 12.sp)
-                        Spacer(Modifier.weight(1f))
-                        Text(formatDuration(durationMs), color = Color.White, fontSize = 12.sp)
-                        Spacer(Modifier.width(10.dp))
-                        // 全屏 / 竖屏切换：想躺着看就全屏，想竖着刷就保持竖屏
-                        IconButton(
-                            onClick = {
-                                fullscreen = !fullscreen
-                                showControls = true
-                            },
-                            modifier = Modifier.size(30.dp),
-                        ) {
-                            Icon(
-                                imageVector = if (fullscreen) Lucide.Minimize else Lucide.Maximize,
-                                contentDescription = if (fullscreen) "切换竖屏" else "切换全屏",
-                                tint = Color.White,
-                                modifier = Modifier.size(20.dp),
-                            )
-                        }
-                    }
-                }
+                // 控制条和发现页共用一份；全屏 / 竖屏切换：想躺着看就全屏，想竖着刷就保持竖屏
+                VideoControlBar(
+                    player = player,
+                    progress = progress,
+                    modifier = Modifier.align(Alignment.BottomCenter),
+                    bottomPadding = if (fullscreen) 16.dp else 8.dp,
+                    fullscreen = fullscreen,
+                    onToggleFullscreen = {
+                        fullscreen = !fullscreen
+                        showControls = true
+                    },
+                )
             }
         }
     }
@@ -638,7 +628,8 @@ private fun VideoPage(
  * 播放本体仍在后台的 MediaSessionService 里（锁屏、通知栏、退后台都继续），
  * 这里只是控制端：封面、进度拖动、上一首/下一首、播放模式、倍速、队列、定时关闭。
  */
-@OptIn(UnstableApi::class, ExperimentalMaterial3Api::class)
+@androidx.annotation.OptIn(UnstableApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AudioViewer(
     file: File,
@@ -650,10 +641,9 @@ private fun AudioViewer(
     val context = LocalContext.current
     var controller by remember { mutableStateOf<MediaController?>(null) }
     var currentIndex by remember { mutableIntStateOf(startIndex) }
-    var isPlaying by remember { mutableStateOf(false) }
-    var durationMs by remember { mutableLongStateOf(0L) }
-    var positionMs by remember { mutableLongStateOf(0L) }
-    var dragging by remember { mutableStateOf(false) }
+    // 进度/时长/播放状态交给共享状态（和发现页、视频页同一份实现），
+    // 本层只留队列、播放模式这些低频标量
+    val progress = rememberPlayerProgress(controller)
     var sleepMinutes by remember { mutableIntStateOf(0) }
     var sleepLeftMs by remember { mutableLongStateOf(0L) }
     var playbackSpeed by remember { mutableFloatStateOf(1f) }
@@ -710,13 +700,11 @@ private fun AudioViewer(
         onDispose { MediaController.releaseFuture(future) }
     }
 
-    // 进度/状态轮询：400ms 一次，只更新这几个标量，不碰 AndroidView
+    // 队列/播放模式轮询：400ms 一次。进度和时长不在这里读 —— 那是共享状态的活，
+    // 之前两处各存一份 positionMs/durationMs，拖动时还要互相绕开。
     LaunchedEffect(controller) {
         val c = controller ?: return@LaunchedEffect
         while (true) {
-            isPlaying = c.isPlaying
-            durationMs = c.duration.coerceAtLeast(0L)
-            if (!dragging) positionMs = c.currentPosition.coerceAtLeast(0L)
             currentIndex = c.currentMediaItemIndex.coerceAtLeast(0)
             shuffle = c.shuffleModeEnabled
             repeatOne = c.repeatMode == Player.REPEAT_MODE_ONE
@@ -860,7 +848,7 @@ private fun AudioViewer(
                     listOfNotNull(info?.artist, info?.album)
                         .filter { it.isNotBlank() }
                         .joinToString(" · ")
-                        .ifBlank { "PJM 音频" },
+                        .ifBlank { stringResource(R.string.audio_default_title) },
                 color = Color.White.copy(alpha = 0.6f),
                 style = MaterialTheme.typography.bodyMedium,
                 maxLines = 1,
@@ -869,20 +857,17 @@ private fun AudioViewer(
             Spacer(Modifier.weight(1f))
             Box(modifier = Modifier.fillMaxWidth()) {
                 PlayerProgressBar(
-                    progress = if (durationMs > 0L) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f,
-                    onScrub = { fraction ->
-                        dragging = true
-                        positionMs = (fraction * durationMs).toLong()
-                    },
+                    progress = progress.fraction,
+                    onScrub = { fraction -> progress.scrubTo((fraction * progress.durationMs).toLong()) },
                     onSeek = {
-                        positionMs = (it * durationMs).toLong()
-                        controller?.seekTo(positionMs)
-                        dragging = false
+                        val target = (it * progress.durationMs).toLong()
+                        controller?.seekTo(target)
+                        progress.endScrub(target)
                     },
                     activeColor = MaterialTheme.colorScheme.primary,
                 )
                 // 拖动时在上方冒一个时间气泡，松手才真正跳转
-                if (dragging) {
+                if (progress.scrubbing) {
                     Surface(
                         modifier = Modifier.align(Alignment.TopCenter).offset(y = (-30).dp),
                         shape = RoundedCornerShape(10.dp),
@@ -890,7 +875,7 @@ private fun AudioViewer(
                         shadowElevation = 3.dp,
                     ) {
                         Text(
-                            text = formatDuration(positionMs),
+                            text = formatPlaybackTime(progress.shownPositionMs),
                             style = MaterialTheme.typography.labelLarge,
                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
                         )
@@ -898,8 +883,8 @@ private fun AudioViewer(
                 }
             }
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(formatDuration(positionMs), color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
-                Text(formatDuration(durationMs), color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
+                Text(formatPlaybackTime(progress.shownPositionMs), color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
+                Text(formatPlaybackTime(progress.durationMs), color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
             }
             Spacer(Modifier.height(8.dp))
             Row(
@@ -917,27 +902,27 @@ private fun AudioViewer(
                     ) {
                         Icon(
                             imageVector = Lucide.Shuffle,
-                            contentDescription = "随机播放",
+                            contentDescription = stringResource(R.string.cd_shuffle),
                             tint = if (shuffle) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.6f),
                         )
                     }
-                    Text("随机", color = Color.White.copy(alpha = 0.7f), fontSize = 10.sp)
+                    Text(stringResource(R.string.player_shuffle_short), color = Color.White.copy(alpha = 0.7f), fontSize = 10.sp)
                 }
                 IconButton(onClick = { controller?.seekToPreviousMediaItem() }) {
-                    Icon(Lucide.SkipBack, contentDescription = "上一首", tint = Color.White, modifier = Modifier.size(32.dp))
+                    Icon(Lucide.SkipBack, contentDescription = stringResource(R.string.cd_previous), tint = Color.White, modifier = Modifier.size(32.dp))
                 }
                 FilledIconButton(
-                    onClick = { if (isPlaying) controller?.pause() else controller?.play() },
+                    onClick = { if (progress.isPlaying) controller?.pause() else controller?.play() },
                     modifier = Modifier.size(64.dp),
                 ) {
                     Icon(
-                        imageVector = if (isPlaying) Lucide.Pause else Lucide.Play,
-                        contentDescription = if (isPlaying) "暂停" else "播放",
+                        imageVector = if (progress.isPlaying) Lucide.Pause else Lucide.Play,
+                        contentDescription = stringResource(if (progress.isPlaying) R.string.action_pause else R.string.action_play),
                         modifier = Modifier.size(32.dp),
                     )
                 }
                 IconButton(onClick = { controller?.seekToNextMediaItem() }) {
-                    Icon(Lucide.SkipForward, contentDescription = "下一首", tint = Color.White, modifier = Modifier.size(32.dp))
+                    Icon(Lucide.SkipForward, contentDescription = stringResource(R.string.cd_next), tint = Color.White, modifier = Modifier.size(32.dp))
                 }
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     IconButton(
@@ -948,11 +933,15 @@ private fun AudioViewer(
                     ) {
                         Icon(
                             imageVector = if (repeatOne) Lucide.Repeat1 else Lucide.Repeat,
-                            contentDescription = if (repeatOne) "单曲循环" else "列表循环",
+                            contentDescription = stringResource(if (repeatOne) R.string.cd_repeat_one else R.string.cd_repeat_all),
                             tint = if (repeatOne) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.6f),
                         )
                     }
-                    Text(if (repeatOne) "单曲" else "循环", color = Color.White.copy(alpha = 0.7f), fontSize = 10.sp)
+                    Text(
+                        stringResource(if (repeatOne) R.string.player_repeat_one_short else R.string.player_repeat_all_short),
+                        color = Color.White.copy(alpha = 0.7f),
+                        fontSize = 10.sp,
+                    )
                 }
             }
             Spacer(Modifier.height(4.dp))
@@ -963,7 +952,7 @@ private fun AudioViewer(
             ) {
                 if (lyrics.isNotEmpty()) {
                     TextButton(onClick = { showLyrics = true }) {
-                        Text("歌词", color = Color.White.copy(alpha = 0.85f), fontSize = 12.sp)
+                        Text(stringResource(R.string.player_lyrics), color = Color.White.copy(alpha = 0.85f), fontSize = 12.sp)
                     }
                 }
                 // 倍速：弹菜单一次看到全部档位，点哪个是哪个（原来只能一个个轮换）
@@ -998,9 +987,9 @@ private fun AudioViewer(
                         Text(
                             text =
                                 when {
-                                    sleepSongs > 0 -> "定时 " + sleepSongs + " 首"
-                                    sleepLeftMs > 0L -> "定时 " + formatDuration(sleepLeftMs)
-                                    else -> "定时关闭"
+                                    sleepSongs > 0 -> stringResource(R.string.sleep_timer_songs, sleepSongs)
+                                    sleepLeftMs > 0L -> stringResource(R.string.sleep_timer_left, formatPlaybackTime(sleepLeftMs))
+                                    else -> stringResource(R.string.audio_sleep_timer)
                                 },
                             color = Color.White.copy(alpha = 0.85f),
                             fontSize = 12.sp,
@@ -1012,7 +1001,12 @@ private fun AudioViewer(
                             DropdownMenuItem(
                                 text = {
                                     Text(
-                                        text = if (minutes == 0) "关闭定时" else minutes.toString() + " 分钟",
+                                        text =
+                                            if (minutes == 0) {
+                                                stringResource(R.string.sleep_timer_off)
+                                            } else {
+                                                stringResource(R.string.sleep_timer_minutes, minutes)
+                                            },
                                         color = if (current) MaterialTheme.colorScheme.primary else Color.Unspecified,
                                     )
                                 },
@@ -1029,7 +1023,7 @@ private fun AudioViewer(
                             DropdownMenuItem(
                                 text = {
                                     Text(
-                                        text = "播完 " + songs + " 首后停",
+                                        text = stringResource(R.string.sleep_timer_after_songs, songs),
                                         color = if (current) MaterialTheme.colorScheme.primary else Color.Unspecified,
                                     )
                                 },
@@ -1051,7 +1045,7 @@ private fun AudioViewer(
             ModalBottomSheet(onDismissRequest = { showPlaylist = false }) {
                 Column(modifier = Modifier.fillMaxWidth()) {
                     Text(
-                        text = "播放列表 · 共 " + queue.size + " 首",
+                        text = stringResource(R.string.playlist_title, queue.size),
                         style = MaterialTheme.typography.titleMedium,
                         modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
                     )
@@ -1112,7 +1106,7 @@ private fun AudioViewer(
                 val listState =
                     androidx.compose.foundation.lazy
                         .rememberLazyListState()
-                val activeIndex = lyrics.indexOfLast { it.first <= positionMs }
+                val activeIndex = lyrics.indexOfLast { it.first <= progress.positionMs }
                 LaunchedEffect(activeIndex) {
                     if (activeIndex > 0) {
                         runCatching { listState.animateScrollToItem(activeIndex) }
@@ -1174,7 +1168,7 @@ private fun parseLrc(raw: String): List<Pair<Long, String>> {
 
 /** 阅读器配色方案 */
 private data class ReaderTheme(
-    val name: String,
+    @androidx.annotation.StringRes val nameRes: Int,
     val background: Long,
     val foreground: Long,
 )
@@ -1182,12 +1176,12 @@ private data class ReaderTheme(
 // 常用阅读配色：夜间、纸黄、护眼、纯白、深蓝、高对比
 private val READER_THEMES =
     listOf(
-        ReaderTheme("夜间", 0xFF0D0D0F, 0xFFE7E2D6),
-        ReaderTheme("纸黄", 0xFFF6EFE3, 0xFF3B332A),
-        ReaderTheme("护眼", 0xFFCCE8CF, 0xFF20301F),
-        ReaderTheme("纯白", 0xFFFFFFFF, 0xFF1D1D1F),
-        ReaderTheme("深蓝", 0xFF14202E, 0xFFC9D6E3),
-        ReaderTheme("高对比", 0xFF000000, 0xFFFFFFFF),
+        ReaderTheme(R.string.reader_theme_night, 0xFF0D0D0F, 0xFFE7E2D6),
+        ReaderTheme(R.string.reader_theme_paper, 0xFFF6EFE3, 0xFF3B332A),
+        ReaderTheme(R.string.reader_theme_eye, 0xFFCCE8CF, 0xFF20301F),
+        ReaderTheme(R.string.reader_theme_white, 0xFFFFFFFF, 0xFF1D1D1F),
+        ReaderTheme(R.string.reader_theme_navy, 0xFF14202E, 0xFFC9D6E3),
+        ReaderTheme(R.string.reader_theme_contrast, 0xFF000000, 0xFFFFFFFF),
     )
 
 /** 常见网文章节标题（第 X 章/节/回/卷… 或 Chapter N，以及卷首语） */
@@ -1328,7 +1322,7 @@ private fun TextViewer(
                     marginDp,
                     configuration.screenWidthDp,
                     // px 与 px 相减：之前拿 px 去减 dp 的数值，旋转/分屏后 key 变化会导致整本重排
-                    (viewportHeightPx - with(density) { topInsetDp.toPx() }.toInt()).toInt(),
+                    viewportHeightPx - with(density) { topInsetDp.toPx() }.toInt(),
                 ),
             )
         readPageCache(cacheFile, paragraphs.size)?.let { cache ->
@@ -1365,6 +1359,10 @@ private fun TextViewer(
         // 段落高度只取决于「这一段 + 页面宽度」，彼此独立 —— 所以按核数切片并行量，
         // 算完再顺序铺页；主线程只负责贴结果，不再一段一段等。
         val heights = FloatArray(paragraphs.size)
+
+        // WrongConstant：BREAK_STRATEGY_SIMPLE 的值就是 0，与 LineBreaker 的同名常量完全一致，
+        // 但 LineBreaker 是 API 29 才有的类，minSdk 24 引用不了（详见 SIMPLE_BREAK_STRATEGY 的说明）
+        @Suppress("WrongConstant")
         suspend fun measureSlice(
             from: Int,
             to: Int,
@@ -1389,7 +1387,7 @@ private fun TextViewer(
                                 .setIncludePad(false)
                                 .setLineSpacing(0f, 1f)
                                 // 和 Compose 侧一致的简单断行；不做连字符/高质量断行，省掉多余开销
-                                .setBreakStrategy(android.text.Layout.BREAK_STRATEGY_SIMPLE)
+                                .setBreakStrategy(SIMPLE_BREAK_STRATEGY)
                                 .setHyphenationFrequency(android.text.Layout.HYPHENATION_FREQUENCY_NONE)
                                 .build()
                                 .lineCount
@@ -1616,15 +1614,15 @@ private fun TextViewer(
                             )
                             // 目录按钮常驻：即使这本书没识别到章节，面板里还有书签列表
                             IconButton(onClick = { showChapters = true }) {
-                                Icon(Lucide.ListTodo, "目录与书签", tint = Color.White)
+                                Icon(Lucide.ListTodo, stringResource(R.string.reader_cd_toc), tint = Color.White)
                             }
                             IconButton(onClick = { showSettings = true }) {
-                                Icon(Lucide.SlidersHorizontal, "阅读设置", tint = Color.White)
+                                Icon(Lucide.SlidersHorizontal, stringResource(R.string.reader_cd_settings), tint = Color.White)
                             }
                             val bookmarked = pagerState.currentPage in bookmarks
                             TextButton(onClick = { toggleBookmark(pagerState.currentPage) }) {
                                 Text(
-                                    text = if (bookmarked) "已书签" else "书签",
+                                    text = stringResource(if (bookmarked) R.string.reader_bookmarked else R.string.reader_bookmark),
                                     color = if (bookmarked) Color(0xFFF2C14E) else Color.White,
                                 )
                             }
@@ -1661,7 +1659,13 @@ private fun TextViewer(
                 lineSpacing = 1.8f
                 marginDp = 18
                 themeIndex = 0
-                prefs.edit().putFloat("font_size", 17f).putFloat("line_spacing", 1.8f).putInt("margin_dp", 18).putInt("theme_index", 0).apply()
+                prefs
+                    .edit()
+                    .putFloat("font_size", 17f)
+                    .putFloat("line_spacing", 1.8f)
+                    .putInt("margin_dp", 18)
+                    .putInt("theme_index", 0)
+                    .apply()
             },
             onFontSize = {
                 fontSize = it
@@ -1690,7 +1694,7 @@ private fun TextViewer(
                     item {
                         Column {
                             Text(
-                                text = "书签（" + bookmarks.size + "）",
+                                text = stringResource(R.string.reader_bookmarks_count, bookmarks.size),
                                 style = MaterialTheme.typography.titleSmall,
                                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
                             )
@@ -1706,12 +1710,12 @@ private fun TextViewer(
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
                                     Text(
-                                        text = "第 " + (page + 1) + " 页",
+                                        text = stringResource(R.string.reader_page_label, page + 1),
                                         style = MaterialTheme.typography.bodyMedium,
                                         modifier = Modifier.weight(1f),
                                     )
                                     TextButton(onClick = { toggleBookmark(page) }) {
-                                        Text("删除", color = MaterialTheme.colorScheme.error)
+                                        Text(stringResource(R.string.action_delete), color = MaterialTheme.colorScheme.error)
                                     }
                                 }
                             }
@@ -1721,7 +1725,7 @@ private fun TextViewer(
                 }
                 item {
                     Text(
-                        text = "目录（" + chapters.size + " 章）",
+                        text = stringResource(R.string.reader_toc_title, chapters.size),
                         style = MaterialTheme.typography.titleSmall,
                         modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
                     )
@@ -1784,19 +1788,19 @@ private fun ReaderSettingsSheet(
         Column(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 28.dp),
         ) {
-            Text("阅读设置", style = MaterialTheme.typography.titleMedium)
+            Text(stringResource(R.string.reader_settings_title), style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(6.dp))
             // 常用设置放在最外层：字号 / 行高 / 左右边距
-            StepperRow("字号", fontSize.toInt().toString(), { onFontSize((fontSize - 1f).coerceAtLeast(14f)) }, { onFontSize((fontSize + 1f).coerceAtMost(30f)) })
+            StepperRow(stringResource(R.string.reader_font_size), fontSize.toInt().toString(), { onFontSize((fontSize - 1f).coerceAtLeast(14f)) }, { onFontSize((fontSize + 1f).coerceAtMost(30f)) })
             StepperRow(
-                "行高",
+                stringResource(R.string.reader_line_height),
                 String.format(Locale.US, "%.1f×", lineSpacing),
                 { onLineSpacing((lineSpacing - 0.1f).coerceAtLeast(1.2f)) },
                 { onLineSpacing((lineSpacing + 0.1f).coerceAtMost(2.6f)) },
             )
-            StepperRow("左右边距", marginDp.toString(), { onMargin((marginDp - 2).coerceAtLeast(8)) }, { onMargin((marginDp + 2).coerceAtMost(40)) })
+            StepperRow(stringResource(R.string.reader_margins), marginDp.toString(), { onMargin((marginDp - 2).coerceAtLeast(8)) }, { onMargin((marginDp + 2).coerceAtMost(40)) })
             Spacer(Modifier.height(8.dp))
-            Text("配色", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(stringResource(R.string.reader_colors), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 READER_THEMES.forEachIndexed { index, item ->
@@ -1820,7 +1824,7 @@ private fun ReaderSettingsSheet(
                         )
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            item.name,
+                            stringResource(item.nameRes),
                             style = MaterialTheme.typography.labelSmall,
                             color = if (index == themeIndex) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -1828,7 +1832,7 @@ private fun ReaderSettingsSheet(
                 }
             }
             Spacer(Modifier.height(4.dp))
-            TextButton(onClick = onReset) { Text("恢复默认排版") }
+            TextButton(onClick = onReset) { Text(stringResource(R.string.reader_reset_layout)) }
         }
     }
 }
@@ -1931,8 +1935,11 @@ private fun writePageCache(
     }
 }
 
-/** 只读取前 limit 字节，避免大文件直接把内存吃满 */
-/** 文本阅读上限：超过就只读前 3MB，页脚会标注（不是整本，别让用户以为书就这么长） */
+/**
+ * 文本阅读上限：超过就只读前 3MB，页脚会标注（不是整本，别让用户以为书就这么长）。
+ *
+ * 配套的 [readLimitedBytes] 只读前 limit 字节，避免大文件直接把内存吃满。
+ */
 private const val TEXT_READ_LIMIT_BYTES = 3L * 1024 * 1024
 
 private fun readLimitedBytes(
@@ -2012,12 +2019,4 @@ private fun ViewerTopBar(
             modifier = Modifier.weight(1f),
         )
     }
-}
-
-private fun formatDuration(ms: Long): String {
-    if (ms <= 0L) return "00:00"
-    val totalSeconds = ms / 1000
-    val minutes = totalSeconds / 60
-    val seconds = totalSeconds % 60
-    return String.format("%02d:%02d", minutes, seconds)
 }

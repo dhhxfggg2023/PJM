@@ -67,7 +67,10 @@ object EpubExtractor {
         }.getOrNull()
     }
 
-    private fun readEntry(zip: ZipFile, path: String): String? =
+    private fun readEntry(
+        zip: ZipFile,
+        path: String,
+    ): String? =
         runCatching {
             val entry = zip.getEntry(path) ?: zip.getEntry(path.replace('\\', '/')) ?: return null
             zip.getInputStream(entry).use { decode(it.readBytes()) }
@@ -81,7 +84,10 @@ object EpubExtractor {
     }
 
     /** 从标签文本里取属性值：手写查找，避免正则里引号把 Kotlin 字符串写坏 */
-    private fun attr(tag: String, name: String): String? {
+    private fun attr(
+        tag: String,
+        name: String,
+    ): String? {
         var i = 0
         val key = name
         while (true) {
@@ -107,12 +113,19 @@ object EpubExtractor {
     }
 
     /** 相对路径拼接（OPF 与 XHTML 都在同一个包目录下） */
-    private fun join(base: String, href: String): String {
+    private fun join(
+        base: String,
+        href: String,
+    ): String {
         val clean = href.substringBefore('#')
         return if (base.isEmpty()) clean else base.trimEnd('/') + "/" + clean
     }
 
-    private fun readTitles(zip: ZipFile, base: String, opf: String): Map<String, String> {
+    private fun readTitles(
+        zip: ZipFile,
+        base: String,
+        opf: String,
+    ): Map<String, String> {
         val out = HashMap<String, String>()
         val navHref =
             Regex("""<item\s[^>]*properties\s*=\s*"[^"]*nav[^"]*"[^>]*>""").find(opf)?.value?.let { attr(it, "href") }
@@ -153,7 +166,8 @@ object EpubExtractor {
     private fun stripTags(s: String): String = s.replace(Regex("""<[^>]+>"""), "")
 
     private fun unescape(s: String): String =
-        s.replace("&nbsp;", " ")
+        s
+            .replace("&nbsp;", " ")
             .replace("&amp;", "&")
             .replace("&lt;", "<")
             .replace("&gt;", ">")

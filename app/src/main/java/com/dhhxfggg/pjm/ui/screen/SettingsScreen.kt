@@ -132,11 +132,18 @@ fun SettingsScreen(
         BackHandler(enabled = currentPage != null) { closePage() }
     }
 
-    // 资源加载
+    // 资源加载（在组合期取好：用 LocalContext.getString 不会跟随语言/配置变化）
     val systemCleanedMsg = stringResource(R.string.toast_system_cleaned)
     val noDuplicatesMsg = stringResource(R.string.toast_no_duplicates)
     val shareLogsTitle = stringResource(R.string.chooser_title_share_logs)
     val exportFailedMsg = stringResource(R.string.error_export_failed_simple)
+    val authGrantedMsg = stringResource(R.string.toast_auth_granted)
+    val authGrantedSessionMsg = stringResource(R.string.toast_auth_granted_session)
+    val clearingCacheMsg = stringResource(R.string.status_clearing_cache)
+    val clearingLogsMsg = stringResource(R.string.status_clearing_logs)
+    val logsClearedMsg = stringResource(R.string.status_logs_cleared)
+    val resettingMsg = stringResource(R.string.status_resetting)
+    val resetDoneMsg = stringResource(R.string.status_reset_done)
 
     // Launchers
     var showPjmFolderPicker by remember { mutableStateOf(false) }
@@ -187,13 +194,7 @@ fun SettingsScreen(
                     Toast
                         .makeText(
                             context,
-                            if (persisted) {
-                                context.getString(
-                                    R.string.toast_auth_granted,
-                                )
-                            } else {
-                                context.getString(R.string.toast_auth_granted_session)
-                            },
+                            if (persisted) authGrantedMsg else authGrantedSessionMsg,
                             Toast.LENGTH_SHORT,
                         ).show()
                     pendingSafAction = null
@@ -274,10 +275,10 @@ fun SettingsScreen(
                                 SettingsPage.Appearance -> stringResource(R.string.settings_cat_adaptive)
                                 SettingsPage.Ingestion -> stringResource(R.string.settings_cat_ingestion)
                                 SettingsPage.Bilibili -> stringResource(R.string.settings_cat_bili)
-                                SettingsPage.Discovery -> "发现页"
+                                SettingsPage.Discovery -> stringResource(R.string.settings_title_discovery)
                                 SettingsPage.AppsTakeover -> stringResource(R.string.settings_title_app_takeover)
                                 SettingsPage.Audio -> stringResource(R.string.settings_title_audio_playback)
-                                SettingsPage.Transfer -> "传输到电脑"
+                                SettingsPage.Transfer -> stringResource(R.string.settings_title_transfer)
                                 SettingsPage.Maintenance -> stringResource(R.string.settings_cat_maintenance)
                                 null -> stringResource(R.string.settings_title)
                             },
@@ -402,7 +403,7 @@ fun SettingsScreen(
                                             // 顶部横幅：与其它功能一致的完成提示
                                             VaultManager.updateProgress(
                                                 0.5f,
-                                                context.getString(R.string.status_clearing_cache),
+                                                clearingCacheMsg,
                                                 taskId = VaultManager.TASK_CLEAR_CACHE,
                                             )
                                             // 核心修复：清除缓存【只清临时缓存目录 cacheDir】——
@@ -439,20 +440,20 @@ fun SettingsScreen(
                                             // 清除日志（与清除缓存分离）
                                             VaultManager.updateProgress(
                                                 0.5f,
-                                                context.getString(R.string.status_clearing_logs),
+                                                clearingLogsMsg,
                                                 taskId = VaultManager.TASK_CLEAR_LOGS,
                                             )
                                             PjmLogger.clear()
                                             VaultManager.updateProgress(
                                                 1f,
-                                                context.getString(R.string.status_logs_cleared),
+                                                logsClearedMsg,
                                                 taskId = VaultManager.TASK_CLEAR_LOGS,
                                             )
                                             withContext(Dispatchers.Main) {
                                                 Toast
                                                     .makeText(
                                                         context,
-                                                        context.getString(R.string.status_logs_cleared),
+                                                        logsClearedMsg,
                                                         Toast.LENGTH_SHORT,
                                                     ).show()
                                                 maintenanceRefresh++
@@ -550,13 +551,13 @@ fun SettingsScreen(
                             try {
                                 VaultManager.updateProgress(
                                     0.5f,
-                                    context.getString(R.string.status_resetting),
+                                    resettingMsg,
                                     taskId = VaultManager.TASK_RESET,
                                 )
                                 settingsViewModel.resetAllSettings()
                                 VaultManager.updateProgress(
                                     1f,
-                                    context.getString(R.string.status_reset_done),
+                                    resetDoneMsg,
                                     taskId = VaultManager.TASK_RESET,
                                 )
                                 delay(1200)

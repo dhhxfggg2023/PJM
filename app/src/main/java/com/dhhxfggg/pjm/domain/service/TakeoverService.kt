@@ -12,6 +12,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.PowerManager
 import android.os.SystemClock
 import android.provider.MediaStore
 import androidx.core.app.NotificationCompat
@@ -73,8 +74,14 @@ class TakeoverService : Service() {
         /** 回调合并窗口：相机连拍/多选保存会在几百毫秒内连续触发多次 */
         private const val DEBOUNCE_MS = 1500L
 
-        /** 定时兜底间隔：目录深扫不便宜，3 分钟一次足够 */
+        /** 定时兜底的基础间隔：目录深扫不便宜，3 分钟一次足够 */
         private const val TICK_MS = 180_000L
+
+        /**
+         * 空闲时的最长兜底间隔：连续几轮一个文件都没扫到就逐步拉长到 15 分钟。
+         * 手机上「没人在用」的时间占绝大多数，一直 3 分钟醒一次纯属白耗电。
+         */
+        private const val TICK_IDLE_MAX_MS = 900_000L
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -145,7 +152,7 @@ class TakeoverService : Service() {
             scope.launch {
                 // 1) 启动即补扫一轮（含目录），把服务不在时保存的文件找回来
                 scanMutex.withLock {
-                    runScan(doSweep = true)
+                    runScan(doSweep = true, tickIntervalMs = TICK_MS)
                 }
                 // 2) 媒体库变化信号：只跑媒体库通道（频繁，不能深扫目录）
                 launch {
@@ -154,39 +161,68 @@ class TakeoverService : Service() {
                         scanMutex.withLock { runScan(doSweep = false) }
                     }
                 }
-                // 3) 定时兜底：目录扫描 + 媒体库补扫
+                // 3) 定时兜底：目录扫描 + 媒体库补扫。
+                //    周期自适应：连续几轮没扫到文件 → 3 → 6 → 12 → 15 分钟（上限），
+                //    一旦有新文件立刻回到 3 分钟。
+                //    熄屏时只查媒体库水位、不做目录深扫 —— 那个时间点没人手动存文件，
+                //    真有下载/保存也会走上面的媒体库变化通道，而全盘遍历会白唤醒存储。
                 launch {
+                    var interval = TICK_MS
                     while (true) {
-                        delay(TICK_MS.milliseconds)
-                        scanMutex.withLock { runScan(doSweep = true) }
+                        delay(interval.milliseconds)
+                        val interactive = isScreenInteractive()
+                        val handled =
+                            scanMutex.withLock {
+                                runScan(doSweep = interactive, tickIntervalMs = interval)
+                            }
+                        interval =
+                            if (handled > 0) {
+                                TICK_MS
+                            } else {
+                                (interval * 2).coerceAtMost(TICK_IDLE_MAX_MS)
+                            }
                     }
                 }
             }
     }
 
-    private suspend fun runScan(doSweep: Boolean) {
+    /**
+     * 跑一轮扫描。
+     *
+     * @param doSweep 是否同时做目录深扫（熄屏时降级为 false，只走媒体库水位）
+     * @param tickIntervalMs 非空表示这一轮是「定时兜底心跳」，值是本轮声明的周期；
+     *   心跳记账按它算空档阈值 —— 周期自适应之后固定阈值会把正常空闲误报成被冻结
+     * @return 本轮真正处理掉的文件数（0 = 什么都没扫到，可以拉长间隔）
+     */
+    private suspend fun runScan(
+        doSweep: Boolean,
+        tickIntervalMs: Long? = null,
+    ): Int {
         try {
             if (!TakeoverPrefs.isEnabled(this)) {
                 PjmLogger.i(TAG, "接管总开关已关闭，停止服务")
                 stopSelf()
-                return
+                return 0
             }
             val managed = managedAppDao.getAll()
             TakeoverPrefs.setManagedCount(this, managed.size)
             val now = System.currentTimeMillis()
-            if (doSweep) {
+            if (tickIntervalMs != null) {
                 // 心跳间隔法：进程被冻结/杀死时定时器不走，恢复后第一件事就是发现这个空档。
                 // 开关（后台耗电/自启动）改没改，看的就是它 —— 比任何系统标志都直接。
                 val lastTick = TakeoverPrefs.lastTickAt(this)
                 if (lastTick > 0L) {
                     val gap = now - lastTick
+                    // 阈值取「上一次 tick 声明的周期」：空闲会拉长到 15 分钟，
+                    // 用固定的 2×3 分钟判，正常空闲就变成了「后台被冻结」
+                    val expected = TakeoverPrefs.lastTickGap(this).coerceAtLeast(TICK_MS)
                     // 重启设备也会造成大间隔，那不算「被系统停止」，用开机时长排除
-                    if (gap > TICK_MS * 2 && SystemClock.elapsedRealtime() >= gap) {
-                        TakeoverPrefs.recordBackgroundGap(this, gap - TICK_MS)
+                    if (gap > expected + expected / 2 && SystemClock.elapsedRealtime() >= gap) {
+                        TakeoverPrefs.recordBackgroundGap(this, gap - expected)
                         PjmLogger.w(TAG, "后台中断: 距上次心跳 " + gap / 60_000L + " 分钟（被系统冻结或停止）")
                     }
                 }
-                TakeoverPrefs.markTick(this, now)
+                TakeoverPrefs.markTick(this, now, tickIntervalMs)
             }
             TakeoverPrefs.markScan(this)
             // 深扫一轮本来就少，记 I；相册一变就打一次的那种记 D，别把日志刷爆
@@ -198,15 +234,19 @@ class TakeoverService : Service() {
             if (managed.isEmpty()) {
                 PjmLogger.i(TAG, "没有需要接管的应用，停止服务")
                 stopSelf()
-                return
+                return 0
             }
             updateServiceNotification(managed.size)
-            TakeoverScanEngine.scanOnce(this, managedAppDao, takeoverJobDao, fileDao, doSweep)
+            return TakeoverScanEngine.scanOnce(this, managedAppDao, takeoverJobDao, fileDao, doSweep)
         } catch (e: Throwable) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             PjmLogger.e(TAG, "接管扫描失败: " + e.javaClass.simpleName + ": " + e.message, e as? Exception)
         }
+        return 0
     }
+
+    /** 屏幕是否亮着：熄屏时跳过目录深扫，避免在没人用手机时白扫一遍存储 */
+    private fun isScreenInteractive(): Boolean = getSystemService(PowerManager::class.java)?.isInteractive ?: true
 
     private fun buildServiceNotification(appCount: Int): Notification {
         val pendingIntent =

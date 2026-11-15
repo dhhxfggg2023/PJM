@@ -5,7 +5,6 @@ import android.content.ContentValues
 import android.content.Context
 import android.net.Uri
 import android.os.Build
-import android.os.Bundle
 import android.os.Environment
 import android.provider.MediaStore
 import androidx.core.content.edit
@@ -49,6 +48,8 @@ object TakeoverScanEngine {
      * @param doSweep 是否同时扫「应用自己的保存目录」。
      *   媒体库通道可以高频（相册一有变化就回调），目录深扫只在定时兜底轮做 ——
      *   否则聊天软件、截图这类上万文件的目录会把存储 IO 拖满、整机变卡。
+     * @return 本轮真正处理掉（入库 + 删除原文件）的数量。服务用它在「什么都没扫到」时
+     *   把定时兜底的间隔逐步拉长 —— 空闲时没必要每 3 分钟唤醒一次存储。
      */
     suspend fun scanOnce(
         context: Context,
@@ -56,9 +57,9 @@ object TakeoverScanEngine {
         takeoverJobDao: TakeoverJobDao,
         fileDao: FileDao,
         doSweep: Boolean,
-    ) {
+    ): Int {
         val managed = managedAppDao.getAll()
-        if (managed.isEmpty()) return
+        if (managed.isEmpty()) return 0
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val packageAddedAtSec = managed.associate { it.packageName to it.addedAt / 1000 }
 
@@ -79,8 +80,8 @@ object TakeoverScanEngine {
                 ?: run {
                     PjmLogger.w(TAG, "MediaStore 查询失败，水位线保持不变")
                     TakeoverNotifications.notifyQueryFailure(context)
-                    if (doSweep) sweepManagedAppMediaDirs(context, managed, takeoverJobDao, fileDao, prefs)
-                    return
+                    // 查询失败也要把目录深扫跑完，并如实回报它处理了几个
+                    return if (doSweep) sweepManagedAppMediaDirs(context, managed, takeoverJobDao, fileDao, prefs) else 0
                 }
 
         if (found.isNotEmpty()) PjmLogger.i(TAG, "媒体库新增 " + found.size + " 行")
@@ -145,7 +146,7 @@ object TakeoverScanEngine {
             }
         }
 
-        if (doSweep) sweepManagedAppMediaDirs(context, managed, takeoverJobDao, fileDao, prefs)
+        return handled + (if (doSweep) sweepManagedAppMediaDirs(context, managed, takeoverJobDao, fileDao, prefs) else 0)
     }
 
     /** 当前 MediaStore 表里的最大 _id（首次启用时用于定位水位，不做历史回填） */
@@ -169,8 +170,8 @@ object TakeoverScanEngine {
         takeoverJobDao: TakeoverJobDao,
         fileDao: FileDao,
         prefs: android.content.SharedPreferences,
-    ) {
-        val storageRoot = Environment.getExternalStorageDirectory() ?: return
+    ): Int {
+        val storageRoot = Environment.getExternalStorageDirectory() ?: return 0
         val now = System.currentTimeMillis()
         // 全局水位只用来「跳过没变化的目录」；真正的「哪些文件算新」要按每个应用各自的加入时间算，
         // 不能取所有应用的最大值 —— 新加进来的应用会把老应用的时间线一起抬高，漏掉老应用的保存。
@@ -199,6 +200,7 @@ object TakeoverScanEngine {
         prefs.edit { putLong(KEY_LAST_SWEEP, now) }
         if (failedDeletes.isNotEmpty()) TakeoverNotifications.notifyDeleteFailures(context, failedDeletes)
         if (handled > 0) PjmLogger.i(TAG, "目录接管完成：处理 " + handled + " 个文件，删除失败 " + failedDeletes.size + " 个")
+        return handled
     }
 
     private fun lastSweepMs(prefs: android.content.SharedPreferences): Long = prefs.getLong(KEY_LAST_SWEEP, 0L)
@@ -340,15 +342,11 @@ object TakeoverScanEngine {
         selection: String? = null,
         selectionArgs: Array<String>? = null,
         sortOrder: String? = null,
-        queryArgs: Bundle? = null,
     ): List<MediaCandidate> {
         val result = mutableListOf<MediaCandidate>()
-        val cursor =
-            if (queryArgs != null) {
-                context.contentResolver.query(collection, projection, queryArgs, null)
-            } else {
-                context.contentResolver.query(collection, projection, selection, selectionArgs, sortOrder)
-            }
+        // 只用普通查询：Bundle 的 QUERY_ARG_* 重载是 API 26+，本文件 minSdk 24 ——
+        // 低版本机型上连方法都找不到，高版本机型上又会静默返回空游标（见上面注释）。
+        val cursor = context.contentResolver.query(collection, projection, selection, selectionArgs, sortOrder)
         cursor?.use { c ->
             val idColumn = c.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
             val ownerColumn = c.getColumnIndexOrThrow(MediaStore.MediaColumns.OWNER_PACKAGE_NAME)

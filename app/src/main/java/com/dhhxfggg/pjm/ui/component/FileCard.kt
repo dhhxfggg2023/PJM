@@ -13,11 +13,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.composables.icons.lucide.CircleCheck
 import com.composables.icons.lucide.Lucide
+import com.dhhxfggg.pjm.R
 import com.dhhxfggg.pjm.data.model.FileEntity
 import com.dhhxfggg.pjm.domain.util.FileUtils
 import com.dhhxfggg.pjm.ui.theme.rememberIconPack
@@ -262,7 +264,7 @@ private fun CardMoreMenu(
         ) {
             Icon(
                 imageVector = iconPack.actionMore,
-                contentDescription = "更多",
+                contentDescription = stringResource(R.string.action_more),
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(18.dp),
             )
@@ -270,7 +272,7 @@ private fun CardMoreMenu(
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             if (onShare != null) {
                 DropdownMenuItem(
-                    text = { Text("分享") },
+                    text = { Text(stringResource(R.string.action_share)) },
                     leadingIcon = { Icon(iconPack.actionShare, contentDescription = null) },
                     onClick = {
                         expanded = false
@@ -280,7 +282,7 @@ private fun CardMoreMenu(
             }
             if (onRename != null) {
                 DropdownMenuItem(
-                    text = { Text("重命名") },
+                    text = { Text(stringResource(R.string.action_rename)) },
                     leadingIcon = { Icon(iconPack.actionRename, contentDescription = null) },
                     onClick = {
                         expanded = false
@@ -291,7 +293,7 @@ private fun CardMoreMenu(
             if (onDelete != null) {
                 HorizontalDivider()
                 DropdownMenuItem(
-                    text = { Text("删除", color = MaterialTheme.colorScheme.error) },
+                    text = { Text(stringResource(R.string.action_delete), color = MaterialTheme.colorScheme.error) },
                     leadingIcon = { Icon(iconPack.actionDelete, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
                     onClick = {
                         expanded = false

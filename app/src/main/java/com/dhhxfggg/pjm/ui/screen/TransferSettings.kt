@@ -7,7 +7,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
-import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -22,12 +21,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.composables.icons.lucide.Lucide
-import com.composables.icons.lucide.CircleCheck
 import com.composables.icons.lucide.MonitorSmartphone
+import com.dhhxfggg.pjm.R
 import com.dhhxfggg.pjm.domain.transfer.PcFolder
 import com.dhhxfggg.pjm.domain.util.FileUtils
 import com.dhhxfggg.pjm.ui.viewmodel.TransferUiState
@@ -44,13 +44,22 @@ internal fun TransferSettings(transferViewModel: TransferViewModel = hiltViewMod
                 .verticalScroll(rememberScrollState())
                 .padding(bottom = 16.dp),
     ) {
-        SettingsCategory(title = "USB 直连（只走线缆，不花流量）") {
-            StatusLine("电脑工具", if (state.pcOnline) "在线" else "未连接", state.pcOnline)
+        SettingsCategory(title = stringResource(R.string.transfer_group_usb)) {
+            StatusLine(
+                stringResource(R.string.transfer_pc_tool),
+                stringResource(if (state.pcOnline) R.string.transfer_online else R.string.transfer_offline),
+                state.pcOnline,
+            )
             if (state.pcOnline) {
-                StatusLine("接收位置", state.pcRoot, true)
+                StatusLine(stringResource(R.string.transfer_recv_location), state.pcRoot, true)
                 StatusLine(
-                    "磁盘",
-                    state.pcFs + " · 剩余 " + FileUtils.formatFileSize(state.pcFree) + " / " + FileUtils.formatFileSize(state.pcTotal),
+                    stringResource(R.string.transfer_disk),
+                    stringResource(
+                        R.string.transfer_disk_free,
+                        state.pcFs,
+                        FileUtils.formatFileSize(state.pcFree),
+                        FileUtils.formatFileSize(state.pcTotal),
+                    ),
                     true,
                 )
             }
@@ -59,10 +68,10 @@ internal fun TransferSettings(transferViewModel: TransferViewModel = hiltViewMod
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 TextButton(onClick = { transferViewModel.probe() }, enabled = !state.checking) {
-                    Text(if (state.checking) "测试中…" else "测试连接")
+                    Text(stringResource(if (state.checking) R.string.transfer_testing else R.string.transfer_test_connection))
                 }
                 Text(
-                    if (state.pcOnline) "点一下重新探测电脑端" else "连不上时点这里重试",
+                    stringResource(if (state.pcOnline) R.string.transfer_probe_online else R.string.transfer_probe_offline),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -72,28 +81,28 @@ internal fun TransferSettings(transferViewModel: TransferViewModel = hiltViewMod
             }
             SettingsSwitch(
                 icon = Lucide.MonitorSmartphone,
-                title = "开启传输服务",
-                description = "手机只监听 127.0.0.1，电脑端 PJM-Link 通过 adb 隧道连接",
+                title = stringResource(R.string.transfer_start_service),
+                description = stringResource(R.string.transfer_start_service_desc),
                 checked = state.serverRunning,
                 onCheckedChange = { transferViewModel.toggleServer() },
             )
         }
 
         if (!state.serverRunning) {
-            SettingsCategory(title = "怎么用") {
-                Hint("1. 手机连数据线，打开开发者选项里的 USB 调试，并在手机上点「允许」")
-                Hint("2. 电脑上双击 PJM-Link 文件夹里的 PJM-Link.cmd")
-                Hint("3. 回到这里打开上面的开关，再到电脑上点「接收手机文件」")
-                Hint("全程走线缆：不开 Wi-Fi、不共享网络、不产生手机流量，手机也不产生副本")
+            SettingsCategory(title = stringResource(R.string.transfer_howto)) {
+                Hint(stringResource(R.string.transfer_step1))
+                Hint(stringResource(R.string.transfer_step2))
+                Hint(stringResource(R.string.transfer_step3))
+                Hint(stringResource(R.string.transfer_step4))
             }
         } else {
-            SettingsCategory(title = "方向") {
+            SettingsCategory(title = stringResource(R.string.transfer_direction)) {
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    RangeChip("发到电脑", mode == 0, Modifier.weight(1f)) { mode = 0 }
-                    RangeChip("从电脑取回", mode == 1, Modifier.weight(1f)) { mode = 1 }
+                    RangeChip(stringResource(R.string.transfer_dir_push), mode == 0, Modifier.weight(1f)) { mode = 0 }
+                    RangeChip(stringResource(R.string.transfer_dir_pull), mode == 1, Modifier.weight(1f)) { mode = 1 }
                 }
             }
             if (mode == 0) {
@@ -186,24 +195,28 @@ private fun ExportSection(
 ) {
     // 优先显示手机自己推送的进度；电脑端主动拉取时才回落到它回报的任务状态
     val task = state.push ?: state.task
-    SettingsCategory(title = "发到电脑") {
+    SettingsCategory(title = stringResource(R.string.transfer_dir_push)) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                if (state.selectedDates.isEmpty()) "传全部文件" else "已选 " + state.selectedDates.size + " 天",
+                if (state.selectedDates.isEmpty()) {
+                    stringResource(R.string.transfer_send_all)
+                } else {
+                    stringResource(R.string.transfer_selected_days, state.selectedDates.size)
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.weight(1f),
             )
-            TextButton(onClick = { viewModel.refreshDates() }) { Text("刷新日期") }
+            TextButton(onClick = { viewModel.refreshDates() }) { Text(stringResource(R.string.transfer_refresh_dates)) }
             if (state.selectedDates.isNotEmpty()) {
-                TextButton(onClick = { viewModel.clearDates() }) { Text("清空") }
+                TextButton(onClick = { viewModel.clearDates() }) { Text(stringResource(R.string.transfer_clear)) }
             }
         }
         if (state.dates.isEmpty()) {
-            Hint("这里会列出库里出现过的入库日期；一条记录都没有时只能传全部")
+            Hint(stringResource(R.string.transfer_dates_hint))
         } else {
             // 小块日期：每行 3 个，一眼看全，不用在一条超长列表里滚
             Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
@@ -248,7 +261,7 @@ private fun ExportSection(
                     }
                 }
                 if (state.dates.size > 30) {
-                    Hint("只列最近 30 天，更早的选「全部」一起传")
+                    Hint(stringResource(R.string.transfer_last30_hint))
                 }
             }
         }
@@ -265,7 +278,7 @@ private fun ExportSection(
                 Column(modifier = Modifier.padding(14.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            if (t.active) "正在传输" else "上次传输",
+                            stringResource(if (t.active) R.string.transfer_status_active else R.string.transfer_status_last),
                             style = MaterialTheme.typography.titleSmall,
                             modifier = Modifier.weight(1f),
                         )
@@ -279,15 +292,15 @@ private fun ExportSection(
                     LinearProgressIndicator(progress = { percent }, modifier = Modifier.fillMaxWidth())
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        "已传 " + t.done + "/" + t.total +
+                        stringResource(R.string.transfer_progress, t.done, t.total) +
                             " · " + FileUtils.formatFileSize(t.bytes) +
                             " · " + FileUtils.formatFileSize(t.speed) + "/s" +
-                            (if (t.active) " · 还剩 " + remaining + " 个" else ""),
+                            (if (t.active) stringResource(R.string.transfer_remaining, remaining) else ""),
                         style = MaterialTheme.typography.bodySmall,
                     )
                     if (t.skipped > 0 || t.failed > 0) {
                         Text(
-                            "跳过 " + t.skipped + " · 失败 " + t.failed,
+                            stringResource(R.string.transfer_skipped, t.skipped, t.failed),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -304,13 +317,13 @@ private fun ExportSection(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             PrimaryButton(
-                text = if (task?.active == true) "传输中…" else "开始传到电脑",
+                text = stringResource(if (task?.active == true) R.string.transfer_in_progress else R.string.transfer_start_push),
                 enabled = state.pcOnline && !state.checking && task?.active != true,
                 modifier = Modifier.weight(1f),
                 onClick = { onStart(state.selectedDates.toList()) },
             )
             if (task?.active == true) {
-                TextButton(onClick = { viewModel.stopPush() }) { Text("停止") }
+                TextButton(onClick = { viewModel.stopPush() }) { Text(stringResource(R.string.transfer_stop)) }
             }
         }
     }
@@ -323,14 +336,12 @@ private fun ImportSection(
     onSelectAll: () -> Unit,
     onImport: () -> Unit,
 ) {
-    SettingsCategory(title = "从电脑取回") {
+    SettingsCategory(title = stringResource(R.string.transfer_dir_pull)) {
         if (state.folders.isEmpty()) {
             Hint(
-                if (state.pcOnline) {
-                    "电脑端还没有文件：先把文件传过去，或把文件放进 PJM-Link 里的 PJM-Transfer"
-                } else {
-                    "电脑端未连接：确认 PJM-Link 已打开并连上 USB"
-                },
+                stringResource(
+                    if (state.pcOnline) R.string.transfer_pc_empty else R.string.transfer_pc_offline,
+                ),
             )
         } else {
             Row(
@@ -338,19 +349,19 @@ private fun ImportSection(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    "共 " + state.folders.size + " 个文件夹",
+                    stringResource(R.string.transfer_folder_count, state.folders.size),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.weight(1f),
                 )
-                TextButton(onClick = onSelectAll) { Text("全选 / 取消") }
+                TextButton(onClick = onSelectAll) { Text(stringResource(R.string.transfer_select_all)) }
             }
             state.folders.forEach { folder ->
                 FolderRow(folder, folder.key in state.selected) { onToggle(folder.key) }
             }
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
                 PrimaryButton(
-                    text = if (state.importing) "导入中…" else "导入到手机",
+                    text = stringResource(if (state.importing) R.string.transfer_importing else R.string.transfer_import_to_phone),
                     enabled = !state.importing && state.selected.isNotEmpty(),
                     modifier = Modifier.weight(1f),
                     onClick = onImport,
@@ -364,7 +375,7 @@ private fun ImportSection(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
             )
             Hint(
-                "已导入 " + state.importDone + "/" + state.importTotal +
+                stringResource(R.string.transfer_import_progress, state.importDone, state.importTotal) +
                     " · " + FileUtils.formatFileSize(state.importBytes) +
                     " · " + FileUtils.formatFileSize(state.importSpeed) + "/s" +
                     (state.importError?.let { " · " + it } ?: ""),
@@ -393,7 +404,12 @@ private fun FolderRow(
         Column(Modifier.weight(1f)) {
             Text(folder.date, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
             Text(
-                categoryLabel(folder.category) + " · " + folder.count + " 个 · " + FileUtils.formatFileSize(folder.size),
+                stringResource(
+                    R.string.transfer_folder_meta,
+                    stringResource(categoryLabelRes(folder.category)),
+                    folder.count,
+                    FileUtils.formatFileSize(folder.size),
+                ),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -401,15 +417,15 @@ private fun FolderRow(
     }
 }
 
-private fun categoryLabel(category: String): String =
+private fun categoryLabelRes(category: String): Int =
     when (category) {
-        "images" -> "图片"
-        "videos" -> "视频"
-        "bili_videos" -> "B站视频"
-        "audios" -> "音频"
-        "texts" -> "文本"
-        "pjm" -> "PJM 容器"
-        else -> "其它"
+        "images" -> R.string.cat_short_images
+        "videos" -> R.string.cat_short_videos
+        "bili_videos" -> R.string.cat_short_bili_videos
+        "audios" -> R.string.cat_short_audios
+        "texts" -> R.string.cat_short_texts
+        "pjm" -> R.string.cat_short_pjm
+        else -> R.string.cat_short_others
     }
 
 @Composable

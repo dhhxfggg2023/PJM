@@ -54,11 +54,11 @@ fun PjmSlider(
                         latestChange(valueRange.start + span * f)
                         latestFinished?.invoke()
                     }
-                }
-                .pointerInput(enabled, valueRange) {
+                }.pointerInput(enabled, valueRange) {
                     if (!enabled) return@pointerInput
                     val pad = 9.dp.toPx()
                     val span = (valueRange.endInclusive - valueRange.start).takeIf { it > 0f } ?: 1f
+
                     fun emit(x: Float) {
                         val usable = (size.width - pad * 2).coerceAtLeast(1f)
                         val f = ((x - pad) / usable).coerceIn(0f, 1f)

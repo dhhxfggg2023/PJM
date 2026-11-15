@@ -73,13 +73,24 @@ class TransferViewModel
         private var files: List<FileEntity> = emptyList()
         private val client = PcLinkClient()
         private var pollJob: Job? = null
+
         // 短时间连点只留最后一条提示：Toast 排队会连弹好几次
         private var lastToast: android.widget.Toast? = null
         private val importedKeys =
-            context.getSharedPreferences("pjm_transfer", Context.MODE_PRIVATE).getStringSet("imported", emptySet()).orEmpty().toMutableSet()
+            context
+                .getSharedPreferences("pjm_transfer", Context.MODE_PRIVATE)
+                .getStringSet("imported", emptySet())
+                .orEmpty()
+                .toMutableSet()
+
         // 已经推到电脑上的文件（路径+大小）：重复点「开始」不会在电脑上堆出「(2)(3)」
         private val pushedKeys =
-            context.getSharedPreferences("pjm_transfer", Context.MODE_PRIVATE).getStringSet("pushed", emptySet()).orEmpty().toMutableSet()
+            context
+                .getSharedPreferences("pjm_transfer", Context.MODE_PRIVATE)
+                .getStringSet("pushed", emptySet())
+                .orEmpty()
+                .toMutableSet()
+
         @Volatile
         private var pushCancel = false
 

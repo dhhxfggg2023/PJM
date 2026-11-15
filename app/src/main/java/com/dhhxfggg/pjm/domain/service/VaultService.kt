@@ -183,7 +183,8 @@ class VaultService : Service() {
                             val volumes =
                                 repository
                                     .packAndEncrypt(uris) { progress ->
-                                        updateNotification("Packing and encrypting...", (progress * 100).toInt())
+                                        // 通知栏也走资源：写死英文时中文系统上仍是英文
+                                        updateNotification(getString(R.string.status_encrypting), (progress * 100).toInt())
                                         VaultManager.updateProgress(progress, getString(R.string.status_encrypting), taskId = TASK_ENCRYPT)
                                     }.getOrThrow()
                             if (!VaultManager.isTaskCancelled(taskId)) {

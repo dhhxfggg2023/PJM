@@ -37,6 +37,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.res.stringArrayResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
@@ -44,7 +46,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
-import com.dhhxfggg.pjm.domain.util.FileUtils
+import com.dhhxfggg.pjm.R
 import com.dhhxfggg.pjm.domain.util.VaultManager
 import com.dhhxfggg.pjm.ui.viewmodel.VaultHeatmapViewModel
 import com.dhhxfggg.pjm.ui.viewmodel.formatEpochDay
@@ -77,17 +79,17 @@ fun VaultHeatmapScreen(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
         ) {
             IconButton(onClick = onBack) { Text("‹", style = MaterialTheme.typography.headlineSmall) }
-            Text("入库热力图", style = MaterialTheme.typography.titleLarge)
+            Text(stringResource(R.string.heatmap_title), style = MaterialTheme.typography.titleLarge)
         }
 
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(24.dp),
         ) {
-            StatBlock("总计", state.total.toString())
-            StatBlock("最近 30 天", state.last30.toString())
-            StatBlock("连续天数", state.currentStreak.toString())
-            StatBlock("最长连续", state.longestStreak.toString())
+            StatBlock(stringResource(R.string.heatmap_total), state.total.toString())
+            StatBlock(stringResource(R.string.heatmap_last30), state.last30.toString())
+            StatBlock(stringResource(R.string.heatmap_current_streak), state.currentStreak.toString())
+            StatBlock(stringResource(R.string.heatmap_longest_streak), state.longestStreak.toString())
         }
 
         if (!state.isLoading) {
@@ -102,8 +104,8 @@ fun VaultHeatmapScreen(
         Spacer(Modifier.height(12.dp))
         val dayCount = selectedDay?.let { state.counts[it] ?: 0 } ?: 0
         val info =
-            selectedDay?.let { formatEpochDay(it) + " · 入库 " + dayCount + " 个" }
-                ?: "点格子看当天入库数量"
+            selectedDay?.let { stringResource(R.string.heatmap_day_info, formatEpochDay(it), dayCount) }
+                ?: stringResource(R.string.heatmap_tap_hint)
         Text(
             text = info,
             style = MaterialTheme.typography.bodySmall,
@@ -153,6 +155,13 @@ private fun HeatmapGrid(
     val gridWidth = step * cols - gap
     val gridHeight = labelHeight + step * rows - gap
 
+    val dowLabels =
+        listOf(
+            0 to stringResource(R.string.heatmap_dow_mon),
+            2 to stringResource(R.string.heatmap_dow_wed),
+            4 to stringResource(R.string.heatmap_dow_fri),
+        )
+    val monthLabels = stringArrayResource(R.array.heatmap_months)
     val emptyColor = Color(0xFFE4E4E7)
     val baseColor = MaterialTheme.colorScheme.primary
     val onSurface = MaterialTheme.colorScheme.onSurfaceVariant
@@ -174,7 +183,7 @@ private fun HeatmapGrid(
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
             Box(modifier = Modifier.width(26.dp).height(gridHeight)) {
                 Canvas(modifier = Modifier.fillMaxSize()) {
-                    listOf(0 to "一", 2 to "三", 4 to "五").forEach { (row, text) ->
+                    dowLabels.forEach { (row, text) ->
                         val layout = measurer.measure(text, TextStyle(fontSize = 10.sp, color = onSurface))
                         drawText(
                             layout,
@@ -213,7 +222,7 @@ private fun HeatmapGrid(
                         val month = formatEpochDay(weekStart).substring(5, 7).toInt()
                         if (month != lastMonth) {
                             lastMonth = month
-                            val layout = measurer.measure(month.toString() + "月", TextStyle(fontSize = 11.sp, color = onSurface))
+                            val layout = measurer.measure(monthLabels[month - 1], TextStyle(fontSize = 11.sp, color = onSurface))
                             drawText(layout, topLeft = Offset(col * stepPx, 0f))
                         }
                         for (row in 0 until rows) {
@@ -257,7 +266,7 @@ private fun HeatmapLegend() {
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier.padding(horizontal = 20.dp),
     ) {
-        Text("少", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(stringResource(R.string.heatmap_legend_less), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.width(6.dp))
         CELL_ALPHAS.forEach { alpha ->
             Box(
@@ -269,11 +278,11 @@ private fun HeatmapLegend() {
             )
         }
         Spacer(Modifier.width(3.dp))
-        Text("多", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(stringResource(R.string.heatmap_legend_more), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.width(10.dp))
         Box(modifier = Modifier.size(14.dp).background(empty, RoundedCornerShape(2.dp)))
         Spacer(Modifier.width(4.dp))
-        Text("无入库", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(stringResource(R.string.heatmap_legend_none), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
@@ -307,13 +316,13 @@ private fun bandOf(
 
 private val SIZE_CATEGORIES =
     listOf(
-        VaultManager.CAT_IMAGES to "图片",
-        VaultManager.CAT_VIDEOS to "视频",
-        VaultManager.CAT_BILI_VIDEOS to "B站视频",
-        VaultManager.CAT_AUDIOS to "音频",
-        VaultManager.CAT_TEXTS to "文档",
-        VaultManager.CAT_OTHERS to "其他",
-        VaultManager.CAT_PJM to "容器",
+        VaultManager.CAT_IMAGES to R.string.cat_short_images,
+        VaultManager.CAT_VIDEOS to R.string.cat_short_videos,
+        VaultManager.CAT_BILI_VIDEOS to R.string.cat_short_bili_videos,
+        VaultManager.CAT_AUDIOS to R.string.cat_short_audios,
+        VaultManager.CAT_TEXTS to R.string.cat_short_texts,
+        VaultManager.CAT_OTHERS to R.string.cat_short_others,
+        VaultManager.CAT_PJM to R.string.cat_short_pjm,
     )
 
 private val SIZE_BUCKET_LABELS =
@@ -330,36 +339,37 @@ private fun SizeDistribution(samples: Map<String, List<Long>>) {
     var selected by remember(available) { mutableStateOf(available.firstOrNull()?.first) }
     val sizes = selected?.let { samples[it] }.orEmpty()
 
-    val histogram = remember(sizes) {
-        val counts = IntArray(SIZE_BUCKET_LABELS.size)
-        sizes.forEach { size ->
-            var index = SIZE_BUCKET_EDGES.indexOfFirst { size < it }
-            if (index < 0) index = SIZE_BUCKET_LABELS.lastIndex
-            counts[index]++
+    val histogram =
+        remember(sizes) {
+            val counts = IntArray(SIZE_BUCKET_LABELS.size)
+            sizes.forEach { size ->
+                var index = SIZE_BUCKET_EDGES.indexOfFirst { size < it }
+                if (index < 0) index = SIZE_BUCKET_LABELS.lastIndex
+                counts[index]++
+            }
+            counts
         }
-        counts
-    }
     val maxCount = (histogram.maxOrNull() ?: 0).coerceAtLeast(1)
     val total = sizes.size
 
     Column(modifier = Modifier.padding(horizontal = 20.dp)) {
-        Text("单个文件大小分布", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(stringResource(R.string.heatmap_size_title), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(6.dp))
         Row(
             modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            available.forEach { (key, label) ->
+            available.forEach { (key, labelRes) ->
                 FilterChip(
                     selected = key == selected,
                     onClick = { selected = key },
-                    label = { Text(label) },
+                    label = { Text(stringResource(labelRes)) },
                 )
             }
         }
         Spacer(Modifier.height(4.dp))
         Text(
-            text = "共 " + total + " 个",
+            text = stringResource(R.string.heatmap_size_total, total),
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -439,7 +449,7 @@ private fun MonthlyStats(
     val max = (months.values.maxOrNull() ?: 0).coerceAtLeast(1)
     Column(modifier = Modifier.padding(horizontal = 20.dp)) {
         Text(
-            text = "最近 6 个月",
+            text = stringResource(R.string.heatmap_monthly_title),
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

@@ -18,6 +18,7 @@ object TakeoverPrefs {
     private const val KEY_BATTERY_ASKED_AT = "battery_asked_at"
     private const val KEY_LAST_SCAN = "last_scan_at"
     private const val KEY_LAST_TICK = "last_tick_at"
+    private const val KEY_LAST_TICK_GAP = "last_tick_gap"
     private const val KEY_GAP_COUNT = "gap_count"
     private const val KEY_LAST_GAP_AT = "last_gap_at"
     private const val KEY_LAST_GAP_MS = "last_gap_ms"
@@ -68,11 +69,23 @@ object TakeoverPrefs {
     /** 定时兜底上一次真正触发的时间：两次心跳间隔过大就说明进程被冻结/停止过 */
     fun lastTickAt(context: Context): Long = prefs(context).getLong(KEY_LAST_TICK, 0L)
 
+    /**
+     * 上一次 tick 当时声明的周期。
+     *
+     * 兜底周期是自适应的（空闲会拉长到 15 分钟），空档判定不能再用固定阈值 ——
+     * 否则「空闲拉长」本身会被误报成「后台被系统冻结」。
+     */
+    fun lastTickGap(context: Context): Long = prefs(context).getLong(KEY_LAST_TICK_GAP, 0L)
+
     fun markTick(
         context: Context,
         at: Long = System.currentTimeMillis(),
+        expectedGapMs: Long = 0L,
     ) {
-        prefs(context).edit { putLong(KEY_LAST_TICK, at) }
+        prefs(context).edit {
+            putLong(KEY_LAST_TICK, at)
+            if (expectedGapMs > 0L) putLong(KEY_LAST_TICK_GAP, expectedGapMs)
+        }
     }
 
     /** 记录一次「本该扫描却没有扫描」的空档（冻结或被杀） */

@@ -35,7 +35,9 @@ android {
         versionName = "2.1.4"
 
         ndk {
-            abiFilters.addAll(listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64"))
+            // 只留真机架构：x86/x86_64 只有模拟器用得上，留在包里等于让每个用户
+            // 多下载两个用不到的原生库
+            abiFilters.addAll(listOf("armeabi-v7a", "arm64-v8a"))
         }
     }
 
@@ -93,8 +95,13 @@ android {
     }
 
     lint {
-        abortOnError = false
-        checkReleaseBuilds = false
+        // 门禁：lint 报 error 就中断构建。之前这里两项都是 false，
+        // 于是「导出的组件没有权限保护」这类 error 一路跟着包发出去，只能靠人肉审。
+        abortOnError = true
+        // release 构建前也跑一次；不仅检查 fatal 项
+        checkReleaseBuilds = true
+        // warning 只打印，不拦构建（否则历史遗留的一条 warning 就能卡住发布）
+        warningsAsErrors = false
     }
 
     testOptions {

@@ -44,7 +44,6 @@ import com.composables.icons.lucide.CheckCheck
 import com.composables.icons.lucide.Download
 import com.composables.icons.lucide.LayoutGrid
 import com.composables.icons.lucide.LayoutList
-import com.composables.icons.lucide.ListTodo
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.Pencil
 import com.composables.icons.lucide.Square
@@ -59,7 +58,6 @@ import com.dhhxfggg.pjm.domain.util.VaultManager
 import com.dhhxfggg.pjm.ui.component.FileCard
 import com.dhhxfggg.pjm.ui.component.PjmAeroDialog
 import com.dhhxfggg.pjm.ui.component.PjmDeleteConfirmDialog
-import com.dhhxfggg.pjm.ui.component.PjmEmptyState
 import com.dhhxfggg.pjm.ui.component.PjmIconButton
 import com.dhhxfggg.pjm.ui.component.PjmRenameDialog
 import com.dhhxfggg.pjm.ui.component.SelectableFileCard
@@ -260,7 +258,7 @@ fun FileViewerScreen(
                         if (selectedFiles.size == 1 && !selectedFiles[0].isImage) {
                             PjmIconButton(
                                 icon = Lucide.Pencil,
-                                contentDescription = "重命名",
+                                contentDescription = stringResource(R.string.action_rename),
                                 onClick = { renameTarget = selectedFiles[0] },
                             )
                             Spacer(Modifier.width(6.dp))

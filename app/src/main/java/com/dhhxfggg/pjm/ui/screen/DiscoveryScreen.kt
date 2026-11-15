@@ -3,7 +3,6 @@ package com.dhhxfggg.pjm.ui.screen
 import android.app.Activity
 import android.content.Context
 import android.content.pm.ActivityInfo
-import android.graphics.Bitmap
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.PredictiveBackHandler
@@ -23,8 +22,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
@@ -32,8 +29,8 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -49,15 +46,7 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.navigation.NavHostController
 import coil3.compose.AsyncImage
-import coil3.request.ImageRequest
-import coil3.request.allowHardware
-import coil3.request.bitmapConfig
-import coil3.request.crossfade
-import coil3.size.Precision
-import coil3.size.Size
 import com.composables.icons.lucide.Lucide
-import com.composables.icons.lucide.Maximize
-import com.composables.icons.lucide.Minimize
 import com.composables.icons.lucide.Pause
 import com.composables.icons.lucide.Play
 import com.dhhxfggg.pjm.R
@@ -66,21 +55,21 @@ import com.dhhxfggg.pjm.domain.util.FileUtils
 import com.dhhxfggg.pjm.domain.util.ShareUtils
 import com.dhhxfggg.pjm.domain.util.VaultPaths
 import com.dhhxfggg.pjm.ui.component.PjmDeleteConfirmDialog
-import com.dhhxfggg.pjm.ui.component.PlayerProgressBar
 import com.dhhxfggg.pjm.ui.component.PjmEmptyState
+import com.dhhxfggg.pjm.ui.component.PlayerProgressBar
+import com.dhhxfggg.pjm.ui.component.VideoControlBar
 import com.dhhxfggg.pjm.ui.component.VideoSurface
 import com.dhhxfggg.pjm.ui.component.ZoomableVaultImage
+import com.dhhxfggg.pjm.ui.component.formatPlaybackTime
 import com.dhhxfggg.pjm.ui.component.rememberAudioInfo
 import com.dhhxfggg.pjm.ui.component.rememberIsAppVisible
+import com.dhhxfggg.pjm.ui.component.rememberPlayerProgress
 import com.dhhxfggg.pjm.ui.theme.rememberIconPack
 import com.dhhxfggg.pjm.ui.viewmodel.DiscoveryItem
 import com.dhhxfggg.pjm.ui.viewmodel.DiscoveryMode
 import com.dhhxfggg.pjm.ui.viewmodel.DiscoveryViewModel
 import com.dhhxfggg.pjm.ui.viewmodel.SettingsViewModel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlin.math.abs
-import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Screen that allows users to discover random media items from their vault.
@@ -278,7 +267,7 @@ fun DiscoveryScreen(
                     onClick = { itemMenuOpen = true },
                     modifier = Modifier.size(40.dp).background(Color.Black.copy(alpha = 0.35f), CircleShape),
                 ) {
-                    Icon(iconPack.actionMore, contentDescription = "更多", tint = Color.White)
+                    Icon(iconPack.actionMore, contentDescription = stringResource(R.string.action_more), tint = Color.White)
                 }
                 DropdownMenu(expanded = itemMenuOpen, onDismissRequest = { itemMenuOpen = false }) {
                     DropdownMenuItem(
@@ -327,7 +316,7 @@ fun DiscoveryScreen(
                         uiState.mode == DiscoveryMode.VIDEOS,
                     ) { viewModel.setMode(DiscoveryMode.VIDEOS) }
                     DiscoveryModeTab(
-                        "音频",
+                        stringResource(R.string.cat_short_audios),
                         uiState.mode == DiscoveryMode.AUDIOS,
                     ) { viewModel.setMode(DiscoveryMode.AUDIOS) }
                 }
@@ -470,7 +459,7 @@ fun DiscoveryAudioRenderer(
                     listOfNotNull(info?.artist, info?.album)
                         .filter { it.isNotBlank() }
                         .joinToString(" · ")
-                        .ifBlank { "未知艺术家" },
+                        .ifBlank { stringResource(R.string.label_unknown_artist) },
                 color = Color.White.copy(alpha = 0.6f),
                 style = MaterialTheme.typography.bodySmall,
                 maxLines = 1,
@@ -485,40 +474,16 @@ fun DiscoveryAudioRenderer(
 /** 音频播放控制条：进度 + 时间 + 播放/暂停（自己画，避免 PlayerView 再叠一层封面） */
 @Composable
 private fun DiscoveryAudioControls(player: ExoPlayer?) {
-    var progress by remember { mutableFloatStateOf(0f) }
-    var duration by remember { mutableLongStateOf(0L) }
-    var current by remember { mutableLongStateOf(0L) }
-    var playing by remember { mutableStateOf(false) }
-    // 拖动期间不接收 500ms 轮询的进度，松手才 seek 一次
-    var dragging by remember { mutableStateOf(false) }
-    var dragValue by remember { mutableFloatStateOf(0f) }
-
-    LaunchedEffect(player) {
-        while (true) {
-            val p = player ?: break
-            if (!dragging) {
-                current = p.currentPosition.coerceAtLeast(0L)
-                if (p.duration > 0) duration = p.duration
-                progress = if (duration > 0) (current.toFloat() / duration).coerceIn(0f, 1f) else 0f
-            }
-            playing = p.isPlaying
-            delay(500.milliseconds)
-        }
-    }
-
+    // 轮询/拖动锁定逻辑和视频页共用一份，这里只管排布
+    val progress = rememberPlayerProgress(player)
     Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
         PlayerProgressBar(
-            progress = if (dragging) dragValue else progress,
-            onScrub = { fraction ->
-                dragging = true
-                dragValue = fraction
-            },
+            progress = progress.fraction,
+            onScrub = { fraction -> progress.scrubTo((fraction * progress.durationMs).toLong()) },
             onSeek = {
-                val target = (it * duration).toLong()
+                val target = (it * progress.durationMs).toLong()
                 player?.seekTo(target)
-                current = target
-                progress = it
-                dragging = false
+                progress.endScrub(target)
             },
             activeColor = Color.White,
         )
@@ -526,28 +491,21 @@ private fun DiscoveryAudioControls(player: ExoPlayer?) {
             modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Text(formatPlayTime(current), color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
-            Text(formatPlayTime(duration), color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
+            Text(formatPlaybackTime(progress.shownPositionMs), color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
+            Text(formatPlaybackTime(progress.durationMs), color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
         }
         IconButton(
-            onClick = { if (playing) player?.pause() else player?.play() },
+            onClick = { if (progress.isPlaying) player?.pause() else player?.play() },
             modifier = Modifier.align(Alignment.CenterHorizontally).size(64.dp),
         ) {
             Icon(
-                imageVector = if (playing) Lucide.Pause else Lucide.Play,
-                contentDescription = if (playing) "暂停" else "播放",
+                imageVector = if (progress.isPlaying) Lucide.Pause else Lucide.Play,
+                contentDescription = stringResource(if (progress.isPlaying) R.string.action_pause else R.string.action_play),
                 tint = Color.White,
                 modifier = Modifier.size(44.dp),
             )
         }
     }
-}
-
-private fun formatPlayTime(ms: Long): String {
-    val totalSeconds = (ms / 1000).coerceAtLeast(0)
-    val minutes = totalSeconds / 60
-    val seconds = (totalSeconds % 60).toString().padStart(2, '0')
-    return minutes.toString() + ":" + seconds
 }
 
 /**
@@ -628,15 +586,15 @@ fun DiscoveryVideoRenderer(
     onVideoEnded: () -> Unit,
 ) {
     val context = LocalContext.current
+    // 手势回调不是组合作用域，用 LocalResources（跟随语言/配置变化）而不是 LocalContext 读资源
+    val resources = LocalResources.current
     // 核心优化：从复用池借播放器（避免滑动时反复创建/销毁 MediaCodec 实例）
     var exoPlayer by remember { mutableStateOf<ExoPlayer?>(null) }
 
-    // 进度相关状态改进：
-    //  - duration（低频，仅播放器 READY 时更新一次）留在本层，供拖拽 seek 计算用；
-    //  - currentTime / progress（高频 500ms 轮询）移至子组件 VideoProgressBar，
-    //    避免每 500ms 重组整个视频渲染器（含 AndroidView）→ 丢帧。
-    var duration by remember { mutableLongStateOf(0L) }
-    var isPlaying by remember { mutableStateOf(true) }
+    // 进度/时长/播放状态统一交给共享状态轮询，本层不再自己缓存一份 duration：
+    // 之前父层（READY 时更新一次）和子组件（500ms 轮询）各存一份，切集后会短暂对不上。
+    // 注意：本层只在手势回调里读它（手势回调不属于重组作用域，读它不会引起重组）。
+    val progress = rememberPlayerProgress(exoPlayer)
     var showControls by remember { mutableStateOf(false) }
     var seekLabel by remember { mutableStateOf("") }
 
@@ -652,12 +610,7 @@ fun DiscoveryVideoRenderer(
             player.prepare()
             val listener =
                 object : Player.Listener {
-                    override fun onIsPlayingChanged(p: Boolean) {
-                        isPlaying = p
-                    }
-
                     override fun onPlaybackStateChanged(s: Int) {
-                        if (s == Player.STATE_READY) duration = player.duration
                         // 播完自动连播下一项（发现页两种视频模式共用）
                         if (s == Player.STATE_ENDED) onVideoEnded()
                     }
@@ -697,11 +650,12 @@ fun DiscoveryVideoRenderer(
                                 // 左右分区跳转：左 1/3 后退、右 1/3 前进、中间不动作
                                 val w = size.width.toFloat()
                                 val pos = exoPlayer?.currentPosition ?: 0L
+                                val total = progress.durationMs
                                 val target =
                                     when {
-                                        duration <= 15_000L -> pos
+                                        total <= 15_000L -> pos
                                         offset.x < w / 3f -> (pos - 10_000L).coerceAtLeast(0L)
-                                        offset.x > w * 2f / 3f -> (pos + 10_000L).coerceAtMost(duration)
+                                        offset.x > w * 2f / 3f -> (pos + 10_000L).coerceAtMost(total)
                                         else -> pos
                                     }
                                 if (target != pos) exoPlayer?.seekTo(target)
@@ -711,36 +665,48 @@ fun DiscoveryVideoRenderer(
                     }.pointerInput(item.displayId) {
                         var dragTotalX = 0f
                         var startPosition = 0L
+                        // 松手要对齐到这个位置；拖到哪就算哪（取消也一样）
+                        var lastPosition = 0L
                         detectHorizontalDragGestures(
                             onDragStart = {
                                 onLockChange(true)
                                 // 拖动进度时不弹控制条：只显示中间的秒数提示
                                 dragTotalX = 0f
                                 startPosition = exoPlayer?.currentPosition ?: 0L
+                                lastPosition = startPosition
+                                progress.scrubTo(startPosition)
                             },
                             onDragEnd = {
                                 onLockChange(false)
                                 seekLabel = ""
+                                progress.endScrub(lastPosition)
                             },
                             onDragCancel = {
                                 onLockChange(false)
                                 seekLabel = ""
+                                progress.endScrub(lastPosition)
                             },
                             onHorizontalDrag = { change, dragAmount ->
+                                val total = progress.durationMs
+                                // 总时长还没就绪（未 READY / 时长未知）：这次拖动不处理，
+                                // 否则 coerceIn(0, 0) 会把进度直接拖回开头
+                                if (total <= 0L) return@detectHorizontalDragGestures
                                 dragTotalX += dragAmount
                                 val screenWidth = size.width.toFloat()
                                 val seekRatio = (dragTotalX / screenWidth) * 0.5f
-                                val seekOffsetMs = (duration * seekRatio).toLong()
-                                val targetPosition = (startPosition + seekOffsetMs).coerceIn(0, duration)
+                                val seekOffsetMs = (total * seekRatio).toLong()
+                                val targetPosition = (startPosition + seekOffsetMs).coerceIn(0L, total)
 
                                 exoPlayer?.seekTo(targetPosition)
+                                lastPosition = targetPosition
+                                progress.scrubTo(targetPosition)
 
                                 val diffSec = (targetPosition - startPosition) / 1000
                                 seekLabel =
                                     if (diffSec >= 0) {
-                                        context.getString(R.string.fast_seek_forward, diffSec)
+                                        resources.getString(R.string.fast_seek_forward, diffSec)
                                     } else {
-                                        context.getString(R.string.fast_seek_backward, diffSec)
+                                        resources.getString(R.string.fast_seek_backward, diffSec)
                                     }
 
                                 change.consume()
@@ -762,7 +728,7 @@ fun DiscoveryVideoRenderer(
             }
         }
 
-        if (showControls && !isPlaying) {
+        if (showControls && !progress.isPlaying) {
             IconButton(
                 onClick = { exoPlayer?.play() },
                 modifier = Modifier.align(Alignment.Center),
@@ -776,121 +742,22 @@ fun DiscoveryVideoRenderer(
             }
         }
 
-        /**
-         * 进度条 + 时间文本独立子组件：
-         * 500ms 轮询更新仅影响本组件，不波及播放器本体 / 手势层 → 显著减少重组丢帧。
-         */
+        // 控制条和查看器共用一份：进度更新只重组它自己，不波及播放器本体与手势层
         AnimatedVisibility(
             visible = showControls,
             enter = fadeIn() + slideInVertically { it },
             exit = fadeOut() + slideOutVertically { it },
             modifier = Modifier.align(Alignment.BottomCenter),
         ) {
-            VideoProgressBar(
-                exoPlayer = exoPlayer,
-                bottomPadding = bottomPadding,
-                isFullScreen = isFullScreen,
-                onToggleFullScreen = onToggleFullScreen,
+            VideoControlBar(
+                player = exoPlayer,
+                progress = progress,
+                bottomPadding = bottomPadding + (if (isFullScreen) 16.dp else 48.dp),
+                fullscreen = isFullScreen,
+                onToggleFullscreen = onToggleFullScreen,
             )
         }
     }
-}
-
-/**
- * 视频进度条 + 时间文本的独立子组件。
- * 单独持有高频（500ms）轮询的 currentTime / progress 状态，
- * 使进度更新仅重组本组件，不波及播放器本体（AndroidView）与手势层，减少丢帧。
- */
-@Composable
-private fun VideoProgressBar(
-    exoPlayer: ExoPlayer?,
-    bottomPadding: Dp,
-    isFullScreen: Boolean,
-    onToggleFullScreen: () -> Unit,
-) {
-    var progress by remember { mutableFloatStateOf(0f) }
-    var duration by remember { mutableLongStateOf(0L) }
-    var currentTime by remember { mutableLongStateOf(0L) }
-    // 拖动期间不能被 500ms 轮询覆盖，否则滑块会被播放进度"抢回去"，手感就是拖不动
-    var dragging by remember { mutableStateOf(false) }
-    var dragValue by remember { mutableFloatStateOf(0f) }
-
-    LaunchedEffect(exoPlayer) {
-        while (true) {
-            val p = exoPlayer ?: break
-            if (!dragging) {
-                currentTime = p.currentPosition
-                val d = p.duration
-                // 时长不是常量：切集/切曲之后必须更新，否则整条进度条按旧总长算
-                if (d > 0 && d != Long.MIN_VALUE) duration = d
-                progress = if (duration > 0) (currentTime.toFloat() / duration).coerceIn(0f, 1f) else 0f
-            }
-            delay(500.milliseconds)
-        }
-    }
-
-    Column(
-        modifier =
-            Modifier
-                .fillMaxWidth()
-                .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.8f))))
-                .padding(bottom = bottomPadding + (if (isFullScreen) 16.dp else 48.dp)),
-    ) {
-        // 拖动时只更新本地位置；松手才真正 seek 一次，避免连续 seek 造成重新缓冲。
-        PlayerProgressBar(
-            progress = if (dragging) dragValue else progress,
-            onScrub = {
-                dragging = true
-                dragValue = it
-            },
-            onSeek = {
-                val target = (it * duration).toLong()
-                exoPlayer?.seekTo(target)
-                currentTime = target
-                progress = it
-                dragging = false
-            },
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-            activeColor = Color.White,
-        )
-
-        Row(
-            modifier =
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            val shownTime = if (dragging) (dragValue * duration).toLong() else currentTime
-            Text(formatTime(shownTime) + " / " + formatTime(duration), color = Color.White, fontSize = 13.sp)
-
-            IconButton(
-                onClick = onToggleFullScreen,
-                modifier =
-                    Modifier
-                        .background(Color.White.copy(alpha = 0.2f), CircleShape)
-                        .size(36.dp),
-            ) {
-                Icon(
-                    imageVector = if (isFullScreen) Lucide.Minimize else Lucide.Maximize,
-                    contentDescription = null,
-                    tint = Color.White,
-                    modifier = Modifier.size(20.dp),
-                )
-            }
-        }
-    }
-}
-
-/**
- * Formats a duration in milliseconds to a mm:ss string.
- */
-private fun formatTime(ms: Long): String {
-    val totalSeconds = (ms / 1000).coerceAtLeast(0)
-    val minutes = totalSeconds / 60
-    val seconds = totalSeconds % 60
-    return "%02d:%02d".format(minutes, seconds)
 }
 
 /**

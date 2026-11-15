@@ -89,7 +89,9 @@ object FileServerMain {
 
         // 请求去重：保证同一个请求只会被处理一次（见 RequestDispatcher 说明）
         val dispatcher = RequestDispatcher()
-        val workerPool = java.util.concurrent.Executors.newFixedThreadPool(4)
+        val workerPool =
+            java.util.concurrent.Executors
+                .newFixedThreadPool(4)
 
         while (true) {
             try {

@@ -1,6 +1,5 @@
 package com.dhhxfggg.pjm.ui.screen
 
-import com.dhhxfggg.pjm.ui.component.PjmSlider
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -21,7 +20,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.composables.icons.lucide.*
 import com.dhhxfggg.pjm.R
@@ -30,6 +28,7 @@ import com.dhhxfggg.pjm.domain.shizuku.EmbeddedPrivilegedIo
 import com.dhhxfggg.pjm.domain.util.AudioSettings
 import com.dhhxfggg.pjm.domain.util.FileUtils
 import com.dhhxfggg.pjm.ui.component.PjmAeroDialog
+import com.dhhxfggg.pjm.ui.component.PjmSlider
 import com.dhhxfggg.pjm.ui.theme.PresetAmber
 import com.dhhxfggg.pjm.ui.theme.PresetBiliPink
 import com.dhhxfggg.pjm.ui.theme.PresetDustyBlue
@@ -62,12 +61,12 @@ private fun EqualizerPanel(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = "均衡器",
+                    text = stringResource(R.string.eq_title),
                     style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.weight(1f),
                 )
                 // 一键把 5 段推子全部归零（±0 dB），不用一段一段拖回去
-                TextButton(onClick = onReset) { Text("恢复默认") }
+                TextButton(onClick = onReset) { Text(stringResource(R.string.eq_reset)) }
             }
             // 推子长度跟着可用空间走：竖向推子太短根本没法微调，所以至少 220dp
             BoxWithConstraints(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
@@ -109,7 +108,7 @@ private fun EqualizerPanel(
                 }
             }
             Text(
-                text = "向上增强、向下减弱（±12 dB）",
+                text = stringResource(R.string.eq_band_hint),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
@@ -161,8 +160,8 @@ internal fun MainCategoryList(
             )
             SettingsButton(
                 icon = Lucide.MonitorSmartphone,
-                title = "传输到电脑",
-                description = "手机开下载服务，电脑用浏览器按分类/时间段取文件（支持断点续传）",
+                title = stringResource(R.string.settings_title_transfer),
+                description = stringResource(R.string.settings_desc_transfer),
                 onClick = { onNavigate(SettingsPage.Transfer) },
                 accent = PresetForest,
             )
@@ -194,8 +193,8 @@ internal fun MainCategoryList(
             )
             SettingsButton(
                 icon = Lucide.Play,
-                title = "发现页",
-                description = "默认打开的分类、随机规则",
+                title = stringResource(R.string.settings_title_discovery),
+                description = stringResource(R.string.settings_desc_discovery),
                 onClick = { onNavigate(SettingsPage.Discovery) },
                 accent = PresetLavender,
             )
@@ -257,7 +256,7 @@ internal fun AudioPlaybackSettings() {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.weight(1f),
                 )
-                TextButton(onClick = { showEqPanel = true }) { Text("调整") }
+                TextButton(onClick = { showEqPanel = true }) { Text(stringResource(R.string.eq_adjust)) }
             }
             if (showEqPanel) {
                 EqualizerPanel(
@@ -299,15 +298,15 @@ internal fun DiscoverySettings(
 ) {
     val options =
         listOf(
-            "images" to "图片",
-            "videos" to "视频",
-            "bili_videos" to "B站视频",
-            "audios" to "音频",
+            "images" to R.string.cat_short_images,
+            "videos" to R.string.cat_short_videos,
+            "bili_videos" to R.string.cat_short_bili_videos,
+            "audios" to R.string.cat_short_audios,
         )
     Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-        SettingsCategory(title = "默认分类") {
+        SettingsCategory(title = stringResource(R.string.discovery_default_cat)) {
             Text(
-                text = "进入发现页时先打开哪一个（之后手动切换的不会被覆盖）",
+                text = stringResource(R.string.discovery_default_cat_hint),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
@@ -320,11 +319,11 @@ internal fun DiscoverySettings(
                         horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
                     ) {
                         // 同一行两个选项宽度对半分：四个按钮大小一致，不会一个宽一个窄
-                        row.forEach { (value, label) ->
+                        row.forEach { (value, labelRes) ->
                             FilterChip(
                                 selected = settings.discoveryDefaultMode == value,
                                 onClick = { settingsViewModel.updateSetting(Settings.KEY_DISCOVERY_DEFAULT_MODE, value) },
-                                label = { Text(label) },
+                                label = { Text(stringResource(labelRes)) },
                                 modifier = Modifier.weight(1f),
                             )
                         }
@@ -332,9 +331,9 @@ internal fun DiscoverySettings(
                 }
             }
         }
-        SettingsCategory(title = "随机规则") {
+        SettingsCategory(title = stringResource(R.string.discovery_random_rules)) {
             Text(
-                text = "每个分类都是全库随机、一轮内不重复，看完一轮自动重新开始；视频/音频播完自动切到下一条。",
+                text = stringResource(R.string.discovery_random_rules_hint),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
@@ -430,25 +429,25 @@ internal fun AppearanceSettings(
             )
         }
         // 「库封面」：首页分类卡片上的那张随机封面图
-        SettingsCategory(title = "库封面") {
+        SettingsCategory(title = stringResource(R.string.settings_cat_vault_cover)) {
             SettingsSwitch(
                 icon = Lucide.Image,
-                title = "显示随机封面",
-                description = "首页每个分类用随机一张图当封面；关掉只显示分类图标",
+                title = stringResource(R.string.settings_title_random_cover),
+                description = stringResource(R.string.settings_desc_random_cover),
                 checked = settings.coverEnabled,
                 onCheckedChange = { settingsViewModel.updateSetting(Settings.KEY_COVER_ENABLED, it) },
             )
             if (settings.coverEnabled) {
-                SettingsOptionLabel("更换频率")
+                SettingsOptionLabel(stringResource(R.string.settings_label_cover_refresh))
                 Row(
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp).fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    listOf("daily" to "每日一换", "each" to "每次一换").forEach { (key, label) ->
+                    listOf("daily" to R.string.cover_refresh_daily, "each" to R.string.cover_refresh_each).forEach { (key, labelRes) ->
                         FilterChip(
                             selected = settings.coverRefresh == key,
                             onClick = { settingsViewModel.updateSetting(Settings.KEY_COVER_REFRESH, key) },
-                            label = { Text(label) },
+                            label = { Text(stringResource(labelRes)) },
                         )
                     }
                 }
@@ -535,6 +534,12 @@ internal fun BilibiliSettings(
 ) {
     val context = LocalContext.current
     var showPrivilegedAdbDialog by remember { mutableStateOf(false) }
+    // 文案在组合期取好：用 LocalContext.getString 读资源不会跟随语言/配置变化
+    // （lint 的 LocalContextResources）；下面的回调里直接用这几个值。
+    val privilegedReadyMsg = stringResource(R.string.toast_privileged_ready_all)
+    val privilegedNotRunningMsg = stringResource(R.string.toast_privileged_not_running)
+    val authRecordsDestroyedMsg = stringResource(R.string.toast_auth_records_destroyed)
+    val copiedMsg = stringResource(R.string.toast_copied_to_clipboard)
 
     // 检测 PJM 内置特权服务（shell 身份）是否在线
     val privilegedReady by produceState(initialValue = false) {
@@ -548,12 +553,7 @@ internal fun BilibiliSettings(
     LaunchedEffect(privilegedReady) {
         if (privilegedReady != lastPrivilegedReady) {
             lastPrivilegedReady = privilegedReady
-            val msg =
-                if (privilegedReady) {
-                    context.getString(R.string.toast_privileged_ready_all)
-                } else {
-                    context.getString(R.string.toast_privileged_not_running)
-                }
+            val msg = if (privilegedReady) privilegedReadyMsg else privilegedNotRunningMsg
             Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
         }
     }
@@ -634,7 +634,7 @@ internal fun BilibiliSettings(
                         }
                     }
                     settingsViewModel.updateSetting(Settings.KEY_BILI_ROOT_URI, null)
-                    Toast.makeText(context, context.getString(R.string.toast_auth_records_destroyed), Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, authRecordsDestroyedMsg, Toast.LENGTH_SHORT).show()
                 },
             )
             SettingsButton(
@@ -675,7 +675,7 @@ internal fun BilibiliSettings(
                         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                         clipboard.setPrimaryClip(ClipData.newPlainText("pjm_start", adbCommand))
                         showPrivilegedAdbDialog = false
-                        Toast.makeText(context, context.getString(R.string.toast_copied_to_clipboard), Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, copiedMsg, Toast.LENGTH_SHORT).show()
                     },
                     enabled = adbCommand.isNotEmpty(),
                 ) { Text(stringResource(R.string.action_copy_command)) }
@@ -781,13 +781,13 @@ internal fun MaintenanceSettings(
             SettingsButton(
                 icon = Lucide.Brush,
                 title = stringResource(R.string.settings_title_clear_cache_all),
-                description = stringResource(R.string.settings_desc_clear_cache_only_tmp) + " · 当前 " + FileUtils.formatFileSize(cacheBytes),
+                description = stringResource(R.string.settings_size_now, stringResource(R.string.settings_desc_clear_cache_only_tmp), FileUtils.formatFileSize(cacheBytes)),
                 onClick = onClearCache,
             )
             SettingsButton(
                 icon = Lucide.FileX,
                 title = stringResource(R.string.settings_title_clear_logs),
-                description = stringResource(R.string.settings_desc_clear_logs) + " · 当前 " + FileUtils.formatFileSize(logBytes),
+                description = stringResource(R.string.settings_size_now, stringResource(R.string.settings_desc_clear_logs), FileUtils.formatFileSize(logBytes)),
                 onClick = onClearLogs,
             )
             SettingsButton(icon = Lucide.Bug, title = stringResource(R.string.settings_title_export_logs), onClick = onExportLogs)

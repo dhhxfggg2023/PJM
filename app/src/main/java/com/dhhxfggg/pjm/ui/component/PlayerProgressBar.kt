@@ -78,8 +78,7 @@ fun PlayerProgressBar(
                         },
                         onDragCancel = { dragging = false },
                     )
-                }
-                .pointerInput(widthPx) {
+                }.pointerInput(widthPx) {
                     if (widthPx <= 0) return@pointerInput
                     detectTapGestures { offset ->
                         val f = (offset.x / widthPx).coerceIn(0f, 1f)

@@ -13,8 +13,12 @@ import androidx.media3.ui.PlayerView
  *
  * 查看器和发现页都复用它：只负责把 `ExoPlayer` 绑到 Media3 的 `PlayerView` 上，
  * 控制条、手势由调用方决定 —— 避免两个页面各写一套 PlayerView 配置，行为漂移。
+ *
+ * 注意：Media3 的 @UnstableApi 是 androidx 的 opt-in 标记，不是 Kotlin 的 @RequiresOptIn。
+ * 这里必须用 @androidx.annotation.OptIn；写成 Kotlin 的 @OptIn 只会得到一条编译警告，
+ * 而 lint 的 UnsafeOptInUsageError 会直接报错（lint 门禁打开后就是构建失败）。
  */
-@OptIn(UnstableApi::class)
+@androidx.annotation.OptIn(UnstableApi::class)
 @Composable
 fun VideoSurface(
     player: ExoPlayer?,

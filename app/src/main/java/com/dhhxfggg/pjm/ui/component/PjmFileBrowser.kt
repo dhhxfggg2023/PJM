@@ -155,13 +155,15 @@ fun PjmFolderPickerDialog(
             privilegedEntries?.associate { it.first.name to it.second }
         }
 
+    // 文案在组合期取好：用 LocalContext 读资源不会跟随语言/配置变化（lint: LocalContextResources）
+    val systemDirLabel = stringResource(R.string.filebrowser_system_dir)
     val currentPathDisplay =
         currentDocDir?.let { doc ->
             val path = doc.uri.path ?: ""
             if (path.contains("primary:Android/data")) {
                 "Data/" + path.substringAfterLast("/")
             } else {
-                doc.name ?: context.getString(R.string.filebrowser_system_dir)
+                doc.name ?: systemDirLabel
             }
         } ?: currentRawDir.absolutePath
 
