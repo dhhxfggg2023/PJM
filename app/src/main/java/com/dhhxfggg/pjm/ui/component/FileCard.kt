@@ -14,6 +14,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -92,7 +97,14 @@ fun FileCard(
                     // 图片铺满整格：底色用接近中性的深色，缩略图还没解码出来时也不会是一块浅灰
                     .background(Color.Black.copy(alpha = 0.06f))
                     .then(selectionBorder)
-                    .combinedClickable(onClick = onClick, onLongClick = onLongClick),
+                    .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+                    // 缩略图/图标都把 contentDescription 设成 null，读屏逐格只会念「按钮」。
+                    // 给根 Box 一个可理解的名字，选中态交给 selected 表达，不再靠勾选图标的语义。
+                    .semantics {
+                        contentDescription = FileUtils.normalizedDisplayName(fileEntity)
+                        role = Role.Button
+                        selected = isSelected
+                    },
             contentAlignment = Alignment.Center,
         ) {
             // 非图片/视频没有缩略图，用类型图标兜底（图标一直有，缩略图加载后覆盖在上面）
@@ -252,22 +264,25 @@ private fun CardMoreMenu(
 ) {
     var expanded by remember { mutableStateOf(false) }
     Box(modifier = modifier) {
-        IconButton(
-            onClick = { expanded = true },
-            modifier =
-                Modifier
-                    .size(32.dp)
-                    .background(
-                        MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
-                        androidx.compose.foundation.shape.CircleShape,
-                    ),
-        ) {
-            Icon(
-                imageVector = iconPack.actionMore,
-                contentDescription = stringResource(R.string.action_more),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(18.dp),
-            )
+        // 32dp 圆底只是视觉，触控区撑到 48dp；不然网格里这个小按钮点不准。
+        Box(modifier = Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+            IconButton(
+                onClick = { expanded = true },
+                modifier =
+                    Modifier
+                        .size(32.dp)
+                        .background(
+                            MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
+                            androidx.compose.foundation.shape.CircleShape,
+                        ),
+            ) {
+                Icon(
+                    imageVector = iconPack.actionMore,
+                    contentDescription = stringResource(R.string.action_more),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             if (onShare != null) {

@@ -79,11 +79,15 @@ object PjmLogger {
         val logLine = "[$timestamp] [$level] [$threadName]$tId $safeTag: $fullMsg\n"
 
         // 1. Android Logcat (for development)
-        when (level) {
-            "D" -> Log.d(safeTag, fullMsg)
-            "I" -> Log.i(safeTag, fullMsg)
-            "W" -> Log.w(safeTag, fullMsg)
-            "E" -> Log.e(safeTag, fullMsg)
+        // 本地 JVM 单测里 android.util.Log 是没有实现的桩，直接调用会抛
+        // “not mocked”；日志失败不能反过来让调用方（如 BookLoader 的损坏文件分支）崩掉。
+        runCatching {
+            when (level) {
+                "D" -> Log.d(safeTag, fullMsg)
+                "I" -> Log.i(safeTag, fullMsg)
+                "W" -> Log.w(safeTag, fullMsg)
+                "E" -> Log.e(safeTag, fullMsg)
+            }
         }
 
         // 2. 持久化：W/E 立即 hard-sync；I 交给后台线程批量写；D 只进 logcat（扫描心跳这类高频日志不落盘）

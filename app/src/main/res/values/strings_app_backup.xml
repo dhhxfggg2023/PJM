@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  备份已安装应用（AppBackupScreen / ApkExporter 专用文案）。
+  单独成文件是为了避免和别的功能抢 strings.xml；键名统一 app_backup_ 前缀。
+-->
+<resources>
+    <string name="app_backup_title">备份已安装应用</string>
+    <string name="app_backup_settings_title">备份已安装应用</string>
+    <string name="app_backup_settings_desc">把应用的安装包提取进保险库「其他」分类</string>
+
+    <string name="app_backup_search_hint">搜索应用名或包名</string>
+    <string name="app_backup_loading">正在读取已安装应用…</string>
+    <string name="app_backup_empty">没有可备份的应用</string>
+    <string name="app_backup_search_empty">没有匹配的应用</string>
+    <string name="app_backup_search_empty_hint">换个关键词再试试</string>
+
+    <string name="app_backup_system_tag">系统应用</string>
+        <string name="app_backup_version">版本 %1$s (%2$d)</string>
+    <string name="app_backup_version_unknown">版本未知</string>
+    <string name="app_backup_cd_select">选择 %1$s</string>
+
+    <string name="app_backup_selected_count">已选 %1$d 个</string>
+    <string name="app_backup_action_backup">备份选中（%1$d）</string>
+    <string name="app_backup_nothing_selected">请先选择要备份的应用</string>
+    <string name="app_backup_backing_up">正在备份 %1$s</string>
+    <string name="app_backup_progress">%1$d/%2$d · %3$s / %4$s</string>
+
+    <string name="app_backup_result_title">备份结果</string>
+    <string name="app_backup_result_summary">成功 %1$d 个 / 失败 %2$d 个</string>
+    <string name="app_backup_result_apks">已存入「其他」分类，共 %1$d 个 APK</string>
+    <string name="app_backup_result_reason">失败原因：%1$s</string>
+
+    <string name="app_backup_error_not_installed">应用未安装</string>
+    <string name="app_backup_error_no_apk">找不到安装包</string>
+    <string name="app_backup_error_copy_failed">复制 %1$s 失败</string>
+</resources>

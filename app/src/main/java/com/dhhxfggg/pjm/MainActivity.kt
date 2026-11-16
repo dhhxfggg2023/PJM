@@ -269,7 +269,9 @@ class MainActivity : ComponentActivity() {
                                             modifier = Modifier.fillMaxWidth().heightIn(max = 360.dp),
                                             verticalArrangement = Arrangement.spacedBy(6.dp),
                                         ) {
-                                            items(uris) { uri ->
+                                            // key 用 uri 字符串：列表重排/插入时让 Compose 认出同一个条目，
+                                            // 避免缩略图和状态跟着位置乱跳。
+                                            items(uris, key = { it.toString() }) { uri ->
                                                 DeleteCandidateRow(context, uri)
                                             }
                                         }

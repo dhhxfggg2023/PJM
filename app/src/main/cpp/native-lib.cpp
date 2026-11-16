@@ -131,25 +131,33 @@ Java_com_dhhxfggg_pjm_domain_util_CryptoUtils_transformBytesNative(
         return;
     }
 
-    // 核心优化：用 GetPrimitiveArrayCritical 直接拿数组指针，避免 GetByteArrayElements
-    // 在部分 VM 上「拷出 → 变换 → 拷回」的两次 1MB 级内存过手（加密/解密是 I/O 热路径）。
-    // 临界区内只做纯计算，不调用任何 JNI 函数，满足 Critical 的约束。
-    jbyte* pData = (jbyte*) env->GetPrimitiveArrayCritical(data, nullptr);
-    jbyte* pKey = (jbyte*) env->GetPrimitiveArrayCritical(key, nullptr);
+    // 核心修复（JNI 规范）：critical region 内**不允许再调用任何 JNI 函数**。
+    // 旧实现对 data 与 key 各做了一次 GetPrimitiveArrayCritical —— 第二次获取发生在
+    // 第一次的临界区内，属于未定义行为（ART 上可能 abort 或长时间停 GC）。
+    // 现在：key 只有 34 字节，用 GetByteArrayRegion 拷到栈上；只对 data 保留 critical 获取，
+    // 且整段临界区里只有纯 C 计算，不碰任何 JNI 调用。
+    uint8_t keyBuf[256];
+    if (keyLen > (jsize) sizeof(keyBuf)) {
+        // 密钥长度固定为 34，超过 256 说明调用方传错了数组，直接拒绝
+        env->ThrowNew(env->FindClass("java/lang/IllegalArgumentException"),
+                      "transformBytesNative: key too long");
+        return;
+    }
+    env->GetByteArrayRegion(key, 0, keyLen, reinterpret_cast<jbyte*>(keyBuf));
 
-    // Critical 获取失败（OOM / VM 拒绝）必须抛 Java 异常，让上层走失败/回退路径，
-    // 绝不静默跳过变换产出半明文数据。
-    if (pData == nullptr || pKey == nullptr) {
-        if (pData != nullptr) env->ReleasePrimitiveArrayCritical(data, pData, JNI_ABORT);
-        if (pKey != nullptr) env->ReleasePrimitiveArrayCritical(key, pKey, JNI_ABORT);
+    // data 用 critical 获取，避免 GetByteArrayElements 在部分 VM 上「拷出 → 变换 → 拷回」
+    // 的两次 1MB 级内存过手（加密/解密是 I/O 热路径）。
+    jbyte* pData = (jbyte*) env->GetPrimitiveArrayCritical(data, nullptr);
+    if (pData == nullptr) {
+        // 获取失败必须抛 Java 异常，让上层走失败/回退路径，绝不静默产出半明文数据
         env->ThrowNew(env->FindClass("java/lang/OutOfMemoryError"),
-                      "transformBytesNative: failed to access byte arrays");
+                      "transformBytesNative: failed to access byte array");
         return;
     }
 
     // 使用 uint8_t 确保无符号运算一致性
     uint8_t* uData = (uint8_t*) pData;
-    const uint8_t* uKey = (const uint8_t*) pKey;
+    const uint8_t* uKey = keyBuf;
 
     if (mode == 0) {
         transformLegacyMask(uData, (int32_t) off, (int32_t) len, uKey,
@@ -159,7 +167,6 @@ Java_com_dhhxfggg_pjm_domain_util_CryptoUtils_transformBytesNative(
                         (uint32_t) keyLen, (uint64_t) startPos);
     }
 
-    // 成对释放：数据写回 Java；Key 无需同步
+    // 只需释放 data：key 是栈上拷贝，不再持有任何 Java 数组引用
     env->ReleasePrimitiveArrayCritical(data, pData, 0);
-    env->ReleasePrimitiveArrayCritical(key, pKey, JNI_ABORT);
 }

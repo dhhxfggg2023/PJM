@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  UI 跟进项专用字符串（中文）。
+  单独建文件：与既有 strings.xml 分开，避免多人同时改同一个资源文件产生冲突。
+  键名必须与 values-en/strings_ui_followup.xml 一一对应。
+-->
+<resources>
+    <!-- 自绘进度条的读屏名称：让读屏用户知道这个滑块控制的是播放进度 -->
+    <string name="cd_player_progress">播放进度</string>
+    <!-- 自绘调节滑条的读屏名称：设置页里各种数值滑条的通用称呼 -->
+    <string name="cd_adjust_slider">调节滑块</string>
+</resources>

@@ -77,12 +77,12 @@ jobs:
         run: ./gradlew -Dgradle.user.home=$HOME/.gradle :app:assembleDebugAndroidTest --stacktrace
 
       # 核心修复：此前只有 assembleDebugAndroidTest（编译），仪器化测试从未真正执行过。
-      # 已知限制（本步骤暂时非阻塞，见下）：
+      # 注意（非门禁）：模拟器架构 x86_64 与 abiFilters 不匹配，native 库不可用，该步骤不作为门禁。
       #  - app/build.gradle.kts 的 abiFilters 只有 armeabi-v7a / arm64-v8a，
       #    x86_64 模拟器上原生库不可用；当前两个用例（ExampleInstrumentedTest /
       #    DatabaseMigrationTest）都不触达 JNI，因此可以跑通，但无法覆盖加密等原生路径；
-      #  - 先用 continue-on-error 避免模拟器/ABI 环境问题把主 CI 拖红；
-      #    等 debug 构建补上 x86_64 ABI 后，应去掉 continue-on-error 变成硬门禁。
+      #  - continue-on-error: true 保留，模拟器/ABI 环境问题不阻塞主 CI；
+      #    等 debug 构建补上 x86_64 ABI 后，再考虑去掉 continue-on-error 变成硬门禁。
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -135,10 +135,19 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: instrumented-test-report
-          path: app/build/reports/androidTests/connected/
+          path: app/build/reports/androidTests/
+          if-no-files-found: ignore
           retention-days: 7
 
       # P2：release APK 只在 assembleRelease 成功后上传（旧写法 always() 会在构建失败时上传陈旧产物）；报告类上传保留 always() 供失败诊断。
+      - name: Upload release mapping
+        if: success()
+        uses: actions/upload-artifact@v6
+        with:
+          name: release-mapping
+          path: app/build/outputs/mapping/release/mapping.txt
+          retention-days: 7
+
       - name: Upload release APK
         if: success()
         uses: actions/upload-artifact@v6

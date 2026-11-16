@@ -13,10 +13,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.composables.icons.lucide.Check
 import com.composables.icons.lucide.Lucide
+import com.dhhxfggg.pjm.R
 import com.dhhxfggg.pjm.data.model.FileEntity
 import com.dhhxfggg.pjm.domain.util.FileUtils
 import com.dhhxfggg.pjm.ui.theme.rememberIconPack
@@ -92,7 +99,18 @@ fun SelectableFileCard(
             ),
     ) {
         if (imageOnly) {
-            Box(modifier = Modifier.fillMaxSize()) {
+            // 缩略图和兜底图标都把 contentDescription 设成 null，读屏逐格只会念「按钮」。
+            // 给根 Box 一个明确名字，选中态交给 selected，不用勾选图标重复播报。
+            Box(
+                modifier =
+                    Modifier
+                        .fillMaxSize()
+                        .semantics {
+                            contentDescription = FileUtils.normalizedDisplayName(fileEntity)
+                            role = Role.Button
+                            selected = isSelected
+                        },
+            ) {
                 Surface(
                     color = MaterialTheme.colorScheme.secondaryContainer,
                     modifier = Modifier.fillMaxSize(),
@@ -126,7 +144,7 @@ fun SelectableFileCard(
                     ) {
                         Icon(
                             imageVector = Lucide.Check,
-                            contentDescription = "Selected",
+                            contentDescription = stringResource(R.string.cd_selected),
                             tint = MaterialTheme.colorScheme.onPrimary,
                             modifier = Modifier.size(16.dp),
                         )
@@ -206,7 +224,7 @@ fun SelectableFileCard(
                     ) {
                         Icon(
                             imageVector = Lucide.Check,
-                            contentDescription = "Selected",
+                            contentDescription = stringResource(R.string.cd_selected),
                             tint = MaterialTheme.colorScheme.onPrimary,
                             modifier = Modifier.size(16.dp),
                         )

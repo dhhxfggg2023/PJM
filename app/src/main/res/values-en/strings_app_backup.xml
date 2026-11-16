@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Strings for "back up installed apps" (AppBackupScreen / ApkExporter).
+  Kept in its own file so parallel work never touches strings.xml; keys mirror values/strings_app_backup.xml.
+-->
+<resources>
+    <string name="app_backup_title">Back up installed apps</string>
+    <string name="app_backup_settings_title">Back up installed apps</string>
+    <string name="app_backup_settings_desc">Extract an app\'s package into the Others category of your vault</string>
+
+    <string name="app_backup_search_hint">Search by app name or package</string>
+    <string name="app_backup_loading">Reading installed apps…</string>
+    <string name="app_backup_empty">No apps available to back up</string>
+    <string name="app_backup_search_empty">No matching apps</string>
+    <string name="app_backup_search_empty_hint">Try a different keyword</string>
+
+    <string name="app_backup_system_tag">System app</string>
+        <string name="app_backup_version">Version %1$s (%2$d)</string>
+    <string name="app_backup_version_unknown">Version unknown</string>
+    <string name="app_backup_cd_select">Select %1$s</string>
+
+    <string name="app_backup_selected_count">%1$d selected</string>
+    <string name="app_backup_action_backup">Back Up Selected (%1$d)</string>
+    <string name="app_backup_nothing_selected">Select at least one app first</string>
+    <string name="app_backup_backing_up">Backing up %1$s</string>
+    <string name="app_backup_progress">%1$d/%2$d · %3$s / %4$s</string>
+
+    <string name="app_backup_result_title">Backup result</string>
+    <string name="app_backup_result_summary">%1$d succeeded / %2$d failed</string>
+    <string name="app_backup_result_apks">Saved to Others — %1$d APK file(s)</string>
+    <string name="app_backup_result_reason">Reason: %1$s</string>
+
+    <string name="app_backup_error_not_installed">App is not installed</string>
+    <string name="app_backup_error_no_apk">Installation package not found</string>
+    <string name="app_backup_error_copy_failed">Could not copy %1$s</string>
+</resources>

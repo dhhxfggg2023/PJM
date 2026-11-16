@@ -34,6 +34,7 @@ import com.dhhxfggg.pjm.R
 import com.dhhxfggg.pjm.data.model.ManagedAppEntity
 import com.dhhxfggg.pjm.domain.service.TakeoverBackgroundPermission
 import com.dhhxfggg.pjm.ui.component.PjmAeroDialog
+import com.dhhxfggg.pjm.ui.component.PjmButtonCaption
 import com.dhhxfggg.pjm.ui.theme.PresetDustyBlue
 import com.dhhxfggg.pjm.ui.viewmodel.InstalledApp
 import com.dhhxfggg.pjm.ui.viewmodel.TakeoverViewModel
@@ -323,12 +324,19 @@ private fun ManagedAppRow(
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        IconButton(onClick = onRemove) {
-            Icon(
-                imageVector = Lucide.X,
-                contentDescription = stringResource(R.string.takeover_remove_app),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(18.dp),
+        // 一个「✕」看不出是移除接管还是关闭弹窗，补一行小字
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            IconButton(onClick = onRemove) {
+                Icon(
+                    imageVector = Lucide.X,
+                    contentDescription = stringResource(R.string.takeover_remove_app),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+            PjmButtonCaption(
+                caption = stringResource(R.string.hint_remove),
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
             )
         }
     }

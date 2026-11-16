@@ -102,7 +102,8 @@ class CryptoViewModel
                                                 android.widget.Toast.LENGTH_SHORT,
                                             ).show()
                                     }
-                                    if (result.uris.isNotEmpty()) {
+                                    // 只有真的入库成功才询问「是否删除原件」，两道护栏见 VaultService 与 IngestionEngine
+                                    if (result.imported > 0 && result.uris.isNotEmpty()) {
                                         _events.send(CryptoEvent.RequestDeletePermission(result.uris))
                                     }
                                 }

@@ -2,11 +2,13 @@ package com.dhhxfggg.pjm.ui.screen
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -20,9 +22,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.FilterChip
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -48,9 +53,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.composables.icons.lucide.ChevronDown
+import com.composables.icons.lucide.ChevronRight
+import com.composables.icons.lucide.Lucide
 import com.dhhxfggg.pjm.R
 import com.dhhxfggg.pjm.domain.util.FileUtils
 import com.dhhxfggg.pjm.domain.util.VaultManager
+import com.dhhxfggg.pjm.ui.viewmodel.SizeBucket
+import com.dhhxfggg.pjm.ui.viewmodel.SizeHistogram
 import com.dhhxfggg.pjm.ui.viewmodel.VaultHeatmapViewModel
 import com.dhhxfggg.pjm.ui.viewmodel.formatEpochDay
 
@@ -65,10 +75,24 @@ import com.dhhxfggg.pjm.ui.viewmodel.formatEpochDay
 fun VaultHeatmapScreen(
     onBack: () -> Unit,
     bottomPadding: Dp = 0.dp,
+    /**
+     * 点某个大小档 → 打开「文件库」的筛选视图（复用 FileViewerScreen，功能完全一致）。
+     *
+     * 三个参数依次是：分类、大小下界（含）、大小上界（不含）。
+     * 最后一档没有上界，传 [Long.MAX_VALUE]，由调用方翻译成路由里「无上限」的表示。
+     * 路由由 Navigation 统一接线，这里只暴露回调；默认空实现 = 点击无反应。
+     */
+    onOpenSizeFilter: (category: String, sizeMin: Long, sizeMax: Long) -> Unit = { _, _, _ -> },
     viewModel: VaultHeatmapViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     var selectedDay by remember { mutableStateOf<Long?>(null) }
+    // 每次回到本页都重算一次：ViewModel 只在 init 里 load 过，做完一次 APK 备份或删掉
+    // 几百个文件再回来，热力图和大小分布还停在旧数字上。
+    androidx.lifecycle.compose.LifecycleResumeEffect(viewModel) {
+        viewModel.load()
+        onPauseOrDispose { }
+    }
 
     Column(
         modifier =
@@ -124,7 +148,10 @@ fun VaultHeatmapScreen(
         Spacer(Modifier.height(18.dp))
         MonthlyStats(counts = state.counts, today = state.today)
         Spacer(Modifier.height(20.dp))
-        SizeDistribution(samples = state.sizeSamples)
+        SizeDistribution(
+            histograms = state.sizeHistograms,
+            onOpenSizeFilter = onOpenSizeFilter,
+        )
     }
 }
 
@@ -359,84 +386,6 @@ private val SIZE_CATEGORIES =
         VaultManager.CAT_PJM to R.string.cat_short_pjm,
     )
 
-/** 一档区间：左闭右开到 [end]、最后一档含右侧端点 */
-private data class SizeBucket(
-    val start: Long,
-    val end: Long,
-    val count: Int,
-    val isLast: Boolean,
-)
-
-/**
- * 按数据本身切档，而不是写死「<0.5 MB / 0.5–1 MB / …」那一套。
- *
- * 固定档位有两个毛病：
- *  1. 没有代表性 —— 图片几乎全在 1 MB 以下，用固定的十档，前两档就吃掉 95%，
- *     后八档永远接近 0，看不出"到底集中在哪里"；
- *  2. 浪费显示空间 —— 中间夹着若干计数为 0 的档，白白占掉好几行。
- *
- * 这里改成：取真实的最小/最大字节数，在两者之间按**几何级数**（对数刻度）等分，
- * 再把计数为 0 的档并进邻居里 —— 每行都有数据，且档宽随数量级自适应。
- */
-private fun buildHistogram(
-    sizes: List<Long>,
-    targetBuckets: Int = 6,
-): List<SizeBucket> {
-    if (sizes.isEmpty()) return emptyList()
-    val sorted = sizes.sorted()
-    val min = sorted.first().coerceAtLeast(1L)
-    val max = sorted.last().coerceAtLeast(min)
-    if (min == max) return listOf(SizeBucket(min, max, sorted.size, isLast = true))
-
-    // 不同取值太少时不必强行切满，避免出现「同一档里只有一个值」的空档感
-    val distinct = sorted.distinct().size
-    val bucketCount = targetBuckets.coerceAtMost(distinct).coerceAtLeast(2)
-
-    val logMin = kotlin.math.ln(min.toDouble())
-    val logMax = kotlin.math.ln(max.toDouble())
-    val step = (logMax - logMin) / bucketCount
-    val edges = LongArray(bucketCount + 1)
-    for (i in 0..bucketCount) {
-        edges[i] =
-            if (i == bucketCount) {
-                max
-            } else {
-                kotlin.math
-                    .exp(logMin + step * i)
-                    .toLong()
-                    .coerceAtLeast(min)
-            }
-    }
-    edges[0] = min
-    // 几何分档可能因为取整产生相邻相同的边界：去掉重复，避免出现 0.9–0.9 这种档
-    val unique = edges.distinct().sorted().toLongArray()
-    if (unique.size < 2) return listOf(SizeBucket(min, max, sorted.size, isLast = true))
-    val counts = IntArray(unique.size - 1)
-    sorted.forEach { size ->
-        var index = unique.binarySearch(size)
-        if (index < 0) index = -index - 1
-        index = (index - 1).coerceIn(0, counts.lastIndex)
-        counts[index]++
-    }
-    // 合并空档：把 0 计数的档并进前一个有数据的档，保证每一行都代表真实数据
-    val merged = mutableListOf<SizeBucket>()
-    for (i in counts.indices) {
-        val start = unique[i]
-        val end = unique[i + 1]
-        if (counts[i] == 0) {
-            if (merged.isNotEmpty()) {
-                val last = merged.removeAt(merged.lastIndex)
-                merged.add(SizeBucket(last.start, end, last.count, isLast = false))
-            }
-            continue
-        }
-        merged.add(SizeBucket(start, end, counts[i], isLast = false))
-    }
-    if (merged.isEmpty()) return emptyList()
-    val lastIndex = merged.lastIndex
-    return merged.mapIndexed { index, bucket -> bucket.copy(isLast = index == lastIndex) }
-}
-
 /** 档位文案：`1.2 MB – 3.4 MB` / 最后一档 `3.4 MB 以上`（模板走资源，英文界面不会冒出中文） */
 @Composable
 private fun SizeBucket.label(): String {
@@ -445,59 +394,128 @@ private fun SizeBucket.label(): String {
     return stringResource(R.string.heatmap_size_range, head, FileUtils.formatFileSize(end))
 }
 
-/** 各分类里单个文件的大小直方图：看「图片大多落在多大之间」这类问题 */
+/**
+ * 各分类里单个文件的大小直方图：看「图片大多落在多大之间」这类问题。
+ *
+ * 直方图由 ViewModel 用**全量** size 算好后传入（见 buildSizeHistogram），
+ * 这里只负责渲染：界面上「共 N 个文件」取 [SizeHistogram.total]（真实文件数），
+ * 各档数字也来自全量统计，不再受任何抽样影响。
+ *
+ * 分类以前是一排横向滚动的 FilterChip：6 个分类要横向滚才看得全，下面还压着一行
+ * 「共 N 个文件」。现在收进一个下拉框（只显示「分类名 · 文件数」），
+ * 把「共 N 个文件」挪到下拉框右边同一行 —— 高度少一行，分类再多也放得下。
+ */
 @Composable
-private fun SizeDistribution(samples: Map<String, List<Long>>) {
-    if (samples.values.all { it.isEmpty() }) return
-    val available = remember(samples) { SIZE_CATEGORIES.filter { !samples[it.first].isNullOrEmpty() } }
+private fun SizeDistribution(
+    histograms: Map<String, SizeHistogram>,
+    onOpenSizeFilter: (category: String, sizeMin: Long, sizeMax: Long) -> Unit,
+) {
+    val available =
+        remember(histograms) {
+            SIZE_CATEGORIES.filter { (histograms[it.first]?.total ?: 0) > 0 }
+        }
+    if (available.isEmpty()) return
     var selected by remember(available) { mutableStateOf(available.firstOrNull()?.first) }
-    val sizes = selected?.let { samples[it] }.orEmpty()
-
-    val histogram = remember(sizes) { buildHistogram(sizes) }
-    val maxCount = (histogram.maxOfOrNull { it.count } ?: 0).coerceAtLeast(1)
-    val total = sizes.size
+    var menuExpanded by remember { mutableStateOf(false) }
+    val histogram = selected?.let { histograms[it] } ?: SizeHistogram.EMPTY
+    val maxCount = histogram.maxCount.coerceAtLeast(1)
+    val total = histogram.total
+    val selectedLabelRes = available.firstOrNull { it.first == selected }?.second
 
     Column(modifier = Modifier.padding(horizontal = 20.dp)) {
         Text(stringResource(R.string.heatmap_size_title), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(6.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            available.forEach { (key, labelRes) ->
-                FilterChip(
-                    selected = key == selected,
-                    onClick = { selected = key },
-                    label = { Text(stringResource(labelRes)) },
-                )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            // 用 OutlinedButton + DropdownMenu 而不是 ExposedDropdownMenuBox：
+            // 后者是实验 API，且 menuAnchor 的签名在 Material3 各版本间反复变，
+            // 这里只需要「按钮弹一个列表」，稳定 API 就够。
+            Box {
+                OutlinedButton(
+                    onClick = { menuExpanded = true },
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                ) {
+                    Text(
+                        text =
+                            stringResource(
+                                R.string.heatmap_size_category_item,
+                                selectedLabelRes?.let { stringResource(it) } ?: "",
+                                total,
+                            ),
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Icon(
+                        Lucide.ChevronDown,
+                        // 按钮上的分类名已经念出来了，这里补的是「点它会干什么」
+                        contentDescription = stringResource(R.string.heatmap_size_category_cd),
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+                DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+                    available.forEach { (key, labelRes) ->
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    stringResource(
+                                        R.string.heatmap_size_category_item,
+                                        stringResource(labelRes),
+                                        histograms[key]?.total ?: 0,
+                                    ),
+                                    style = MaterialTheme.typography.labelLarge,
+                                )
+                            },
+                            onClick = {
+                                selected = key
+                                menuExpanded = false
+                            },
+                        )
+                    }
+                }
             }
+            Spacer(Modifier.width(12.dp))
+            Text(
+                text = stringResource(R.string.heatmap_size_total, total),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
-        Spacer(Modifier.height(4.dp))
-        Text(
-            text = stringResource(R.string.heatmap_size_total, total),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
         Spacer(Modifier.height(8.dp))
-        histogram.forEach { bucket ->
+        histogram.buckets.forEach { bucket ->
             SizeBucketRow(
                 label = bucket.label(),
                 count = bucket.count,
                 maxCount = maxCount,
+                // 最后一档没有上界：抓不到长整数的上界就传 MAX_VALUE，调用方据此走「X 以上」
+                onClick = {
+                    selected?.let { onOpenSizeFilter(it, bucket.start, if (bucket.isLast) Long.MAX_VALUE else bucket.end) }
+                },
             )
         }
     }
 }
 
+/**
+ * 一行大小档：文案 + 占比条 + 计数 + 右侧 chevron。
+ *
+ * 整行可点（带 ripple）：点了就是「看这一档到底有哪些文件」，
+ * 所以右边给一个 chevron —— 否则一行柱状图看起来只是统计图示，没人会想到能点。
+ */
 @Composable
 private fun SizeBucketRow(
     label: String,
     count: Int,
     maxCount: Int,
+    onClick: () -> Unit,
 ) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                // 先 clip 再 clickable：否则 ripple 会溢出圆角，画到相邻两行上
+                .clip(RoundedCornerShape(8.dp))
+                .clickable(onClick = onClick)
+                .padding(vertical = 3.dp, horizontal = 2.dp),
     ) {
         Text(
             text = label,
@@ -526,6 +544,12 @@ private fun SizeBucketRow(
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.width(44.dp),
+        )
+        Icon(
+            Lucide.ChevronRight,
+            contentDescription = stringResource(R.string.heatmap_size_open_bucket_cd),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(16.dp),
         )
     }
 }

@@ -39,12 +39,32 @@ interface FileDao {
      * @param category The folder/category name to filter by.
      * @return A [Flow] emitting the list of files whenever the database changes.
      */
-    @Query("SELECT * FROM files WHERE category = :category ORDER BY lastModified DESC")
+    @Query("SELECT * FROM files WHERE category = :category ORDER BY lastModified DESC, id DESC")
     fun getFilesByCategory(category: String): Flow<List<FileEntity>>
 
     /** 一次性读取（迁移/批处理用，不走 Flow） */
-    @Query("SELECT * FROM files WHERE category = :category ORDER BY lastModified DESC")
+    @Query("SELECT * FROM files WHERE category = :category ORDER BY lastModified DESC, id DESC")
     suspend fun getFilesByCategoryOnce(category: String): List<FileEntity>
+
+    /**
+     * 分类 + 单个文件大小区间（左闭右开）的列表流，供热力图「大小分布」点某一档后查看。
+     *
+     * 排序与 [getFilesByCategory] 严格一致：列表页按 lastModified 分日期表头，
+     * 任何排序差异都会让筛选后的列表看起来「顺序乱了」。
+     *
+     * 上界用 [Long.MAX_VALUE] 表示「无上限」（最后一档 X 以上）：Room 的 Long 形参不接受 null，
+     * 用哨兵值比再拆一个「只有下界」的重载更省，而且 size < MAX_VALUE 恒真，语义不变。
+     *
+     * size 上没有索引（不新增索引；已有 index_files_category_id 先把范围收敛到单个分类），
+     * 分类内的行数在万级以下，走 WHERE 过滤完全够用 —— 因此这里不退回内存过滤，
+     * 免得把整分类实体读进内存再筛。
+     */
+    @Query("SELECT * FROM files WHERE category = :category AND size >= :minSize AND size < :maxSize ORDER BY lastModified DESC, id DESC")
+    fun getFilesByCategoryAndSizeRange(
+        category: String,
+        minSize: Long,
+        maxSize: Long,
+    ): Flow<List<FileEntity>>
 
     /** 只改库内显示名；磁盘文件名（relativePath）保持不变 */
     @Query("UPDATE files SET name = :name WHERE relativePath = :relativePath")
@@ -64,7 +84,7 @@ interface FileDao {
      * Retrieves every file stored in the vault database.
      * @return A [Flow] of all [FileEntity] objects.
      */
-    @Query("SELECT * FROM files ORDER BY lastModified DESC")
+    @Query("SELECT * FROM files ORDER BY lastModified DESC, id DESC")
     fun getAllFiles(): Flow<List<FileEntity>>
 
     /**

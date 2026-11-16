@@ -30,6 +30,11 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -150,7 +155,13 @@ private fun NavBarItem(
         modifier =
             modifier
                 .fillMaxHeight()
-                .clickable(interactionSource = interaction, indication = null, onClick = onClick),
+                .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+                // 把整格合成一个语义节点并暴露选中态，否则读屏用户听不出当前在哪个 Tab
+                .semantics(mergeDescendants = true) {
+                    role = Role.Tab
+                    this.selected = selected
+                    contentDescription = label
+                },
         contentAlignment = Alignment.Center,
     ) {
         // 关键：选中与未选中**使用完全相同的布局**（图标在上、文字在下），
@@ -176,7 +187,8 @@ private fun NavBarItem(
         ) {
             Icon(
                 imageVector = icon,
-                contentDescription = label,
+                // 下方已有同文案的 Text，图标再带 contentDescription 会被 TalkBack 念两遍
+                contentDescription = null,
                 tint = if (selected) Color.White else scheme.onSurfaceVariant,
                 modifier = Modifier.size(21.dp),
             )

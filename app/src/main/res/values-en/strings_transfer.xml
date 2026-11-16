@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="transfer_start_port_busy">Could not start the service: port already in use</string>
+    <string name="transfer_token_write_failed">Could not write the transfer token</string>
+    <string name="transfer_dates_all">No dated records yet — all files will be sent</string>
+    <string name="transfer_dates_refreshed">Refreshed: %1$d dates available</string>
+    <string name="transfer_checking_connection">Testing connection…</string>
+    <string name="transfer_connect_fail">Cannot reach the PC: make sure PJM-Link is running, USB is connected, and debugging is allowed on the phone</string>
+    <string name="transfer_check_ok">Connected · %1$s · %2$s free</string>
+    <string name="transfer_writable">writable</string>
+    <string name="transfer_readonly">read-only</string>
+    <string name="transfer_checking_pc">Checking the PC…</string>
+    <string name="transfer_pc_unreachable">PC unreachable: open PJM-Link, connect USB, and allow debugging</string>
+    <string name="transfer_pc_not_writable">PC receive folder is read-only: %1$s</string>
+    <string name="transfer_no_files">No files to send</string>
+    <string name="transfer_preparing">Preparing %1$d files · %2$s</string>
+    <string name="transfer_file_mismatch">File missing or size changed: %1$s</string>
+    <string name="transfer_push_cancelled">Stopped · %1$d/%2$d</string>
+    <string name="transfer_push_failed">Done %1$d/%2$d · %3$d failed</string>
+    <string name="transfer_push_skipped">Sent %1$d · skipped %2$d (already transferred)</string>
+    <string name="transfer_push_done_all">Sent %1$d files · %2$s</string>
+    <string name="transfer_push_done">Sent %1$d/%2$d · %3$s</string>
+    <string name="transfer_no_folder">Pick a folder first</string>
+    <string name="transfer_import_failed">%1$d failed</string>
+    <string name="transfer_import_summary">Added %1$d · %2$d failed</string>
+    <string name="transfer_write_vault_failed">Could not write to the vault</string>
+</resources>

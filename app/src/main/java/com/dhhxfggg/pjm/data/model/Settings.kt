@@ -31,9 +31,6 @@ object Settings {
     /** 网格布局列数 */
     const val KEY_GRID_SPAN_COUNT = "grid_span_count"
 
-    /** 导出分卷大小 (单位: MB) */
-    const val KEY_EXPORT_SPLIT_SIZE = "export_split_size"
-
     /** 存入后是否自动删除源文件 */
     const val KEY_AUTO_DELETE_ORIGINAL = "auto_delete_original"
 
@@ -73,7 +70,6 @@ object Settings {
         val globalUiScale: Float = 1.0f,
         val fileViewMode: String = "grid",
         val gridSpanCount: Int = 2,
-        val exportSplitSize: Int = 1024,
         val autoDeleteOriginal: Boolean = false,
         val isArchiveAutoExtractionEnabled: Boolean = true,
         val isMigrationDone: Boolean = false,

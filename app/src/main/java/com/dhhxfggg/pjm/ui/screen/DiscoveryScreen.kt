@@ -55,6 +55,7 @@ import com.dhhxfggg.pjm.domain.util.DiscoveryPlayerPool
 import com.dhhxfggg.pjm.domain.util.FileUtils
 import com.dhhxfggg.pjm.domain.util.ShareUtils
 import com.dhhxfggg.pjm.domain.util.VaultPaths
+import com.dhhxfggg.pjm.ui.component.PjmButtonCaption
 import com.dhhxfggg.pjm.ui.component.PjmDeleteConfirmDialog
 import com.dhhxfggg.pjm.ui.component.PjmEmptyState
 import com.dhhxfggg.pjm.ui.component.PlayerProgressBar
@@ -150,6 +151,17 @@ fun DiscoveryScreen(
             } else {
                 it.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
                 controller.show(WindowInsetsCompat.Type.systemBars())
+            }
+        }
+    }
+    // 全屏状态被提升到导航层、跨路由存活。若在全屏时从外部分享/快捷方式跳走，
+    // 没有这段清理的话整机会被永久锁在横屏 + 隐藏系统栏，用户只能杀进程。
+    DisposableEffect(Unit) {
+        onDispose {
+            activity?.let { act ->
+                act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                WindowInsetsControllerCompat(act.window, act.window.decorView)
+                    .show(WindowInsetsCompat.Type.systemBars())
             }
         }
     }
@@ -301,11 +313,19 @@ fun DiscoveryScreen(
                         // 往下挪：顶部有进度条/模式切换时会盖住这颗按钮，点不到
                         .padding(top = 56.dp, end = 12.dp),
             ) {
-                IconButton(
-                    onClick = { itemMenuOpen = true },
-                    modifier = Modifier.size(40.dp).background(Color.Black.copy(alpha = 0.35f), CircleShape),
-                ) {
-                    Icon(iconPack.actionMore, contentDescription = stringResource(R.string.action_more), tint = Color.White)
+                // 「⋯」图形本身看不出这是分享/删除的入口，补一行小字说清楚。
+                // 小字只是视觉补充，语义由图标的 contentDescription 负责，避免读屏念两遍。
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    IconButton(
+                        onClick = { itemMenuOpen = true },
+                        modifier = Modifier.size(40.dp).background(Color.Black.copy(alpha = 0.35f), CircleShape),
+                    ) {
+                        Icon(iconPack.actionMore, contentDescription = stringResource(R.string.action_more), tint = Color.White)
+                    }
+                    PjmButtonCaption(
+                        caption = stringResource(R.string.hint_more_actions),
+                        color = Color.White.copy(alpha = 0.7f),
+                    )
                 }
                 DropdownMenu(expanded = itemMenuOpen, onDismissRequest = { itemMenuOpen = false }) {
                     DropdownMenuItem(
@@ -542,15 +562,24 @@ private fun DiscoveryAudioControls(player: ExoPlayer?) {
             Text(formatPlaybackTime(progress.shownPositionMs), color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
             Text(formatPlaybackTime(progress.durationMs), color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
         }
-        IconButton(
-            onClick = { if (progress.isPlaying) player?.pause() else player?.play() },
-            modifier = Modifier.align(Alignment.CenterHorizontally).size(64.dp),
+        Column(
+            modifier = Modifier.align(Alignment.CenterHorizontally),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Icon(
-                imageVector = if (progress.isPlaying) Lucide.Pause else Lucide.Play,
-                contentDescription = stringResource(if (progress.isPlaying) R.string.action_pause else R.string.action_play),
-                tint = Color.White,
-                modifier = Modifier.size(44.dp),
+            IconButton(
+                onClick = { if (progress.isPlaying) player?.pause() else player?.play() },
+                modifier = Modifier.size(64.dp),
+            ) {
+                Icon(
+                    imageVector = if (progress.isPlaying) Lucide.Pause else Lucide.Play,
+                    contentDescription = stringResource(if (progress.isPlaying) R.string.action_pause else R.string.action_play),
+                    tint = Color.White,
+                    modifier = Modifier.size(44.dp),
+                )
+            }
+            PjmButtonCaption(
+                caption = stringResource(if (progress.isPlaying) R.string.hint_pause else R.string.hint_play),
+                color = Color.White.copy(alpha = 0.7f),
             )
         }
     }
@@ -805,15 +834,21 @@ fun DiscoveryVideoRenderer(
         }
 
         if (showControls && !progress.isPlaying) {
-            IconButton(
-                onClick = { exoPlayer?.play() },
+            Column(
                 modifier = Modifier.align(Alignment.Center),
+                horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Icon(
-                    Lucide.Play,
-                    stringResource(R.string.action_play),
-                    modifier = Modifier.size(80.dp),
-                    tint = Color.White.copy(alpha = 0.8f),
+                IconButton(onClick = { exoPlayer?.play() }) {
+                    Icon(
+                        Lucide.Play,
+                        stringResource(R.string.action_play),
+                        modifier = Modifier.size(80.dp),
+                        tint = Color.White.copy(alpha = 0.8f),
+                    )
+                }
+                PjmButtonCaption(
+                    caption = stringResource(R.string.hint_play),
+                    color = Color.White.copy(alpha = 0.7f),
                 )
             }
         }

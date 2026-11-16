@@ -120,17 +120,18 @@ class ThumbnailSyncManager
                 lastFingerprintSweepAt = now
                 try {
                     val images = fileDao.getFilesByCategoryOnce(VaultManager.CAT_IMAGES)
-                    if (images.isNotEmpty()) {
-                        val validNames = HashSet<String>(images.size * 2)
-                        images.forEach { validNames.addAll(ImageFingerprintCache.fingerprintFileNames(it)) }
-                        ImageFingerprintCache.fingerprintDir(context).listFiles()?.forEach { f ->
-                            // 同上：原子写的临时文件不属于任何白名单，不能被当成孤儿删掉
-                            if (f.name.endsWith(".tmp")) return@forEach
-                            if (f.name !in validNames) {
-                                try {
-                                    f.delete()
-                                } catch (_: Exception) {
-                                }
+                    // 核心修复：旧实现包在 if (images.isNotEmpty()) 里 —— 图片分类被清空（或整体
+                    // 改了分类）之后，指纹目录永远不会被扫到，那些 .g32/.g64 文件就成了永久泄漏
+                    // （4 万张图约 200MB）。空集合时白名单为空，正好应该把目录清干净。
+                    val validNames = HashSet<String>(images.size * 2)
+                    images.forEach { validNames.addAll(ImageFingerprintCache.fingerprintFileNames(it)) }
+                    ImageFingerprintCache.fingerprintDir(context).listFiles()?.forEach { f ->
+                        // 原子写的临时文件不属于任何白名单，不能被当成孤儿删掉
+                        if (f.name.endsWith(".tmp")) return@forEach
+                        if (f.name !in validNames) {
+                            try {
+                                f.delete()
+                            } catch (_: Exception) {
                             }
                         }
                     }

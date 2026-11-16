@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  图标按钮的功能小字（中文）。
+  单独的按键小字文件：与 strings.xml 分开放，避免多人同时改同一个资源文件产生冲突。
+  键名必须与 values-en/strings_button_hints.xml 一一对应。
+  文案要求：直接说功能（「分享」「删除」「全屏」），不要写「更多」这种看不出做什么的废话。
+-->
+<resources>
+    <string name="hint_more_actions">更多操作</string>
+    <string name="hint_share">分享</string>
+    <string name="hint_delete">删除</string>
+    <string name="hint_fullscreen">全屏</string>
+    <string name="hint_exit_fullscreen">退出全屏</string>
+    <string name="hint_play">播放</string>
+    <string name="hint_pause">暂停</string>
+    <string name="hint_seek_back">快退</string>
+    <string name="hint_seek_forward">快进</string>
+    <string name="hint_previous">上一首</string>
+    <string name="hint_next">下一首</string>
+    <string name="hint_queue">队列</string>
+    <string name="hint_back">返回</string>
+    <string name="hint_toc">目录</string>
+    <string name="hint_bookmark">书签</string>
+    <string name="hint_bookmarked">已书签</string>
+    <string name="hint_settings">设置</string>
+    <string name="hint_remove">移除</string>
+    <string name="cd_selected">已选中</string>
+</resources>

@@ -6,18 +6,18 @@
 -keep class androidx.compose.runtime.snapshots.** { *; }
 -keep class androidx.compose.runtime.Recomposer { *; }
 
-# [Coroutines]
--keep class kotlinx.coroutines.** { *; }
+# [Coroutines] 仅保类名:官方 consumer rules 已处理反射,未用协程类交给 R8 裁剪
+-keepnames class kotlinx.coroutines.**
 
-# [DataStore] 关键：防止 DataStore 内部类被混淆导致启动挂起
--keep class androidx.datastore.** { *; }
--keep class androidx.datastore.preferences.** { *; }
--keepnames class androidx.datastore.preferences.protobuf.** { *; }
+# [DataStore] 仅保类名:consumer rules 已覆盖反射入口,允许裁剪未用类以减小包体
+-keepnames class androidx.datastore.**
+-keepnames class androidx.datastore.preferences.**
+-keepnames class androidx.datastore.preferences.protobuf.**
 
-# [Crypto & Compression]
--keep class org.apache.commons.compress.** { *; }
--keep class org.tukaani.xz.** { *; }
--keep class com.github.junrar.** { *; }
+# [Crypto & Compression] 仅保类名:压缩库按接口调用,consumer rules 已处理反射
+-keepnames class org.apache.commons.compress.**
+-keepnames class org.tukaani.xz.**
+-keepnames class com.github.junrar.**
 
 # [SLF4J]
 -keep class org.slf4j.** { *; }
@@ -36,12 +36,12 @@
 # 与 isMinifyEnabled=true 直接矛盾：应用自身最大的一块既不混淆也不裁剪，
 # 固定 XOR 密钥的 CryptoUtils 类名/成员名还被完整保留，主动降低了逆向成本。
 # 只有 JNI 入口（native 方法名 + 调用它的类）必须保留；其余交给 R8 正常处理。
-# JNI 通过固定符号 Java_<包名>_<类名>_<方法名> 查找函数：类名与方法名都不能混淆。
-# 只钉住这一个入口，CryptoUtils 其余成员与整个 domain.util 包都交回 R8 处理。
--keepnames class com.dhhxfggg.pjm.domain.util.CryptoUtils
--keepclassmembers class com.dhhxfggg.pjm.domain.util.CryptoUtils {
+# JNI 通过固定符号 Java_<包名>_<类名>_<方法名> 查找函数：类名、方法名以及参数类型都必须钉住。
+# -keepnames 只保类名/方法名，不保参数描述符——签名一旦被 R8 改写，符号就对不上导致 UnsatisfiedLinkError。
+# includedescriptorclasses 把 native 方法签名里出现的类型也一起保留，确保 JNI 符号稳定；
+# CryptoUtils 其余成员与整个 domain.util 包仍交回 R8 正常混淆/裁剪。
+-keepclasseswithmembernames,includedescriptorclasses class com.dhhxfggg.pjm.domain.util.CryptoUtils {
     native <methods>;
-    void transformBytesNative(byte[], int, int, byte[], long, int);
 }
 
 # [PJM Shizuku/特权服务] 关键：FileServerMain 由 app_process 反射启动，

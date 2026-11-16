@@ -70,9 +70,13 @@ object FileUtils {
     private val TEXT_EXT =
         setOf(
             "txt",
+            "text",
             "epub",
+            "fb2",
+            "xhtml",
             "md",
             "markdown",
+            "mdown",
             "log",
             "json",
             "xml",
@@ -142,11 +146,11 @@ object FileUtils {
     fun normalizedDisplayName(entity: FileEntity): String {
         if (entity.extension.equals("pjm", ignoreCase = true)) return entity.name
         if (!entity.isImage) {
-            // 非图片入库时磁盘名就是导入时的原名，数据库里的 name 也存的是它
-            val stored = entity.name.trim()
+            // 数据库里的 name 是导入时的原名，先用它；但老库里可能把磁盘名（带 _<16位hex> 尾巴）存了进去
+            val stored = stripDiskSuffix(entity.name.trim())
             if (stored.isNotEmpty() && !isUnreadableName(stored)) return stored
-            // 数据库记的名字读不出来（老库/容器的机器名）时，再看磁盘名
-            val diskName = entity.relativePath.substringAfterLast('/').trim()
+            // 数据库记的名字读不出来（老库/容器的机器名）时，再看磁盘名 —— 同样要剥掉尾巴
+            val diskName = stripDiskSuffix(entity.relativePath.substringAfterLast('/').trim())
             if (diskName.isNotEmpty() && !diskName.equals(stored, ignoreCase = true) && !isUnreadableName(diskName)) {
                 return diskName
             }
@@ -157,6 +161,29 @@ object FileUtils {
         val ext = entity.extension.lowercase().trim('.')
         return if (ext.isEmpty()) ts else "$ts.$ext"
     }
+
+    /**
+     * 剥掉入库时追加在磁盘名里的防重名尾巴 `_<16位小写十六进制>`。
+     *
+     * 磁盘物理名为了并发安全必须唯一，但那个尾巴是给文件系统看的、不是给人看的：
+     * 库里显示、分享、导出都应该呈现原始文件名。**只改显示，不动磁盘、不改数据库**。
+     *
+     * 严格匹配我们自己生成的形态（下划线 + 恰好 16 位小写十六进制，且位于扩展名之前），
+     * 避免把「报告_20260101ABCDEF01」这类用户自己的文件名误伤。
+     */
+    internal fun stripDiskSuffix(raw: String): String {
+        if (raw.isEmpty()) return raw
+        val dot = raw.lastIndexOf('.')
+        val base = if (dot > 0) raw.substring(0, dot) else raw
+        val ext = if (dot > 0) raw.substring(dot) else ""
+        val m = DISK_SUFFIX_PATTERN.find(base) ?: return raw
+        val stripped = m.groupValues[1].trim()
+        // 剥完只剩空（名字本身就叫 "a1b2c3d4e5f6a7b8.mp4"）时保留原名，交给 isUnreadableName 走时间兜底
+        return if (stripped.isEmpty()) raw else stripped + ext
+    }
+
+    /** 与 VaultPaths.getNextVaultPath 写入的形态严格一致：下划线 + 16 位小写十六进制 */
+    private val DISK_SUFFIX_PATTERN = Regex("^(.*)_[0-9a-f]{16}$")
 
     /**
      * 名字是不是「读不出内容」的机器名：UUID、纯十六进制哈希、纯数字时间戳。

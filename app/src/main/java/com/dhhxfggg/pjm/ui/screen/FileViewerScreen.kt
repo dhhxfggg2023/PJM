@@ -83,6 +83,10 @@ import java.io.File
  * 按文件名搜索没有意义；需要按名字查找请使用 `PjmFileBrowser`（浏览外部目录时文件名才可读）。
  *
  * @param category The category key (e.g., "images", "videos").
+ * @param sizeMin 大小筛选的下界（含），null = 不按大小过滤（普通文件库）。
+ *                从热力图「单个文件大小分布」点某一档进来时才有值。
+ * @param sizeMax 大小筛选的上界（不含），null 或 [Long.MAX_VALUE] = 无上限（最后一档「X 以上」）。
+ * @param onClearSizeFilter 标题栏「清除筛选」的回调；为 null 时不显示该按钮。
  * @param bottomPadding Padding to be applied at the bottom of the screen.
  * @param settingsViewModel ViewModel for UI settings.
  * @param fileViewModel ViewModel for file operations.
@@ -94,6 +98,9 @@ import java.io.File
 @Composable
 fun FileViewerScreen(
     category: String,
+    sizeMin: Long? = null,
+    sizeMax: Long? = null,
+    onClearSizeFilter: (() -> Unit)? = null,
     bottomPadding: Dp = 0.dp,
     settingsViewModel: SettingsViewModel = hiltViewModel(),
     fileViewModel: FileViewerViewModel = hiltViewModel(),
@@ -121,7 +128,11 @@ fun FileViewerScreen(
     val settings = settingsState.settings
 
     val uiState by fileViewModel.uiState.collectAsStateWithLifecycle()
-    val flattenedItemsFlow by remember(category) { fileViewModel.getFlattenedFiles(category) }.collectAsStateWithLifecycle()
+    // 区间也必须进 remember 的 key：否则在同一页面里换区间不会重新取流，读到的是上一个区间的列表
+    val flattenedItemsFlow by
+        remember(category, sizeMin, sizeMax) {
+            fileViewModel.getFlattenedFiles(category, sizeMin, sizeMax)
+        }.collectAsStateWithLifecycle()
     // null = 查询还没回来（显示加载圈）；empty = 真的没有文件（显示空状态）
     val filesStillLoading = flattenedItemsFlow == null
     val flattenedItems = flattenedItemsFlow ?: emptyList()
@@ -213,13 +224,30 @@ fun FileViewerScreen(
             else -> stringResource(R.string.cat_others_display)
         }
 
+    // 大小区间的人类可读文案（"1.2 MB – 3.4 MB" / "3.4 MB 以上"）；无筛选时为 null，
+    // 标题、清除按钮都由它决定，普通文件库的外观与行为一行都不变。
+    val sizeRangeLabel: String? =
+        sizeMin?.let { min ->
+            val head = FileUtils.formatFileSize(min)
+            if (sizeMax == null || sizeMax == Long.MAX_VALUE) {
+                stringResource(R.string.size_filter_range_up, head)
+            } else {
+                stringResource(R.string.size_filter_range, head, FileUtils.formatFileSize(sizeMax))
+            }
+        }
+
     Scaffold(
         topBar = {
             CenterAlignedTopAppBar(
                 title = {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(
-                            if (uiState.isBatchMode) stringResource(R.string.title_batch_mode) else categoryDisplayName,
+                            when {
+                                uiState.isBatchMode -> stringResource(R.string.title_batch_mode)
+                                sizeRangeLabel != null ->
+                                    stringResource(R.string.size_filter_title, categoryDisplayName, sizeRangeLabel)
+                                else -> categoryDisplayName
+                            },
                             style = MaterialTheme.typography.titleMedium,
                         )
                         if (uiState.isBatchMode) {
@@ -274,11 +302,15 @@ fun FileViewerScreen(
                         Spacer(Modifier.width(6.dp))
 
                         // 重命名只对「单选 + 非图片」出现：图片显示名固定是入库时间，改了也没意义
-                        if (selected.size == 1 && !selectedFiles[0].isImage) {
+                        // selected 会随 rememberSaveable 跨进程重建，而 flattenedItems 在数据库
+                        // 重新发流时会短暂为空。旧写法 selected.size==1 仍成立就取 selectedFiles[0]，
+                        // 列表还没回来时直接 IndexOutOfBounds 崩溃。改用 singleOrNull 兜住。
+                        val singleSelected = selectedFiles.singleOrNull()
+                        if (singleSelected != null && !singleSelected.isImage) {
                             PjmIconButton(
                                 icon = Lucide.Pencil,
                                 contentDescription = stringResource(R.string.action_rename),
-                                onClick = { renameTarget = selectedFiles[0] },
+                                onClick = { renameTarget = singleSelected },
                             )
                             Spacer(Modifier.width(6.dp))
                         }
@@ -350,6 +382,16 @@ fun FileViewerScreen(
                             onClick = { showBatchDeleteConfirmDialog = true },
                         )
                     } else {
+                        // 带大小筛选进来时给一个「清除筛选」：清掉后就是普通的整个分类列表，
+                        // 不用退回去再重新进一次文件库。
+                        if (sizeRangeLabel != null && onClearSizeFilter != null) {
+                            PjmIconButton(
+                                icon = Lucide.X,
+                                contentDescription = stringResource(R.string.size_filter_clear),
+                                onClick = onClearSizeFilter,
+                            )
+                            Spacer(Modifier.width(6.dp))
+                        }
                         PjmIconButton(
                             icon = if (settings.fileViewMode == "grid") Lucide.LayoutList else Lucide.LayoutGrid,
                             contentDescription =

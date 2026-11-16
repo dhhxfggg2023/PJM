@@ -327,7 +327,9 @@ fun PjmFolderPickerDialog(
                             }
                         }
 
-                        items(nodes) { entry ->
+                        // node 是 Any（本地 File 与 SAF DocumentFile 两种），没有统一的 uri 可取；
+                        // 同一目录内 name 唯一，拼上当前目录做 key，刷新时才不会整列表重绘。
+                        items(nodes, key = { (currentDocDir?.uri?.toString() ?: currentRawDir.absolutePath) + "/" + it.name }) { entry ->
                             // 核心修复：isDirectory / length() 已在 loadDirEntries 的 IO 阶段算好 ——
                             // DocumentFile 的这两个属性是跨进程 query，绝不能在组合期调用。
                             val name = entry.name

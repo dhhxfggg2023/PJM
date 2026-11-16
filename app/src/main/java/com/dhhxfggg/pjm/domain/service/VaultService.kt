@@ -194,7 +194,9 @@ class VaultService : Service() {
                                         action = ACTION_STORE,
                                         // 只上报以普通文件入库的源 uri（用于“是否删除原件”询问）；
                                         // pjm 容器只解密不落库，已被 IngestionEngine 排除在 deletableUris 之外。
-                                        uris = summary.deletableUris,
+                                        // 再兜一层：一个都没入库成功时绝不上报可删原件 —— 否则库内副本
+                                        // （已在失败回滚时被 shred）和原件会一起消失。
+                                        uris = if (summary.imported > 0) summary.deletableUris else emptyList(),
                                         imported = summary.imported,
                                         skipped = summary.skipped,
                                         failed = summary.failed,

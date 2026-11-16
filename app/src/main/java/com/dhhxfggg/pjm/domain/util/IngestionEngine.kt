@@ -18,6 +18,12 @@ import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.coroutineContext
 
 object IngestionEngine {
+    /**
+     * PJM 容器的文件名形态：`X.pjm` 或分卷 `X.pjm.N`（N 为数字）。
+     * 刻意收窄——只在「.pjm.」后面跟数字时才认，避免误伤 a.pjm.zip 这类普通文件。
+     */
+    private val PJM_NAME_PATTERN = Regex(""".*\.pjm(\.\d+)?$""", RegexOption.IGNORE_CASE)
+
     private const val TAG = "IngestionEngine"
 
     /** 入库任务进度 id */
@@ -96,7 +102,10 @@ object IngestionEngine {
                                 }
                                 if (!processedUris.add(uri)) return@withPermit
                                 val name = FileUtils.getFileName(context, uri)
-                                val nameIsPjm = (name.contains(".pjm.") || name.endsWith(".pjm"))
+                                // 只认「.pjm 结尾」或「.pjm.<数字>」分卷：旧写法 name.contains(".pjm.")
+                                // 会把 a.pjm.zip / x.pjm.mp4 这类普通文件也当成容器，走 strict 分支后
+                                // 解包失败直接抛错 —— 既没解密也没当普通文件入库，用户只看到「处理失败」。
+                                val nameIsPjm = PJM_NAME_PATTERN.matches(name)
                                 // 核心修复：分享器（微信/QQ 等）可能改名/丢失后缀，仅靠文件名判断会漏判，
                                 // 导致加密容器被当成普通文件入库（无扩展名 → 存进 other/others 分类）。
                                 // 对名字不像 pjm 的 URI 再做内容级魔数检测兜底，命中即按 pjm 解密。
@@ -233,6 +242,8 @@ object IngestionEngine {
                 // 结果是磁盘上留下用户看不见、也删不掉的孤儿明文文件，界面却显示成功。
                 cancelled = true
                 shredEntities(context, collectedEntities)
+                // 库内副本会被物理删除，原件绝不能再交给调用方去删
+                deletableOriginals.clear()
                 throw e
             } catch (e: Exception) {
                 PjmLogger.e(TAG, "Storage fail, cleaning up...", e)
@@ -241,6 +252,10 @@ object IngestionEngine {
                 // 一路都没产出实体时至少记 1 次。成功路径不受影响。
                 failedCount.addAndGet(collectedEntities.size.coerceAtLeast(1))
                 shredEntities(context, collectedEntities)
+                // 核心修复：上面已经把「已落盘」的副本全部 shred 掉了，但 deletableOriginals
+                // 是在每个 URI 成功落盘时就登记的。若这里不清空，调用方会把返回的 deletableUris
+                // 当成「库里有副本、原件可删」，于是删掉原件 —— 库内副本也已不存在，数据彻底丢失。
+                deletableOriginals.clear()
             } finally {
                 passwordChars?.let { java.util.Arrays.fill(it, '0') }
                 if (!cancelled) {

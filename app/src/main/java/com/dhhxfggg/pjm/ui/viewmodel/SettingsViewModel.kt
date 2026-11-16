@@ -240,13 +240,6 @@ class SettingsViewModel
                                 value,
                             )
                         }
-                    Settings.KEY_EXPORT_SPLIT_SIZE ->
-                        if (value is Int) {
-                            settingsManager.updateIntSetting(
-                                SettingsManager.KEY_EXPORT_SPLIT_SIZE,
-                                value,
-                            )
-                        }
                     Settings.KEY_ARCHIVE_AUTO_EXTRACTION ->
                         if (value is Boolean) {
                             settingsManager.updateBooleanSetting(

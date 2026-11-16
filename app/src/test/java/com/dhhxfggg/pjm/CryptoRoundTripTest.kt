@@ -6,8 +6,8 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.dhhxfggg.pjm.data.db.AppDatabase
 import com.dhhxfggg.pjm.domain.util.CryptoUtils
-import com.dhhxfggg.pjm.domain.util.SettingsManager
 import com.dhhxfggg.pjm.domain.util.VaultManager
+import com.dhhxfggg.pjm.domain.util.VaultPackager
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
@@ -44,10 +44,8 @@ class CryptoRoundTripTest {
     fun setUp() {
         context = ApplicationProvider.getApplicationContext()
         db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java).build()
-        // 小分卷（1MB），便于触发多卷
-        runBlocking {
-            SettingsManager(context).updateIntSetting(SettingsManager.KEY_EXPORT_SPLIT_SIZE, 1)
-        }
+        // 分卷体积在生产侧已固定为 1GB（不可配置），多卷用例通过
+        // packUrisWithSplitting(volumeSizeMb = 1) 显式指定小体积触发。
     }
 
     @After
@@ -129,13 +127,14 @@ class CryptoRoundTripTest {
 
         val volumes =
             runBlocking {
-                VaultManager.packUrisWithSplitting(
+                VaultPackager.packUrisWithSplitting(
                     context = context,
                     uris = files.map { Uri.fromFile(it) },
                     category = VaultManager.CAT_PJM,
                     baseName = "TestPack",
                     fileDao = db.fileDao(),
                     onProgress = {},
+                    volumeSizeMb = 1,
                 )
             }
         assertTrue("Pack should succeed: $volumes", volumes.isSuccess)

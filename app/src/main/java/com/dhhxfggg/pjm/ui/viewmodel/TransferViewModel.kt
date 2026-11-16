@@ -3,6 +3,7 @@ package com.dhhxfggg.pjm.ui.viewmodel
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.dhhxfggg.pjm.R
 import com.dhhxfggg.pjm.data.db.FileDao
 import com.dhhxfggg.pjm.data.model.FileEntity
 import com.dhhxfggg.pjm.domain.transfer.PcFolder
@@ -136,7 +137,7 @@ class TransferViewModel
                 writeTransferToken(token)
                 val ok = withContext(Dispatchers.IO) { server.start() }
                 if (!ok) {
-                    _state.value = TransferUiState(message = "服务启动失败：端口被占用")
+                    _state.value = TransferUiState(message = context.getString(R.string.transfer_start_port_busy))
                     return@launch
                 }
                 _state.value =
@@ -195,7 +196,7 @@ class TransferViewModel
                     target.writeText(token)
                     tmp.delete()
                 }
-            }.onFailure { PjmLogger.w("Transfer", "写入传输令牌失败", it) }
+            }.onFailure { PjmLogger.w("Transfer", context.getString(R.string.transfer_token_write_failed), it) }
         }
 
         private fun deleteTransferToken() {
@@ -221,7 +222,7 @@ class TransferViewModel
                         dates = list,
                         dateCounts = recent.associate { it.day to it.count },
                         selectedDates = _state.value.selectedDates.intersect(list.toSet()),
-                        message = if (list.isEmpty()) "库里还没有入库记录，暂时只能传全部文件" else "已刷新：" + list.size + " 个日期可选",
+                        message = if (list.isEmpty()) context.getString(R.string.transfer_dates_all) else context.getString(R.string.transfer_dates_refreshed, list.size),
                     )
                 toast(_state.value.message ?: "")
             }
@@ -245,14 +246,14 @@ class TransferViewModel
             // 连点时只认第一次，避免重复发起探测
             if (_state.value.checking) return
             viewModelScope.launch {
-                _state.value = _state.value.copy(checking = true, message = "正在测试连接…")
+                _state.value = _state.value.copy(checking = true, message = context.getString(R.string.transfer_checking_connection))
                 val snapshot = withContext(Dispatchers.IO) { client.state() }
                 if (snapshot == null) {
                     _state.value =
                         _state.value.copy(
                             checking = false,
                             pcOnline = false,
-                            message = "连不上电脑端：确认 PJM-Link 已打开、USB 已插好，并在手机上允许了调试",
+                            message = context.getString(R.string.transfer_connect_fail),
                         )
                     toast(_state.value.message ?: "")
                 } else {
@@ -265,7 +266,7 @@ class TransferViewModel
                             pcFree = snapshot.free,
                             pcTotal = snapshot.total,
                             folders = snapshot.folders,
-                            message = "连接正常 · " + (if (snapshot.writable) "可写" else "不可写") + " · 剩余 " + FileUtils.formatFileSize(snapshot.free),
+                            message = context.getString(R.string.transfer_check_ok, context.getString(if (snapshot.writable) R.string.transfer_writable else R.string.transfer_readonly), FileUtils.formatFileSize(snapshot.free)),
                         )
                 }
                 toast(_state.value.message ?: "")
@@ -291,16 +292,16 @@ class TransferViewModel
             val snapshot = _state.value
             if (snapshot.checking || snapshot.push?.active == true) return
             viewModelScope.launch {
-                _state.value = _state.value.copy(checking = true, message = "正在检查电脑端…")
+                _state.value = _state.value.copy(checking = true, message = context.getString(R.string.transfer_checking_pc))
                 val probe = withContext(Dispatchers.IO) { client.state() }
                 if (probe == null) {
                     _state.value =
-                        _state.value.copy(checking = false, pcOnline = false, push = null, message = "电脑端连不上：先打开 PJM-Link，插好 USB 并允许调试")
+                        _state.value.copy(checking = false, pcOnline = false, push = null, message = context.getString(R.string.transfer_pc_unreachable))
                     return@launch
                 }
                 if (!probe.writable) {
                     _state.value =
-                        _state.value.copy(checking = false, pcOnline = true, push = null, message = "电脑接收目录不可写：" + probe.root)
+                        _state.value.copy(checking = false, pcOnline = true, push = null, message = context.getString(R.string.transfer_pc_not_writable, probe.root))
                     return@launch
                 }
                 val fmt = PcLinkClient.DATE_FORMAT
@@ -327,7 +328,7 @@ class TransferViewModel
                         }
                     }
                 if (chosen.isEmpty()) {
-                    _state.value = _state.value.copy(checking = false, pcOnline = true, push = null, message = "没有要发送的文件")
+                    _state.value = _state.value.copy(checking = false, pcOnline = true, push = null, message = context.getString(R.string.transfer_no_files))
                     return@launch
                 }
                 val planBytes = chosen.sumOf { it.size }
@@ -346,7 +347,7 @@ class TransferViewModel
                     _state.value.copy(
                         checking = false,
                         pcOnline = true,
-                        message = "准备发送 " + total + " 个 · " + FileUtils.formatFileSize(planBytes),
+                        message = context.getString(R.string.transfer_preparing, total, FileUtils.formatFileSize(planBytes)),
                         push = PcTask(active = true, done = 0, total = total, bytes = 0, speed = 0, skipped = 0, failed = 0, error = null),
                     )
                 for (entity in chosen) {
@@ -370,7 +371,7 @@ class TransferViewModel
                         done++
                         _state.value =
                             _state.value.copy(
-                                push = PcTask(true, done, total, bytes, 0, skipped, failed, "文件缺失或大小不一致：" + name),
+                                push = PcTask(true, done, total, bytes, 0, skipped, failed, context.getString(R.string.transfer_file_mismatch, name)),
                             )
                         continue
                     }
@@ -432,11 +433,11 @@ class TransferViewModel
                         push = PcTask(false, done, total, bytes, 0, skipped, failed, null),
                         message =
                             when {
-                                cancelled -> "已停止 · " + done + "/" + total
-                                failed > 0 -> "完成 " + done + "/" + total + " · 失败 " + failed
-                                skipped > 0 -> "已发送 " + (done - skipped) + " 个 · 跳过 " + skipped + " 个（之前传过）"
-                                !closed && done == total -> "已发送 " + total + " 个 · " + FileUtils.formatFileSize(bytes)
-                                else -> "已发送 " + done + "/" + total + " · " + FileUtils.formatFileSize(bytes)
+                                cancelled -> context.getString(R.string.transfer_push_cancelled, done, total)
+                                failed > 0 -> context.getString(R.string.transfer_push_failed, done, total, failed)
+                                skipped > 0 -> context.getString(R.string.transfer_push_skipped, done - skipped, skipped)
+                                !closed && done == total -> context.getString(R.string.transfer_push_done_all, total, FileUtils.formatFileSize(bytes))
+                                else -> context.getString(R.string.transfer_push_done, done, total, FileUtils.formatFileSize(bytes))
                             },
                     )
             }
@@ -465,7 +466,7 @@ class TransferViewModel
             if (cs.importing) return
             val chosen = cs.folders.filter { it.key in cs.selected }
             if (chosen.isEmpty()) {
-                _state.value = cs.copy(message = "先选一个文件夹")
+                _state.value = cs.copy(message = context.getString(R.string.transfer_no_folder))
                 return
             }
             viewModelScope.launch {
@@ -515,7 +516,7 @@ class TransferViewModel
                 }
                 VaultManager.triggerRefresh()
                 _state.value =
-                    _state.value.copy(importing = false, importTotal = done, importError = if (failed > 0) "失败 " + failed + " 个" else null, message = "新增 " + (done - failed) + " · 失败 " + failed)
+                    _state.value.copy(importing = false, importTotal = done, importError = if (failed > 0) context.getString(R.string.transfer_import_failed, failed) else null, message = context.getString(R.string.transfer_import_summary, done - failed, failed))
             }
         }
 
@@ -548,7 +549,7 @@ class TransferViewModel
             }
             if (!part.renameTo(final)) {
                 part.delete()
-                error("写入保险库失败")
+                error(context.getString(R.string.transfer_write_vault_failed))
             }
             val now = System.currentTimeMillis()
             fileDao.upsertLocked(

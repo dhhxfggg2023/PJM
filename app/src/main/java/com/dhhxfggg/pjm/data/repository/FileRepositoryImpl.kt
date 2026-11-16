@@ -13,6 +13,8 @@ import com.dhhxfggg.pjm.domain.util.VaultNaming
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.buffer
+import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
@@ -45,10 +47,14 @@ class FileRepositoryImpl
         // 上次随机选中的每个分类文件 id（用于封面刷新时避免连续两次相同）
         private val lastRandomFileId = ConcurrentHashMap<String, Long>()
 
+        // 列表流用 conflate 而不是 buffer：一次批量删除会触发 N 次 InvalidationTracker 通知，
+        // 每份通知都要完整物化一遍列表。buffer 只是移除背压，中间态一个都不会丢（最多积压
+        // N 份全量列表）；conflate 只保留最新一份，UI 少走 N-1 次 diff/重组。
         override val allFiles: Flow<List<FileEntity>> =
             fileDao
                 .getAllFiles()
-                .buffer(64) // Optimization for large file lists
+                .conflate()
+                .distinctUntilChanged()
 
         override val categoryCounts: Flow<Map<String, Int>> =
             fileDao
@@ -67,7 +73,14 @@ class FileRepositoryImpl
                 .map { it ?: 0L }
                 .buffer(8)
 
-        override fun getFilesByCategory(category: String): Flow<List<FileEntity>> = fileDao.getFilesByCategory(category).buffer(32)
+        // 同上：分类列表是最大的那种快照，批量变更时只保留最新一份
+        override fun getFilesByCategory(category: String): Flow<List<FileEntity>> = fileDao.getFilesByCategory(category).conflate().distinctUntilChanged()
+
+        override fun getFilesByCategoryAndSizeRange(
+            category: String,
+            minSize: Long,
+            maxSize: Long,
+        ): Flow<List<FileEntity>> = fileDao.getFilesByCategoryAndSizeRange(category, minSize, maxSize).conflate().distinctUntilChanged()
 
         override suspend fun deleteFile(entity: FileEntity) {
             VaultManager.deleteFile(context, entity.relativePath, fileDao)

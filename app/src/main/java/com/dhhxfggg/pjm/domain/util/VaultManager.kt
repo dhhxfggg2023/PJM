@@ -426,7 +426,10 @@ object VaultManager {
                 // 缓存删不掉不影响文件已经删掉这件事，但必须留痕，否则只能看到空间对不上
                 PjmLogger.w(TAG, "清理缩略图/指纹失败: $relativePath", e)
             }
-            fileDao.deleteByRelativePath(relativePath)
+            // 核心修复：DB 变更必须与写入路径共用同一把锁。旧实现只拿 mutex，而导入/打包/
+            // 查重回写走 dbWriteMutex —— 两者互不排斥，查重那批「删除前算出来的 upsert」
+            // 会把刚删掉的行重新插回去，产生「有行、无文件」的幽灵条目。
+            withDbWriteLock { fileDao.deleteByRelativePath(relativePath) }
             triggerRefresh()
         }
     }
@@ -458,7 +461,7 @@ object VaultManager {
                 }
             }
             val deletedPaths = relativePaths - failedPaths.toSet()
-            if (deletedPaths.isNotEmpty()) fileDao.deleteByRelativePaths(deletedPaths)
+            if (deletedPaths.isNotEmpty()) withDbWriteLock { fileDao.deleteByRelativePaths(deletedPaths) }
             if (failedPaths.isNotEmpty()) notifyDeleteFailure(context, failedPaths.size)
             triggerRefresh()
         }

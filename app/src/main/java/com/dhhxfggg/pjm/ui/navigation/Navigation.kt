@@ -8,6 +8,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
@@ -19,6 +20,7 @@ import androidx.navigation.navArgument
 import com.dhhxfggg.pjm.domain.util.FrameMonitor
 import com.dhhxfggg.pjm.domain.util.VaultManager
 import com.dhhxfggg.pjm.ui.component.BottomNavBar
+import com.dhhxfggg.pjm.ui.screen.AppBackupScreen
 import com.dhhxfggg.pjm.ui.screen.DiscoveryScreen
 import com.dhhxfggg.pjm.ui.screen.FileViewerScreen
 import com.dhhxfggg.pjm.ui.screen.MainScreen
@@ -36,8 +38,18 @@ sealed class Screen(
 
     object Settings : Screen("settings")
 
-    object FileViewer : Screen("file_viewer/{category}") {
+    object FileViewer : Screen("file_viewer/{category}?sizeMin={sizeMin}&sizeMax={sizeMax}") {
         fun createRoute(category: String) = "file_viewer/${android.net.Uri.encode(category)}"
+
+        /**
+         * 带大小区间筛选的文件库路由（热力图里点某一档进入）。
+         * 末档没有上限：不传 sizeMax，屏幕侧拿不到就是 null。
+         */
+        fun createSizeFilterRoute(
+            category: String,
+            sizeMin: Long,
+            sizeMax: Long,
+        ): String = SizeFilterRoute.build(android.net.Uri.encode(category), sizeMin, sizeMax)
     }
 
     object MediaDetail : Screen("media_detail/{relativePath}") {
@@ -46,6 +58,9 @@ sealed class Screen(
 
     /** 入库热力图（首页保险库占用卡片长按进入） */
     object VaultHeatmap : Screen("vault_heatmap")
+
+    /** 备份已安装应用：把 APK 提取进保险库「其他」分类 */
+    object AppBackup : Screen("app_backup")
 }
 
 @Composable
@@ -114,9 +129,13 @@ fun AppNavHost(
                 )
             }
             composable(Screen.VaultHeatmap.route) {
+                // 点大小分布里的某一档 → 打开「文件库」并只显示该区间（视图与功能完全复用）
                 VaultHeatmapScreen(
                     onBack = { navController.popBackStack() },
                     bottomPadding = innerPadding.calculateBottomPadding(),
+                    onOpenSizeFilter = { category, minSize, maxSize ->
+                        navController.navigate(Screen.FileViewer.createSizeFilterRoute(category, minSize, maxSize))
+                    },
                 )
             }
             composable(Screen.Discovery.route) {
@@ -131,15 +150,48 @@ fun AppNavHost(
                 SettingsScreen(
                     onBack = { navController.popBackStack() },
                     bottomPadding = innerPadding.calculateBottomPadding(),
+                    onOpenAppBackup = { navController.navigate(Screen.AppBackup.route) },
+                )
+            }
+            composable(Screen.AppBackup.route) {
+                AppBackupScreen(
+                    onBack = { navController.popBackStack() },
+                    // 独立全屏路由：底栏在非主路由/发现/设置时是隐藏的，这里传 0 避免底部多出一块空白
+                    bottomPadding = 0.dp,
                 )
             }
             composable(
                 route = Screen.FileViewer.route,
-                arguments = listOf(navArgument("category") { type = NavType.StringType }),
+                arguments =
+                    listOf(
+                        navArgument("category") { type = NavType.StringType },
+                        // 大小区间是可选的：普通进入时不带参数，值为 null
+                        navArgument("sizeMin") {
+                            type = NavType.StringType
+                            nullable = true
+                            defaultValue = null
+                        },
+                        navArgument("sizeMax") {
+                            type = NavType.StringType
+                            nullable = true
+                            defaultValue = null
+                        },
+                    ),
             ) { backStackEntry ->
                 val category = backStackEntry.arguments?.getString("category") ?: VaultManager.CAT_OTHERS
+                val sizeMin = backStackEntry.arguments?.getString("sizeMin")?.toLongOrNull()
+                val sizeMax = backStackEntry.arguments?.getString("sizeMax")?.toLongOrNull()
                 FileViewerScreen(
                     category = category,
+                    sizeMin = sizeMin,
+                    sizeMax = sizeMax,
+                    // 只有带筛选进来时才显示「清除筛选」，点它回上一个页面
+                    onClearSizeFilter =
+                        if (sizeMin != null || sizeMax != null) {
+                            { navController.popBackStack() }
+                        } else {
+                            null
+                        },
                     onBack = { navController.popBackStack() },
                     bottomPadding = innerPadding.calculateBottomPadding(),
                     onNavigateToMediaDetail = { path -> navController.navigate(Screen.MediaDetail.createRoute(path)) },

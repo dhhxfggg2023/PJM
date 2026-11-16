@@ -6,10 +6,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -35,6 +32,7 @@ import com.composables.icons.lucide.Maximize
 import com.composables.icons.lucide.Minimize
 import com.composables.icons.lucide.Rewind
 import com.dhhxfggg.pjm.R
+import com.dhhxfggg.pjm.ui.component.PjmIconWithCaption
 import kotlinx.coroutines.delay
 import java.util.Locale
 import kotlin.time.Duration.Companion.milliseconds
@@ -237,45 +235,43 @@ fun VideoControlBar(
             // 快退 / 快进：从前只在双击左/右三分区里藏着，撤掉后用户找不到入口，
             // 变成了「快进没了」。这里做成常驻按钮，双击手势保留（两者都能用）。
             if (seekStepMs > 0L) {
-                IconButton(
+                // 快退/快进只有箭头图标，靠小字说清楚方向和步长是「一次 10 秒」
+                PjmIconWithCaption(
+                    icon = Lucide.Rewind,
+                    contentDescription = stringResource(R.string.cd_seek_back),
+                    caption = stringResource(R.string.hint_seek_back),
                     onClick = { seekBy(player, progress, -seekStepMs) },
-                    modifier = Modifier.size(34.dp),
-                ) {
-                    Icon(
-                        imageVector = Lucide.Rewind,
-                        contentDescription = stringResource(R.string.cd_seek_back),
-                        tint = Color.White,
-                        modifier = Modifier.size(20.dp),
-                    )
-                }
+                    iconSize = 20.dp,
+                    buttonSize = 34.dp,
+                )
                 Text(formatPlaybackTime(progress.durationMs), color = Color.White, fontSize = 12.sp)
-                IconButton(
+                PjmIconWithCaption(
+                    icon = Lucide.FastForward,
+                    contentDescription = stringResource(R.string.cd_seek_forward),
+                    caption = stringResource(R.string.hint_seek_forward),
                     onClick = { seekBy(player, progress, seekStepMs) },
-                    modifier = Modifier.size(34.dp),
-                ) {
-                    Icon(
-                        imageVector = Lucide.FastForward,
-                        contentDescription = stringResource(R.string.cd_seek_forward),
-                        tint = Color.White,
-                        modifier = Modifier.size(20.dp),
-                    )
-                }
+                    iconSize = 20.dp,
+                    buttonSize = 34.dp,
+                )
             } else {
                 Text(formatPlaybackTime(progress.durationMs), color = Color.White, fontSize = 12.sp)
             }
             if (onToggleFullscreen != null) {
                 Spacer(Modifier.width(10.dp))
-                IconButton(onClick = onToggleFullscreen, modifier = Modifier.size(30.dp)) {
-                    Icon(
-                        imageVector = if (fullscreen) Lucide.Minimize else Lucide.Maximize,
-                        contentDescription =
-                            stringResource(
-                                if (fullscreen) R.string.cd_toggle_portrait else R.string.cd_toggle_fullscreen,
-                            ),
-                        tint = Color.White,
-                        modifier = Modifier.size(20.dp),
-                    )
-                }
+                PjmIconWithCaption(
+                    icon = if (fullscreen) Lucide.Minimize else Lucide.Maximize,
+                    contentDescription =
+                        stringResource(
+                            if (fullscreen) R.string.cd_toggle_portrait else R.string.cd_toggle_fullscreen,
+                        ),
+                    caption =
+                        stringResource(
+                            if (fullscreen) R.string.hint_exit_fullscreen else R.string.hint_fullscreen,
+                        ),
+                    onClick = onToggleFullscreen,
+                    iconSize = 20.dp,
+                    buttonSize = 30.dp,
+                )
             }
         }
     }

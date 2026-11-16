@@ -3,6 +3,7 @@ package com.dhhxfggg.pjm.ui.component
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -277,18 +278,32 @@ fun PjmIconButton(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     danger: Boolean = false,
+    /** 传了就在图标下面补一行 10sp 功能小字；默认 null = 行为与以前完全一致 */
+    caption: String? = null,
 ) {
     val scheme = MaterialTheme.colorScheme
-    IconButton(
-        onClick = onClick,
-        enabled = enabled,
-        modifier = modifier.size(42.dp),
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = contentDescription,
-            tint = if (danger) scheme.error else scheme.onSurfaceVariant,
-            modifier = Modifier.size(21.dp),
-        )
+    val tint = if (danger) scheme.error else scheme.onSurfaceVariant
+    val button: @Composable () -> Unit = {
+        IconButton(
+            onClick = onClick,
+            enabled = enabled,
+            modifier = modifier.size(42.dp),
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = contentDescription,
+                tint = tint,
+                modifier = Modifier.size(21.dp),
+            )
+        }
+    }
+    // 视觉规格统一交给 PjmButtonCaption（10sp / 单行 / 同色系更淡），避免工具条出现第二种注释字样式
+    if (caption == null) {
+        button()
+    } else {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            button()
+            PjmButtonCaption(caption = caption, color = tint.copy(alpha = 0.75f))
+        }
     }
 }

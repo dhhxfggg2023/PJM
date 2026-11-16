@@ -38,6 +38,7 @@ import com.dhhxfggg.pjm.ui.theme.PresetDustyBlue
 import com.dhhxfggg.pjm.ui.theme.PresetForest
 import com.dhhxfggg.pjm.ui.theme.PresetLavender
 import com.dhhxfggg.pjm.ui.theme.PresetRose
+import com.dhhxfggg.pjm.ui.theme.PresetSage
 import com.dhhxfggg.pjm.ui.viewmodel.SettingsViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -127,6 +128,8 @@ internal fun MainCategoryList(
     settingsViewModel: SettingsViewModel,
     managedAppCount: Int,
     onNavigate: (SettingsPage) -> Unit,
+    // 备份已安装应用走独立路由（自己带搜索框和整屏列表），所以是回调而不是二级页面
+    onOpenAppBackup: () -> Unit = {},
 ) {
     Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         // 「通用」：日常最常改的两项（外观 + 接管），按大多数软件的层级习惯放在最上面
@@ -201,6 +204,14 @@ internal fun MainCategoryList(
                 description = stringResource(R.string.settings_desc_discovery),
                 onClick = { onNavigate(SettingsPage.Discovery) },
                 accent = PresetLavender,
+            )
+            // 备份已安装应用：产物落在「其他」分类，和「文件怎么进库」同组最容易被找到
+            SettingsButton(
+                icon = Lucide.Package,
+                title = stringResource(R.string.app_backup_settings_title),
+                description = stringResource(R.string.app_backup_settings_desc),
+                onClick = onOpenAppBackup,
+                accent = PresetSage,
             )
         }
         // 「数据与维护」：诊断、清理、校验
@@ -515,20 +526,6 @@ internal fun IngestionSettings(
                     settingsViewModel.updateSetting(Settings.KEY_ARCHIVE_AUTO_EXTRACTION, it)
                 },
             )
-        }
-        SettingsCategory(title = stringResource(R.string.settings_cat_split_policy)) {
-            SettingsOptionLabel(stringResource(R.string.settings_title_split_size))
-            Row(
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp).fillMaxWidth().horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                listOf(500 to "500MB", 1024 to "1GB", 2048 to "2GB", 4096 to "4GB").forEach { (size, label) ->
-                    FilterChip(selected = settings.exportSplitSize == size, onClick = {
-                        settingsViewModel.updateSetting(Settings.KEY_EXPORT_SPLIT_SIZE, size)
-                    }, label = { Text(label) })
-                }
-            }
         }
         SettingsBottomSpacer()
     }

@@ -88,8 +88,9 @@ internal fun FileThumbnail(
             ImageRequest
                 .Builder(context)
                 .size(size)
-                // 同一张图在不同卡片尺寸下复用内存缓存：来回滚动不用反复解码
-                .memoryCacheKey(cacheKey)
+                // 内存缓存键必须带尺寸：Coil 默认键本来就含 size，这里显式覆盖后如果不带，
+                // 160px 解码结果会被 512px 的请求命中，网格从 6 列切回 2 列时整片发虚。
+                .memoryCacheKey(cacheKey + "@" + size)
                 .crossfade(crossfade)
                 // 保险库里的文件本来就在本地，Coil 再把它整份复制进磁盘缓存是纯双倍 IO：
                 // 滚动时每个新缩略图都要"读整个 JPEG + 写整个 JPEG"，缓存还会不停淘汰重写。

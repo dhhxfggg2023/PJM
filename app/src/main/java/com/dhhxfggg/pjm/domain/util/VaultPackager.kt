@@ -4,7 +4,6 @@ import android.content.Context
 import android.net.Uri
 import com.dhhxfggg.pjm.data.db.FileDao
 import com.dhhxfggg.pjm.data.model.FileEntity
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -17,7 +16,18 @@ object VaultPackager {
     private const val TAG = "VaultPackager"
 
     /**
+     * 单卷体积上限（MB）。
+     *
+     * 旧版是用户可配置项（设置页「分卷大小」），该入口已下线：分卷行为本身保留
+     * （单个 .pjm 容器过大时仍按文件边界切成多卷），但容量固定为 1GB，不再可配置。
+     */
+    private const val VOLUME_SIZE_MB = 1024L
+
+    /**
      * 将一组 URI 按分卷体积切分打包并入库（B 站合并产物导出等场景）。
+     *
+     * @param volumeSizeMb 单卷体积上限（MB），默认即生产固定值 [VOLUME_SIZE_MB]；
+     *        仅为单元测试用小体积触发多卷而保留，UI/设置项不可配置。
      * @return 分卷数量
      */
     suspend fun packUrisWithSplitting(
@@ -27,11 +37,11 @@ object VaultPackager {
         baseName: String,
         fileDao: FileDao,
         onProgress: (Float) -> Unit,
+        volumeSizeMb: Long = VOLUME_SIZE_MB,
     ): Result<Int> =
         withContext(VaultManager.PjmDispatchers.IO) {
             runCatching {
-                val settings = SettingsManager.getSettingsFlow(context).first()
-                val volumeSize = settings.exportSplitSize.toLong() * 1024 * 1024
+                val volumeSize = volumeSizeMb * 1024 * 1024
                 // 只需要 (uri, size)：显示名由容器内部按 uri 自己解析，这里再查一次纯属多余
                 // （.second 从未被使用，却为每个 uri 多跑一次 DISPLAY_NAME 查询）。
                 val infos = uris.map { it to FileUtils.getFileSize(context, it) }
@@ -64,13 +74,22 @@ object VaultPackager {
                         // 先登记再写：写入中途异常时也能把这个半截文件删掉
                         created.add(volumeFile to relativePath)
                         val groupSize = group.sumOf { it.second }.coerceAtLeast(1L)
-                        CryptoUtils.encryptUris(
-                            context = context,
-                            inputUris = group.map { it.first },
-                            outputPath = volumeFile.absolutePath,
-                            isCancelled = { VaultManager.isTaskCancelled(VaultManager.TASK_ENCRYPT) },
-                        ) { p ->
-                            onProgress(((processed + p * groupSize) / totalSize).coerceIn(0f, 1f))
+                        // 核心修复：encryptUris 把 IO/空间不足/重名条目都收成 Result.failure 返回，
+                        // 旧实现丢弃返回值继续入库 —— 加密失败时容器根本没生成，却插入一条 size=0
+                        // 的索引行，外层 catch 也永远不会触发回滚，界面还显示「已生成 N 卷」。
+                        // 这里必须 getOrThrow，让下面的 catch 真正回滚并把失败抛给调用方。
+                        CryptoUtils
+                            .encryptUris(
+                                context = context,
+                                inputUris = group.map { it.first },
+                                outputPath = volumeFile.absolutePath,
+                                isCancelled = { VaultManager.isTaskCancelled(VaultManager.TASK_ENCRYPT) },
+                            ) { p ->
+                                onProgress(((processed + p * groupSize) / totalSize).coerceIn(0f, 1f))
+                            }.getOrThrow()
+                        // 再兜一层：容器必须真的存在且非空，否则同样按失败回滚
+                        if (!volumeFile.isFile || volumeFile.length() <= 0L) {
+                            throw java.io.IOException("容器未生成或为空: " + volumeFile.name)
                         }
                         // 立即入库，确保加密包在文件柜立即可见、可分享
                         fileDao.upsertLocked(
@@ -119,12 +138,17 @@ object VaultPackager {
             runCatching {
                 if (uris.isEmpty()) throw Exception("Empty input")
                 val volumeFile = File(VaultPaths.getCategoryDir(context, category), "$baseName.pjm.1")
-                CryptoUtils.encryptUris(
-                    context = context,
-                    inputUris = uris,
-                    outputPath = volumeFile.absolutePath,
-                    onProgress = onProgress,
-                )
+                // 同 packUrisWithSplitting：失败必须上抛，否则会在没有容器的情况下入库一条幽灵记录
+                CryptoUtils
+                    .encryptUris(
+                        context = context,
+                        inputUris = uris,
+                        outputPath = volumeFile.absolutePath,
+                        onProgress = onProgress,
+                    ).getOrThrow()
+                if (!volumeFile.isFile || volumeFile.length() <= 0L) {
+                    throw java.io.IOException("容器未生成或为空: " + volumeFile.name)
+                }
                 // 立即入库，文件柜立即可见、可分享
                 fileDao.upsertLocked(
                     FileEntity(

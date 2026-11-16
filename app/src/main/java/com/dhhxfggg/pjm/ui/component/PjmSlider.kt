@@ -14,7 +14,14 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.unit.dp
+import com.dhhxfggg.pjm.R
 
 /**
  * 应用内统一的调节滑条。
@@ -38,16 +45,29 @@ fun PjmSlider(
     val primary = MaterialTheme.colorScheme.primary
     val inactive = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
     val knobFill = MaterialTheme.colorScheme.surface
+    val sliderLabel = stringResource(R.string.cd_adjust_slider)
+    // 区间跨度供语义/手势/绘制共用，避免三处各算一遍导致读屏值与视觉值不一致
+    val span = (valueRange.endInclusive - valueRange.start).takeIf { it > 0f } ?: 1f
 
     Canvas(
         modifier =
             modifier
                 .fillMaxWidth()
                 .height(30.dp)
-                .pointerInput(enabled, valueRange) {
+                // 读屏用户靠语义调节：直接报告真实区间与当前值，setProgress 回调与点按/拖动
+                // 共用同一份 onValueChange + onValueChangeFinished，视觉和读屏不会各走一套逻辑。
+                .semantics(mergeDescendants = true) {
+                    contentDescription = sliderLabel
+                    progressBarRangeInfo = ProgressBarRangeInfo(latestValue, valueRange)
+                    setProgress { target ->
+                        val newValue = target.coerceIn(valueRange.start, valueRange.endInclusive)
+                        latestChange(newValue)
+                        latestFinished?.invoke()
+                        true
+                    }
+                }.pointerInput(enabled, valueRange) {
                     if (!enabled) return@pointerInput
                     val pad = 9.dp.toPx()
-                    val span = (valueRange.endInclusive - valueRange.start).takeIf { it > 0f } ?: 1f
                     detectTapGestures { offset ->
                         val usable = (size.width - pad * 2).coerceAtLeast(1f)
                         val f = ((offset.x - pad) / usable).coerceIn(0f, 1f)
@@ -57,7 +77,6 @@ fun PjmSlider(
                 }.pointerInput(enabled, valueRange) {
                     if (!enabled) return@pointerInput
                     val pad = 9.dp.toPx()
-                    val span = (valueRange.endInclusive - valueRange.start).takeIf { it > 0f } ?: 1f
 
                     fun emit(x: Float) {
                         val usable = (size.width - pad * 2).coerceAtLeast(1f)
@@ -78,7 +97,6 @@ fun PjmSlider(
         val trackH = 6.dp.toPx()
         val knobR = 8.dp.toPx()
         val usable = (size.width - pad * 2).coerceAtLeast(1f)
-        val span = (valueRange.endInclusive - valueRange.start).takeIf { it > 0f } ?: 1f
         val f = ((value - valueRange.start) / span).coerceIn(0f, 1f)
         val cy = size.height / 2f
         drawRoundRect(

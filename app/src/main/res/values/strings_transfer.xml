@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="transfer_start_port_busy">服务启动失败：端口被占用</string>
+    <string name="transfer_token_write_failed">写入传输令牌失败</string>
+    <string name="transfer_dates_all">库里还没有入库记录，暂时只能传全部文件</string>
+    <string name="transfer_dates_refreshed">已刷新：%1$d 个日期可选</string>
+    <string name="transfer_checking_connection">正在测试连接…</string>
+    <string name="transfer_connect_fail">连不上电脑端：确认 PJM-Link 已打开、USB 已插好，并在手机上允许了调试</string>
+    <string name="transfer_check_ok">连接正常 · %1$s · 剩余 %2$s</string>
+    <string name="transfer_writable">可写</string>
+    <string name="transfer_readonly">不可写</string>
+    <string name="transfer_checking_pc">正在检查电脑端…</string>
+    <string name="transfer_pc_unreachable">电脑端连不上：先打开 PJM-Link，插好 USB 并允许调试</string>
+    <string name="transfer_pc_not_writable">电脑接收目录不可写：%1$s</string>
+    <string name="transfer_no_files">没有要发送的文件</string>
+    <string name="transfer_preparing">准备发送 %1$d 个 · %2$s</string>
+    <string name="transfer_file_mismatch">文件缺失或大小不一致：%1$s</string>
+    <string name="transfer_push_cancelled">已停止 · %1$d/%2$d</string>
+    <string name="transfer_push_failed">完成 %1$d/%2$d · 失败 %3$d</string>
+    <string name="transfer_push_skipped">已发送 %1$d 个 · 跳过 %2$d 个（之前传过）</string>
+    <string name="transfer_push_done_all">已发送 %1$d 个 · %2$s</string>
+    <string name="transfer_push_done">已发送 %1$d/%2$d · %3$s</string>
+    <string name="transfer_no_folder">先选一个文件夹</string>
+    <string name="transfer_import_failed">失败 %1$d 个</string>
+    <string name="transfer_import_summary">新增 %1$d · 失败 %2$d</string>
+    <string name="transfer_write_vault_failed">写入保险库失败</string>
+</resources>

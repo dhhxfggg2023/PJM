@@ -34,7 +34,6 @@ class SettingsManager
 
             val KEY_FILE_VIEW_MODE = stringPreferencesKey(Settings.KEY_FILE_VIEW_MODE)
             val KEY_GRID_SPAN_COUNT = intPreferencesKey(Settings.KEY_GRID_SPAN_COUNT)
-            val KEY_EXPORT_SPLIT_SIZE = intPreferencesKey(Settings.KEY_EXPORT_SPLIT_SIZE)
             val KEY_AUTO_DELETE_ORIGINAL = booleanPreferencesKey(Settings.KEY_AUTO_DELETE_ORIGINAL)
             val KEY_ARCHIVE_AUTO_EXTRACTION = booleanPreferencesKey(Settings.KEY_ARCHIVE_AUTO_EXTRACTION)
             val KEY_BILI_ROOT_URI = stringPreferencesKey(Settings.KEY_BILI_ROOT_URI)
@@ -56,7 +55,6 @@ class SettingsManager
                         globalUiScale = preferences[KEY_GLOBAL_UI_SCALE] ?: 1.0f,
                         fileViewMode = preferences[KEY_FILE_VIEW_MODE] ?: "grid",
                         gridSpanCount = preferences[KEY_GRID_SPAN_COUNT] ?: 2,
-                        exportSplitSize = preferences[KEY_EXPORT_SPLIT_SIZE] ?: 1024,
                         autoDeleteOriginal = preferences[KEY_AUTO_DELETE_ORIGINAL] ?: false,
                         isArchiveAutoExtractionEnabled = preferences[KEY_ARCHIVE_AUTO_EXTRACTION] ?: true,
                         isMigrationDone = preferences[KEY_MIGRATION_DONE] ?: false,

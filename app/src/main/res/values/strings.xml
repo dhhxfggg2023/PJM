@@ -35,9 +35,9 @@
 
     <!-- Status & Progress -->
     <string name="status_ready">就绪</string>
-    <string name="status_processing">正在处理文件...</string>
-    <string name="status_storing">正在存放...</string>
-    <string name="status_encrypting">正在混淆...</string>
+    <string name="status_processing">正在处理文件…</string>
+    <string name="status_storing">正在存放…</string>
+    <string name="status_encrypting">正在混淆…</string>
     <string name="status_decrypting">正在解密: %1$s</string>
     <string name="status_storing_with_progress">正在存放 (%1$d%%)</string>
     <string name="status_encrypt_success">混淆完成</string>
@@ -45,38 +45,38 @@
     <string name="status_export_success">成功导出资源</string>
     <string name="status_processing_split_volume">正在处理混淆分卷: %1$s</string>
     <string name="status_ingesting_file">正在入库: %1$s</string>
-    <string name="status_updating_index">正在更新索引...</string>
+    <string name="status_updating_index">正在更新索引…</string>
     <string name="status_ingestion_complete_with_skips">入库完成 (跳过 %1$d 个重复文件)</string>
     <string name="status_all_tasks_complete">任务全部完成</string>
     <string name="status_extracting">正在解压: %1$s</string>
     <string name="status_extract_complete">提取完成：%1$d 个文件已入库</string>
     <string name="error_extract_failed">提取失败：%1$s</string>
-    <string name="status_recovering_files">正在自动找回以前的文件...</string>
-    <string name="status_recovering_assets">正在自动找回资源...</string>
+    <string name="status_recovering_files">正在自动找回以前的文件…</string>
+    <string name="status_recovering_assets">正在自动找回资源…</string>
     <string name="status_recovery_complete">找回完成</string>
-    <string name="status_analyzing_duplicates">正在分析重复内容...</string>
-    <string name="status_calculating_fingerprints">正在计算内容指纹...</string>
-    <string name="status_calculating_image_fingerprints">正在计算图片感知指纹...</string>
-    <string name="status_comparing_images">正在比对图片内容...</string>
-    <string name="status_grouping_duplicates">正在整理重复分组...</string>
-    <string name="status_syncing_fast">正在快速同步...</string>
-    <string name="status_indexing_files">正在索引文件...</string>
+    <string name="status_analyzing_duplicates">正在分析重复内容…</string>
+    <string name="status_calculating_fingerprints">正在计算内容指纹…</string>
+    <string name="status_calculating_image_fingerprints">正在计算图片感知指纹…</string>
+    <string name="status_comparing_images">正在比对图片内容…</string>
+    <string name="status_grouping_duplicates">正在整理重复分组…</string>
+    <string name="status_syncing_fast">正在快速同步…</string>
+    <string name="status_indexing_files">正在索引文件…</string>
     <string name="status_sync_complete">同步完成</string>
-    <string name="status_cleaning_duplicates">正在清理副本...</string>
-    <string name="status_clearing_cache">正在清理缓存...</string>
-    <string name="status_resetting">正在恢复出厂设置...</string>
+    <string name="status_cleaning_duplicates">正在清理副本…</string>
+    <string name="status_clearing_cache">正在清理缓存…</string>
+    <string name="status_resetting">正在恢复出厂设置…</string>
     <string name="status_reset_done">已恢复出厂设置</string>
-    <string name="status_clearing_logs">正在清除日志...</string>
+    <string name="status_clearing_logs">正在清除日志…</string>
     <string name="status_logs_cleared">日志已清除</string>
     <string name="settings_title_clear_logs">清除日志</string>
     <string name="settings_desc_clear_logs">仅删除运行日志，不影响任何缓存与文件</string>
-    <string name="status_shredding">正在安全粉碎...</string>
+    <string name="status_shredding">正在安全粉碎…</string>
     <string name="status_delete_done">已删除</string>
-    <string name="status_searching_bili_cache">正在扫描缓存...</string>
-    <string name="status_searching_bili_merged">正在扫描已合并视频...</string>
+    <string name="status_searching_bili_cache">正在扫描缓存…</string>
+    <string name="status_searching_bili_merged">正在扫描已合并视频…</string>
     <string name="status_processing_bili_batch">正在导入 (%1$d/%2$d): %3$s</string>
-    <string name="status_starting_integrity_check">正在校验文件完整性...</string>
-    <string name="status_verifying_fingerprints">正在校验指纹...</string>
+    <string name="status_starting_integrity_check">正在校验文件完整性…</string>
+    <string name="status_verifying_fingerprints">正在校验指纹…</string>
 
     <!-- Errors -->
     <string name="error_encrypt_failed">混淆失败: %1$s</string>
@@ -121,7 +121,7 @@
     <string name="dialog_title_encrypted_archive">加密归档</string>
     <string name="dialog_msg_password_required">文件 %1$s 已加密，请输入密码：</string>
     <string name="dialog_msg_new_file_found">发现新文件，如何存放？</string>
-    <string name="toast_pjm_archive_detected">识别到 PJM 混淆包，自动存放中...</string>
+    <string name="toast_pjm_archive_detected">识别到 PJM 混淆包，自动存放中…</string>
     <string name="dialog_delete_msg_discovery">确定要永久移除这项资源吗？</string>
     <string name="dialog_title_details">详情</string>
     <string name="dialog_title_shred_confirm">安全粉碎确认</string>
@@ -167,7 +167,7 @@
     <string name="settings_desc_select_bg">建议使用高分辨率图片</string>
     <string name="toast_bg_set">背景已设置</string>
     <string name="dialog_title_factory_reset_confirm">恢复出厂设置</string>
-    <string name="dialog_msg_factory_reset_confirm">将重置所有个性化设置（主题、背景、分卷大小、自动删除等），不影响已存文件。确定继续？</string>
+    <string name="dialog_msg_factory_reset_confirm">将重置所有个性化设置（主题、背景、自动删除等），不影响已存文件。确定继续？</string>
     <string name="action_confirm_reset">确认重置</string>
     <string name="toast_settings_reset">已恢复出厂设置</string>
     <string name="settings_title_bg_opacity">背景亮度</string>
@@ -192,11 +192,9 @@
     <string name="hint_random_direct">直接调起系统分享，接收方拿到的是原始图片</string>
     <string name="toast_random_share_skipped">%1$d 张图片已不在库中，已跳过</string>
     <string name="action_start_random">开始抽取</string>
-    <string name="status_random_pick">正在从图片库随机抽取图片...</string>
+    <string name="status_random_pick">正在从图片库随机抽取图片…</string>
     <string name="toast_random_pick_empty">图片库中暂无可用图片</string>
     <string name="toast_random_pick_done">已随机混淆 %1$d 张图片到 PJM 库</string>
-    <string name="settings_title_split_size">导出分卷大小 (MB)</string>
-    <string name="settings_desc_split_size">打包导出时每个分卷的最大容量</string>
     <string name="settings_title_bili_import">Bilibili 视频导入</string>
     <string name="settings_desc_bili_import">扫描并合并 B站 离线缓存</string>
     <string name="settings_title_bili_merged_import">导入已合并视频</string>
@@ -289,7 +287,6 @@
     <string name="settings_cat_canvas_scale">画布比例</string>
     <string name="settings_cat_view_config">视图配置</string>
     <string name="settings_cat_auto_rules">自动化规则</string>
-    <string name="settings_cat_split_policy">分卷策略</string>
     <string name="settings_cat_privileged_access">特权访问（电脑 adb，免目录授权）</string>
     <string name="settings_cat_data_access">数据穿透</string>
     <string name="settings_cat_post_process">后置处理</string>
@@ -360,7 +357,7 @@
     <string name="toast_log_not_generated">日志文件尚未生成或为空</string>
     <string name="filebrowser_title">目录浏览</string>
     <string name="filebrowser_system_dir">系统目录</string>
-    <string name="filebrowser_search_hint">搜索应用或目录...</string>
+    <string name="filebrowser_search_hint">搜索应用或目录…</string>
     <string name="filebrowser_status_data_ready">Data 目录已就绪</string>
     <string name="filebrowser_title_data_auth">Data 目录访问授权</string>
     <string name="filebrowser_desc_privileged">特权模式已生效，可直接访问应用数据</string>
@@ -571,6 +568,12 @@
     <string name="cd_repeat_all">列表循环</string>
     <string name="player_repeat_one_short">单曲</string>
     <string name="player_repeat_all_short">循环</string>
+    <!-- 音频播放模式（四态单一枚举，一个按钮轮换）：顺序 / 列表循环 / 单曲循环 / 随机 -->
+    <string name="play_mode_sequential">顺序播放</string>
+    <string name="play_mode_repeat_all">列表循环</string>
+    <string name="play_mode_repeat_one">单曲循环</string>
+    <string name="play_mode_shuffle">随机播放</string>
+    <string name="play_mode_next">切换播放模式</string>
     <string name="player_lyrics">歌词</string>
     <string name="sleep_timer_songs">定时 %1$d 首</string>
     <string name="sleep_timer_left">定时 %1$s</string>
@@ -600,6 +603,12 @@
     <string name="reader_margins">左右边距</string>
     <string name="reader_colors">配色</string>
     <string name="reader_reset_layout">恢复默认排版</string>
+    <string name="reader_loading">正在读取…</string>
+    <string name="reader_load_failed">这本书打不开：格式无法识别或文件已损坏</string>
+    <string name="reader_truncated">仅显示前 8 MB</string>
+    <string name="reader_prev_chapter">上一章</string>
+    <string name="reader_next_chapter">下一章</string>
+    <string name="reader_no_chapters">这本书没有识别到章节，可以用下方进度条翻阅。</string>
     <string name="action_save">保存</string>
     <string name="rename_dialog_hint">只改库里的显示名，磁盘文件名保持不变</string>
     <!-- 导出到相册：部分成功提示 -->

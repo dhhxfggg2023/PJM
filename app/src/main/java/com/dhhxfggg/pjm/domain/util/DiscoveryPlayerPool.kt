@@ -51,6 +51,9 @@ object DiscoveryPlayerPool {
                         true,
                     )
                 }
+        // 池里借出来的旧实例不会重新走新建分支，音量必须在公共返回路径上按当前设置刷新，
+        // 否则用户在设置里调过音量后，发现页复用池里的播放器一直是旧音量。
+        player.volume = AudioSettings.appVolume(appContext)
         inUse.add(player)
         return player
     }

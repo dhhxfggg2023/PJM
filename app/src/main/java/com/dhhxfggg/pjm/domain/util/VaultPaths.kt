@@ -70,8 +70,12 @@ object VaultPaths {
     ): File {
         val dir = getCategoryDir(context, category)
         val safeName = safeFileName(originalName)
-        // 用原始大小写的扩展名（FileUtils.getFileExtension 会小写化，且把 .pjm.1 归成 "pjm"）
-        val extension = safeName.substringAfterLast('.', "").takeIf { it.isNotEmpty() && it.length <= 10 }.orEmpty()
+        // 用原始大小写的扩展名（FileUtils.getFileExtension 会小写化，且把 .pjm.1 归成 "pjm"）。
+        // 这里不再限制扩展名长度：旧实现在扩展名超过 10 字符时直接丢掉它，于是
+        // "notes.markdown2" 会变成 "notes.markdown2_<uuid>"（整个名字都被当成 base），
+        // 全量同步再按磁盘名取扩展名就得到 "markdown2_<uuid>"，分类/isImage 全部错判。
+        // 只挡掉明显不是扩展名的超长尾巴（>32 字符），其余原样保留。
+        val extension = safeName.substringAfterLast('.', "").takeIf { it.isNotEmpty() && it.length <= 32 }.orEmpty()
         val suffix = if (extension.isEmpty()) "" else "." + extension
         val base =
             if (category == VaultCategories.CAT_IMAGES) {

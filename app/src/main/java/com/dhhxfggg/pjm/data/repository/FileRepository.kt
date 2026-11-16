@@ -14,6 +14,18 @@ interface FileRepository {
 
     fun getFilesByCategory(category: String): Flow<List<FileEntity>>
 
+    /**
+     * 只要「分类 + 大小区间」的文件流（左闭右开）。
+     *
+     * [maxSize] 传 [Long.MAX_VALUE] 表示无上限（热力图最后一档「X 以上」），
+     * 这样调用方不用为「有没有上界」准备两条不同的查询链。
+     */
+    fun getFilesByCategoryAndSizeRange(
+        category: String,
+        minSize: Long,
+        maxSize: Long,
+    ): Flow<List<FileEntity>>
+
     suspend fun deleteFile(entity: FileEntity)
 
     suspend fun deleteFiles(entities: List<FileEntity>)

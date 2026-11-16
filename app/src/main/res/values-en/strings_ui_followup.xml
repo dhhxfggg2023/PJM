@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  UI follow-up strings (English).
+  Mirrors values/strings_ui_followup.xml key for key; keep the wording terse.
+-->
+<resources>
+    <!-- Accessible name for the custom-drawn playback progress bar -->
+    <string name="cd_player_progress">Playback progress</string>
+    <!-- Accessible name for the custom-drawn settings slider -->
+    <string name="cd_adjust_slider">Adjustment slider</string>
+</resources>

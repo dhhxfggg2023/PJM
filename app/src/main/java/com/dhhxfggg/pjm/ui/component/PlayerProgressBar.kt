@@ -25,8 +25,15 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import com.dhhxfggg.pjm.R
 import kotlin.math.roundToInt
 
 /**
@@ -53,13 +60,23 @@ fun PlayerProgressBar(
     var widthPx by remember { mutableIntStateOf(0) }
     val shown = (if (dragging) dragFraction else progress).coerceIn(0f, 1f)
     val thumbPx = with(LocalDensity.current) { 7.dp.toPx() }
+    val progressLabel = stringResource(R.string.cd_player_progress)
 
     Box(
         modifier =
             modifier
                 .fillMaxWidth()
                 .height(28.dp)
-                .onSizeChanged { widthPx = it.width }
+                // 读屏用户靠语义操作进度：value 用当前显示比例，setProgress 直接复用点击/松手的 seek
+                // （拖动中的 onScrub 只更新本地预览，不真正 seek，所以这里回调的是 onSeek）。
+                .semantics {
+                    contentDescription = progressLabel
+                    progressBarRangeInfo = ProgressBarRangeInfo(shown, 0f..1f)
+                    setProgress { target ->
+                        onSeek(target.coerceIn(0f, 1f))
+                        true
+                    }
+                }.onSizeChanged { widthPx = it.width }
                 .pointerInput(widthPx) {
                     if (widthPx <= 0) return@pointerInput
                     detectHorizontalDragGestures(

@@ -29,8 +29,13 @@ data class HeatmapUiState(
     val last30: Int = 0,
     val currentStreak: Int = 0,
     val longestStreak: Int = 0,
-    /** 各分类内每个文件的大小（字节），热力图下方的「大小分布」用 */
-    val sizeSamples: Map<String, List<Long>> = emptyMap(),
+    /**
+     * 各分类的「单个文件大小分布」直方图（热力图下方用）。
+     *
+     * 只保留统计结果（total + 每档 count），不再持有原始 List<Long>：
+     * 4 万条 size 随每次重组挂在 State 上会白白占内存，而界面只需要形状和真实总数。
+     */
+    val sizeHistograms: Map<String, SizeHistogram> = emptyMap(),
     val isLoading: Boolean = true,
 )
 
@@ -76,8 +81,9 @@ class VaultHeatmapViewModel
                 // 53 列，最后一列是本周；列首均为周一
                 val startDay = today - todayWeekday - 52L * 7L
                 val last30 = (today - 29L..today).sumOf { counts[it] ?: 0 }
-                // 热力图下方的「单个文件大小分布」：按分类取全部 size，只做直方图，不落表
-                val sampleCategories =
+                // 热力图下方的「单个文件大小分布」：按分类取全部 size，在 IO 线程算完直方图即丢，
+                // 不抽样 —— 抽样会让界面上的「共 N 个文件」和各档计数全是样本数，不是真实数据。
+                val sizeCategories =
                     listOf(
                         VaultManager.CAT_IMAGES,
                         VaultManager.CAT_VIDEOS,
@@ -87,12 +93,11 @@ class VaultHeatmapViewModel
                         VaultManager.CAT_OTHERS,
                         VaultManager.CAT_PJM,
                     )
-                val sizeSamples =
-                    sampleCategories.associateWith { category ->
-                        // getSizesByCategory 会把该分类的 size 全读出来（4 万行都可能），旧实现把
-                        // 7 份全量列表原样塞进 UI State（每次重组都持有）。直方图只需要形状：
-                        // 按固定步长等距抽样，每个分类最多留 SIZE_SAMPLE_LIMIT 个样本。
-                        downsampleSizes(runCatching { fileDao.getSizesByCategory(category) }.getOrDefault(emptyList()))
+                val sizeHistograms =
+                    sizeCategories.associateWith { category ->
+                        // getSizesByCategory 会把该分类的 size 全读出来（4 万行都可能）。这里逐个分类
+                        // 顺序处理，算完直方图后列表即可被回收，峰值内存只有单个分类的全量列表。
+                        buildSizeHistogram(runCatching { fileDao.getSizesByCategory(category) }.getOrDefault(emptyList()))
                     }
                 var current = 0
                 var cursor = if ((counts[today] ?: 0) > 0) today else today - 1
@@ -117,24 +122,10 @@ class VaultHeatmapViewModel
                         last30 = last30,
                         currentStreak = current,
                         longestStreak = longest,
-                        sizeSamples = sizeSamples,
+                        sizeHistograms = sizeHistograms,
                         isLoading = false,
                     )
             }
-        }
-
-        /**
-         * 等距抽样（不是随机抽）：保留原列表顺序，直方图形状不失真，样本数有上界。
-         */
-        private fun downsampleSizes(sizes: List<Long>): List<Long> {
-            if (sizes.size <= SIZE_SAMPLE_LIMIT) return sizes
-            val step = (sizes.size + SIZE_SAMPLE_LIMIT - 1) / SIZE_SAMPLE_LIMIT
-            return sizes.filterIndexed { index, _ -> index % step == 0 }.take(SIZE_SAMPLE_LIMIT)
-        }
-
-        private companion object {
-            /** 每个分类最多保留多少条 size 样本（只用于直方图） */
-            const val SIZE_SAMPLE_LIMIT = 200
         }
     }
 
