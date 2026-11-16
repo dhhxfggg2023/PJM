@@ -22,6 +22,7 @@ import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.VerticalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -57,10 +58,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.composables.icons.lucide.*
@@ -68,10 +69,13 @@ import com.dhhxfggg.pjm.R
 import com.dhhxfggg.pjm.data.model.FileEntity
 import com.dhhxfggg.pjm.domain.service.AudioPlaybackService
 import com.dhhxfggg.pjm.domain.util.AudioSettings
+import com.dhhxfggg.pjm.domain.util.DiscoveryPlayerPool
 import com.dhhxfggg.pjm.domain.util.EpubExtractor
 import com.dhhxfggg.pjm.domain.util.FileUtils
+import com.dhhxfggg.pjm.domain.util.PjmLogger
 import com.dhhxfggg.pjm.domain.util.VaultManager
 import com.dhhxfggg.pjm.ui.component.PlayerProgressBar
+import com.dhhxfggg.pjm.ui.component.PlayerProgressState
 import com.dhhxfggg.pjm.ui.component.VideoControlBar
 import com.dhhxfggg.pjm.ui.component.VideoSurface
 import com.dhhxfggg.pjm.ui.component.ZoomableVaultImage
@@ -86,6 +90,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -99,6 +104,15 @@ import java.util.Locale
  */
 @Suppress("WrongConstant")
 private const val SIMPLE_BREAK_STRATEGY = android.text.Layout.BREAK_STRATEGY_SIMPLE
+
+/** 阅读位置落盘的防抖窗口：翻页很密时不必每页写一次 SharedPreferences */
+private const val POSITION_SAVE_DEBOUNCE_MS = 400L
+
+/** 字号/行距/边距连点的合并窗口：等手停下来再整本重排 */
+private const val LAYOUT_DEBOUNCE_MS = 150L
+
+/** 查看器日志 tag */
+private const val TAG_MEDIA_VIEWER = "MediaDetail"
 
 /**
  * 统一的文件查看器：图片 / 视频 / 音频 / 文本。
@@ -118,8 +132,8 @@ fun MediaDetailScreen(
     viewModel: MediaDetailViewModel = hiltViewModel(),
 ) {
     val context = LocalContext.current
-    val fileEntity by viewModel.fileEntity.collectAsState()
-    val categoryFiles by viewModel.categoryFiles.collectAsState()
+    val fileEntity by viewModel.fileEntity.collectAsStateWithLifecycle()
+    val categoryFiles by viewModel.categoryFiles.collectAsStateWithLifecycle()
 
     LaunchedEffect(relativePath) {
         viewModel.loadFile(relativePath)
@@ -139,9 +153,20 @@ fun MediaDetailScreen(
                 if (categoryFiles.isEmpty()) {
                     ImageListLoading()
                 } else {
+                    // 列表里没有当前这张时退回「只看这一张」：以前 clamp 到 0 会变成点 A 看 B
+                    val foundIndex = categoryFiles.indexOfFirst { it.relativePath == entity.relativePath }
                     val startIndex =
-                        categoryFiles.indexOfFirst { it.relativePath == entity.relativePath }.coerceAtLeast(0)
-                    ImagePager(files = categoryFiles, startIndex = startIndex, onBack = onBack)
+                        if (foundIndex < 0) {
+                            PjmLogger.w(TAG_MEDIA_VIEWER, "image not in category list, fallback to single: " + entity.relativePath)
+                            0
+                        } else {
+                            foundIndex
+                        }
+                    ImagePager(
+                        files = if (foundIndex < 0) listOf(entity) else categoryFiles,
+                        startIndex = startIndex,
+                        onBack = onBack,
+                    )
                 }
             }
             FileUtils.isVideoFile(entity.name) -> {
@@ -151,12 +176,20 @@ fun MediaDetailScreen(
                     } else {
                         categoryFiles.filter { FileUtils.isVideoFile(it.name) }
                     }
-                if (videos.size <= 1 && videos.firstOrNull()?.relativePath == entity.relativePath) {
-                    VideoPager(listOf(entity), 0, onBack)
-                } else {
-                    val startIndex = videos.indexOfFirst { it.relativePath == entity.relativePath }.coerceAtLeast(0)
-                    VideoPager(videos, startIndex, onBack)
-                }
+                // 列表里没有当前这条时退回「只播这一条」：以前 clamp 到 0 会变成点 A 播 B
+                val foundIndex = videos.indexOfFirst { it.relativePath == entity.relativePath }
+                val startIndex =
+                    if (foundIndex < 0) {
+                        PjmLogger.w(TAG_MEDIA_VIEWER, "video not in category list, fallback to single: " + entity.relativePath)
+                        0
+                    } else {
+                        foundIndex
+                    }
+                VideoPager(
+                    files = if (foundIndex < 0) listOf(entity) else videos,
+                    startIndex = startIndex,
+                    onBack = onBack,
+                )
             }
             FileUtils.isAudioFile(entity.name) -> {
                 val audios =
@@ -165,11 +198,19 @@ fun MediaDetailScreen(
                     } else {
                         categoryFiles.filter { FileUtils.isAudioFile(it.name) }
                     }
-                val startIndex = audios.indexOfFirst { it.relativePath == entity.relativePath }.coerceAtLeast(0)
+                // 队列里没有当前这首时退回「只播这一首」：以前 clamp 到 0 会变成点这首放那首
+                val foundIndex = audios.indexOfFirst { it.relativePath == entity.relativePath }
+                val startIndex =
+                    if (foundIndex < 0) {
+                        PjmLogger.w(TAG_MEDIA_VIEWER, "audio not in category list, fallback to single: " + entity.relativePath)
+                        0
+                    } else {
+                        foundIndex
+                    }
                 AudioViewer(
                     file = file,
                     title = FileUtils.normalizedDisplayName(entity),
-                    queue = audios,
+                    queue = if (foundIndex < 0) listOf(entity) else audios,
                     startIndex = startIndex,
                     onBack = onBack,
                 )
@@ -303,17 +344,19 @@ private fun VideoPage(
     // 文案在组合期取好（跟随语言/配置变化），双击手势回调里直接用
     val seekForward10Label = stringResource(R.string.video_seek_forward_10)
     val seekBack10Label = stringResource(R.string.video_seek_back_10)
+    // 和发现页共用播放器复用池：翻页时不再每页新建/销毁 ExoPlayer（MediaCodec 反复初始化很贵）。
+    // 借/还必须成对：文件切走后 DisposableEffect 归还，池里最多留 2 个实例。
     val player =
         remember(file.absolutePath) {
-            ExoPlayer.Builder(context.applicationContext).build().apply {
-                setMediaItem(MediaItem.fromUri(file.toURI().toString()))
+            DiscoveryPlayerPool.acquire(context).apply {
                 volume = AudioSettings.appVolume(context)
+                setMediaItem(MediaItem.fromUri(file.toURI().toString()))
                 prepare()
                 playWhenReady = false
             }
         }
     DisposableEffect(file.absolutePath) {
-        onDispose { player.release() }
+        onDispose { DiscoveryPlayerPool.release(player) }
     }
     val isAppVisible = rememberIsAppVisible()
     LaunchedEffect(isActive, isAppVisible) {
@@ -361,8 +404,27 @@ private fun VideoPage(
 
     // 全屏 / 竖屏由用户自己选：全屏 = 横屏 + 收起系统栏；竖屏 = 保持正常方向和系统栏。
     // 默认竖屏，想全屏再点一下，不再一进播放页就强行全屏。
+    //
+    // 拆成两个 effect：恢复动作只挂在「离开本页」上（DisposableEffect(Unit)），切换全屏只走
+    // LaunchedEffect(fullscreen)。原来两者共用一个 DisposableEffect(fullscreen)，每次切换都会
+    // 先拆（恢复方向 + 弹出系统栏）再装（设回全屏），屏幕会闪一下。
     var fullscreen by remember { mutableStateOf(false) }
-    DisposableEffect(fullscreen) {
+    DisposableEffect(Unit) {
+        onDispose {
+            val activity = context as? android.app.Activity
+            activity?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            val window = activity?.window
+            window
+                ?.let {
+                    androidx.core.view.WindowCompat
+                        .getInsetsController(it, it.decorView)
+                }?.show(
+                    androidx.core.view.WindowInsetsCompat.Type
+                        .systemBars(),
+                )
+        }
+    }
+    LaunchedEffect(fullscreen) {
         val activity = context as? android.app.Activity
         val window = activity?.window
         val controller =
@@ -379,13 +441,6 @@ private fun VideoPage(
                     .systemBars(),
             )
         } else {
-            activity?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-            controller?.show(
-                androidx.core.view.WindowInsetsCompat.Type
-                    .systemBars(),
-            )
-        }
-        onDispose {
             activity?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
             controller?.show(
                 androidx.core.view.WindowInsetsCompat.Type
@@ -549,21 +604,9 @@ private fun VideoPage(
                 )
             }
         }
-        // 全屏拖进度时不弹控制栏，只给一个中间的时间提示（控制栏可见时它自己会显示位置）
-        if (progress.scrubbing && !showControls) {
-            Box(
-                modifier =
-                    Modifier
-                        .align(Alignment.Center)
-                        .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
-                        .padding(horizontal = 16.dp, vertical = 10.dp),
-            ) {
-                Text(
-                    text = formatPlaybackTime(progress.shownPositionMs) + " / " + formatPlaybackTime(progress.durationMs),
-                    color = Color.White,
-                )
-            }
-        }
+        // 全屏拖进度时不弹控制栏，只给一个中间的时间提示（控制栏可见时它自己会显示位置）。
+        // 读 progress 的部分收进叶子 composable：拖动时位置每帧都在变，整页不该跟着重组。
+        VideoScrubHint(progress = progress, visible = !showControls, modifier = Modifier.align(Alignment.Center))
         if (turboSpeed > 0f) {
             Box(
                 modifier =
@@ -597,7 +640,8 @@ private fun VideoPage(
                     ) {
                         Icon(
                             imageVector = if (progress.isPlaying) Lucide.Pause else Lucide.Play,
-                            contentDescription = null,
+                            contentDescription =
+                                stringResource(if (progress.isPlaying) R.string.action_pause else R.string.action_play),
                             tint = Color.Black.copy(alpha = 0.8f),
                             modifier = Modifier.size(28.dp),
                         )
@@ -673,6 +717,9 @@ private fun AudioViewer(
                 }
         }
 
+    // 核心修复：队列不能只在控制器首次连上时设置一次。
+    // categoryFiles 初始是 emptyList()（ViewModel 异步填充），旧实现把首帧的单首队列固定到
+    // MediaController，UI 却按完整队列渲染 —— 点第 N 首/上一首/下一首/随机全部失效。
     DisposableEffect(Unit) {
         val token =
             SessionToken(
@@ -682,22 +729,25 @@ private fun AudioViewer(
         val future = MediaController.Builder(context, token).buildAsync()
         future.addListener(
             {
-                runCatching { future.get() }.getOrNull()?.let { c ->
-                    controller = c
-                    val items =
-                        if (queueFiles.isEmpty()) {
-                            listOf(MediaItem.fromUri(file.toURI().toString()))
-                        } else {
-                            queueFiles.map { MediaItem.fromUri(it.toURI().toString()) }
-                        }
-                    c.setMediaItems(items, start, 0L)
-                    c.prepare()
-                    c.play()
-                }
+                runCatching { future.get() }.getOrNull()?.let { c -> controller = c }
             },
             ContextCompat.getMainExecutor(context),
         )
         onDispose { MediaController.releaseFuture(future) }
+    }
+
+    // 队列随 categoryFiles 到达 / 变化而更新；只重置一次起始位置，避免每次重组都跳回开头。
+    LaunchedEffect(controller, queueFiles, start) {
+        val c = controller ?: return@LaunchedEffect
+        val items =
+            if (queueFiles.isEmpty()) {
+                listOf(MediaItem.fromUri(file.toURI().toString()))
+            } else {
+                queueFiles.map { MediaItem.fromUri(it.toURI().toString()) }
+            }
+        c.setMediaItems(items, start, 0L)
+        c.prepare()
+        c.play()
     }
 
     // 队列/播放模式轮询：400ms 一次。进度和时长不在这里读 —— 那是共享状态的活，
@@ -753,11 +803,23 @@ private fun AudioViewer(
 
     val iconPack = rememberIconPack()
     val backdrop = info?.artwork
+    // 封面位图与压暗渐变只在封面变化时重建：以前每次重组都 asImageBitmap() + new Brush
+    val backdropBitmap = remember(backdrop) { backdrop?.asImageBitmap() }
+    val scrimBrush =
+        remember {
+            Brush.verticalGradient(
+                listOf(
+                    Color.Black.copy(alpha = 0.45f),
+                    Color.Black.copy(alpha = 0.75f),
+                    Color.Black.copy(alpha = 0.94f),
+                ),
+            )
+        }
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         // 封面做整页背景：高斯模糊（API 31+）+ 纵向压暗，Poweramp 那种感觉
-        if (backdrop != null) {
+        if (backdropBitmap != null) {
             Image(
-                bitmap = backdrop.asImageBitmap(),
+                bitmap = backdropBitmap,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 alpha = 0.55f,
@@ -772,20 +834,7 @@ private fun AudioViewer(
                             },
                         ),
             )
-            Box(
-                modifier =
-                    Modifier
-                        .fillMaxSize()
-                        .background(
-                            Brush.verticalGradient(
-                                listOf(
-                                    Color.Black.copy(alpha = 0.45f),
-                                    Color.Black.copy(alpha = 0.75f),
-                                    Color.Black.copy(alpha = 0.94f),
-                                ),
-                            ),
-                        ),
-            )
+            Box(modifier = Modifier.fillMaxSize().background(scrimBrush))
         }
         Column(
             modifier = Modifier.fillMaxSize().padding(horizontal = 28.dp).padding(top = 88.dp, bottom = 24.dp),
@@ -855,37 +904,9 @@ private fun AudioViewer(
                 overflow = TextOverflow.Ellipsis,
             )
             Spacer(Modifier.weight(1f))
-            Box(modifier = Modifier.fillMaxWidth()) {
-                PlayerProgressBar(
-                    progress = progress.fraction,
-                    onScrub = { fraction -> progress.scrubTo((fraction * progress.durationMs).toLong()) },
-                    onSeek = {
-                        val target = (it * progress.durationMs).toLong()
-                        controller?.seekTo(target)
-                        progress.endScrub(target)
-                    },
-                    activeColor = MaterialTheme.colorScheme.primary,
-                )
-                // 拖动时在上方冒一个时间气泡，松手才真正跳转
-                if (progress.scrubbing) {
-                    Surface(
-                        modifier = Modifier.align(Alignment.TopCenter).offset(y = (-30).dp),
-                        shape = RoundedCornerShape(10.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.96f),
-                        shadowElevation = 3.dp,
-                    ) {
-                        Text(
-                            text = formatPlaybackTime(progress.shownPositionMs),
-                            style = MaterialTheme.typography.labelLarge,
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-                        )
-                    }
-                }
-            }
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(formatPlaybackTime(progress.shownPositionMs), color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
-                Text(formatPlaybackTime(progress.durationMs), color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
-            }
+            // 进度条 + 时间文本单独成叶子：只有它读每 500ms 变的 progress，
+            // 整屏（封面 Image / blur(56.dp) / 渐变底 / 按钮行）不会跟着一起重组。
+            AudioProgressLeaf(progress = progress, controller = controller)
             Spacer(Modifier.height(8.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -911,16 +932,7 @@ private fun AudioViewer(
                 IconButton(onClick = { controller?.seekToPreviousMediaItem() }) {
                     Icon(Lucide.SkipBack, contentDescription = stringResource(R.string.cd_previous), tint = Color.White, modifier = Modifier.size(32.dp))
                 }
-                FilledIconButton(
-                    onClick = { if (progress.isPlaying) controller?.pause() else controller?.play() },
-                    modifier = Modifier.size(64.dp),
-                ) {
-                    Icon(
-                        imageVector = if (progress.isPlaying) Lucide.Pause else Lucide.Play,
-                        contentDescription = stringResource(if (progress.isPlaying) R.string.action_pause else R.string.action_play),
-                        modifier = Modifier.size(32.dp),
-                    )
-                }
+                AudioPlayPauseButton(progress = progress, controller = controller)
                 IconButton(onClick = { controller?.seekToNextMediaItem() }) {
                     Icon(Lucide.SkipForward, contentDescription = stringResource(R.string.cd_next), tint = Color.White, modifier = Modifier.size(32.dp))
                 }
@@ -1050,8 +1062,8 @@ private fun AudioViewer(
                         modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
                     )
                     LazyColumn(modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
-                        items(queue.size) { index ->
-                            val entity = queue[index]
+                        // 稳定 key：队列里插入/删除时，行状态不会按 index 错位
+                        itemsIndexed(queue, key = { _, entity -> entity.relativePath }) { index, entity ->
                             val isCurrent = index == currentIndex
                             Row(
                                 modifier =
@@ -1103,36 +1115,143 @@ private fun AudioViewer(
         // 歌词：内嵌歌词（LRC 格式）逐行显示，当前行高亮，点一句跳过去
         if (showLyrics) {
             ModalBottomSheet(onDismissRequest = { showLyrics = false }) {
-                val listState =
-                    androidx.compose.foundation.lazy
-                        .rememberLazyListState()
-                val activeIndex = lyrics.indexOfLast { it.first <= progress.positionMs }
-                LaunchedEffect(activeIndex) {
-                    if (activeIndex > 0) {
-                        runCatching { listState.animateScrollToItem(activeIndex) }
-                    }
-                }
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier.fillMaxWidth().heightIn(max = 480.dp).padding(bottom = 24.dp),
-                ) {
-                    items(lyrics.size) { index ->
-                        val (startMs, text) = lyrics[index]
-                        val active = index == activeIndex
-                        Text(
-                            text = text,
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
-                            modifier =
-                                Modifier
-                                    .fillMaxWidth()
-                                    .clickable { controller?.seekTo(startMs) }
-                                    .padding(horizontal = 20.dp, vertical = 8.dp),
-                        )
-                    }
-                }
+                // 列表单独成叶子：只有它读每 500ms 变的 progress，弹窗本身不跟着重组
+                LyricsList(
+                    lyrics = lyrics,
+                    progress = progress,
+                    onSeekTo = { startMs -> controller?.seekTo(startMs) },
+                )
             }
+        }
+    }
+}
+
+/**
+ * 音频页的进度区（进度条 + 拖动气泡 + 两端时间）。
+ *
+ * 之所以单独成一个 composable：progress 每 500ms 变一次，这些读取如果留在 [AudioViewer] 顶层，
+ * 整屏（封面 Image、blur(56.dp)、渐变底、按钮行）都会跟着每秒重组两次。
+ */
+@Composable
+private fun AudioProgressLeaf(
+    progress: PlayerProgressState,
+    controller: MediaController?,
+) {
+    Box(modifier = Modifier.fillMaxWidth()) {
+        PlayerProgressBar(
+            progress = progress.fraction,
+            onScrub = { fraction -> progress.scrubTo((fraction * progress.durationMs).toLong()) },
+            onSeek = {
+                val target = (it * progress.durationMs).toLong()
+                controller?.seekTo(target)
+                progress.endScrub(target)
+            },
+            activeColor = MaterialTheme.colorScheme.primary,
+        )
+        // 拖动时在上方冒一个时间气泡，松手才真正跳转
+        if (progress.scrubbing) {
+            Surface(
+                modifier = Modifier.align(Alignment.TopCenter).offset(y = (-30).dp),
+                shape = RoundedCornerShape(10.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.96f),
+                shadowElevation = 3.dp,
+            ) {
+                Text(
+                    text = formatPlaybackTime(progress.shownPositionMs),
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                )
+            }
+        }
+    }
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(formatPlaybackTime(progress.shownPositionMs), color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
+        Text(formatPlaybackTime(progress.durationMs), color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
+    }
+}
+
+/** 播放/暂停按钮：只读 isPlaying（低频变化），不牵动整屏 */
+@Composable
+private fun AudioPlayPauseButton(
+    progress: PlayerProgressState,
+    controller: MediaController?,
+) {
+    FilledIconButton(
+        onClick = { if (progress.isPlaying) controller?.pause() else controller?.play() },
+        modifier = Modifier.size(64.dp),
+    ) {
+        Icon(
+            imageVector = if (progress.isPlaying) Lucide.Pause else Lucide.Play,
+            contentDescription = stringResource(if (progress.isPlaying) R.string.action_pause else R.string.action_play),
+            modifier = Modifier.size(32.dp),
+        )
+    }
+}
+
+/** 拖动进度时中间的「当前 / 总长」提示（控制栏不可见时才出现） */
+@Composable
+private fun VideoScrubHint(
+    progress: PlayerProgressState,
+    visible: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    if (!visible || !progress.scrubbing) return
+    Box(
+        modifier =
+            modifier
+                .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+    ) {
+        Text(
+            text = formatPlaybackTime(progress.shownPositionMs) + " / " + formatPlaybackTime(progress.durationMs),
+            color = Color.White,
+        )
+    }
+}
+
+/**
+ * 歌词面板：当前行高亮 + 自动滚动 + 点一句跳过去。
+ *
+ * 单独成 composable，是为了把「每 500ms 变的 progress」的读取关在这一层；
+ * 当前行下标用 derivedStateOf 缓存，item 内只做一次下标比较（不再是每项一遍 indexOfLast）。
+ */
+@Composable
+private fun LyricsList(
+    lyrics: List<Pair<Long, String>>,
+    progress: PlayerProgressState,
+    onSeekTo: (Long) -> Unit,
+) {
+    val listState =
+        androidx.compose.foundation.lazy
+            .rememberLazyListState()
+    val activeIndex by remember(lyrics) {
+        derivedStateOf { lyrics.indexOfLast { it.first <= progress.positionMs } }
+    }
+    // 稳定 key：时间戳 + 文字（重复行由 uniqueKeys 补序号，避免 LazyColumn 因 key 重复崩溃）
+    val lyricKeys = remember(lyrics) { uniqueKeys(lyrics.map { it.first.toString() + "|" + it.second }) }
+    LaunchedEffect(activeIndex) {
+        if (activeIndex > 0) {
+            runCatching { listState.animateScrollToItem(activeIndex) }
+        }
+    }
+    LazyColumn(
+        state = listState,
+        modifier = Modifier.fillMaxWidth().heightIn(max = 480.dp).padding(bottom = 24.dp),
+    ) {
+        items(lyrics.size, key = { lyricKeys[it] }) { index ->
+            val (startMs, text) = lyrics[index]
+            val active = index == activeIndex
+            Text(
+                text = text,
+                style = MaterialTheme.typography.bodyLarge,
+                color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable { onSeekTo(startMs) }
+                        .padding(horizontal = 20.dp, vertical = 8.dp),
+            )
         }
     }
 }
@@ -1162,6 +1281,19 @@ private fun parseLrc(raw: String): List<Pair<Long, String>> {
         }
     }
     return out.sortedBy { it.first }
+}
+
+/**
+ * Lazy 列表的稳定 key：内容重复时（同一时间戳的重复歌词行、同名同页章节）补序号，
+ * 避免 LazyColumn 因 key 重复直接抛 IllegalArgumentException。
+ */
+private fun uniqueKeys(bases: List<String>): List<String> {
+    val seen = HashMap<String, Int>(bases.size)
+    return bases.map { base ->
+        val count = (seen[base] ?: 0) + 1
+        seen[base] = count
+        if (count == 1) base else base + "#" + count
+    }
 }
 
 // ---------------- 文本 ----------------
@@ -1276,6 +1408,9 @@ private fun TextViewer(
     }
 
     LaunchedEffect(rawText, epubChapters, fontSize, lineSpacing, marginDp, configuration.screenWidthDp, viewportHeightPx, topInsetDp) {
+        // 字号/行距/边距连点时每次都会重启整本排版：先等 150ms，期间再来变化就取消重来，
+        // 只对手停下来的那一次设置排版，避免每点一下都白量上万段。
+        delay(LAYOUT_DEBOUNCE_MS)
         val body = rawText ?: return@LaunchedEffect
         // 还没测量到可用高度就先不排：否则会按 0 高度算出满屏一页
         if (viewportHeightPx <= 0) return@LaunchedEffect
@@ -1325,7 +1460,10 @@ private fun TextViewer(
                     viewportHeightPx - with(density) { topInsetDp.toPx() }.toInt(),
                 ),
             )
-        readPageCache(cacheFile, paragraphs.size)?.let { cache ->
+        // 核心修复：分页缓存读取（exists/readLines）原来在 LaunchedEffect 的主线程上执行，
+        // 打开已缓存的大书会卡一帧到数百毫秒。与同函数其它磁盘操作一致，放到 IO。
+        val pageCache = withContext(Dispatchers.IO) { readPageCache(cacheFile, paragraphs.size) }
+        pageCache?.let { cache ->
             val cachedPages = ArrayList<List<String>>(cache.starts.size)
             cache.starts.forEachIndexed { i, start ->
                 val end = if (i + 1 < cache.starts.size) cache.starts[i + 1] else paragraphs.size
@@ -1461,9 +1599,12 @@ private fun TextViewer(
         withContext(Dispatchers.IO) { writePageCache(cacheFile, paragraphs.size, pageStarts, chapterParagraphs) }
     }
 
+    // 阅读位置落盘：翻页很密时不要每页写一次 SharedPreferences。
+    // collectLatest + delay 做 400ms 防抖，只保存停下来的那一页。
     LaunchedEffect(pagerState, pages) {
         if (pages.isNullOrEmpty()) return@LaunchedEffect
-        snapshotFlow { pagerState.currentPage }.collect { page ->
+        snapshotFlow { pagerState.currentPage }.collectLatest { page ->
+            delay(POSITION_SAVE_DEBOUNCE_MS)
             val total = (pages?.size ?: 0).coerceAtLeast(1)
             val ratio = (page.toFloat() / (total - 1).coerceAtLeast(1)).coerceIn(0f, 1f)
             prefs
@@ -1471,6 +1612,22 @@ private fun TextViewer(
                 .putInt(positionKey, page)
                 .putFloat(positionKey + "_ratio", ratio)
                 .apply()
+        }
+    }
+    // 防抖期间退出阅读器会丢掉最后一次翻页：离开前补写一次。
+    // 只有真的排过版才写：排版失败/还没排完时补写会把已保存的阅读位置覆盖成第 1 页。
+    DisposableEffect(pagerState) {
+        onDispose {
+            val total = pages?.size ?: 0
+            if (total > 0) {
+                val page = pagerState.currentPage
+                val ratio = (page.toFloat() / (total - 1).coerceAtLeast(1)).coerceIn(0f, 1f)
+                prefs
+                    .edit()
+                    .putInt(positionKey, page)
+                    .putFloat(positionKey + "_ratio", ratio)
+                    .apply()
+            }
         }
     }
     LaunchedEffect(showChrome) {
@@ -1603,7 +1760,9 @@ private fun TextViewer(
                                     .padding(horizontal = 2.dp, vertical = 2.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            IconButton(onClick = onBack) { Icon(Lucide.ArrowLeft, null, tint = Color.White) }
+                            IconButton(onClick = onBack) {
+                                Icon(Lucide.ArrowLeft, stringResource(R.string.action_back), tint = Color.White)
+                            }
                             Text(
                                 text = title,
                                 color = Color.White,
@@ -1700,6 +1859,12 @@ private fun TextViewer(
             // 并排两栏在手机上各只剩半屏宽，书签一多还会把章节顶到看不见的地方。
             var tocTab by remember { mutableIntStateOf(0) }
             val bookmarkPages = bookmarks.sorted()
+            // 当前章节下标在列表外算一次：以前写在 item 里，每项都要 indexOfLast 一遍（O(n²)）
+            val currentChapterIndex by remember(chapters) {
+                derivedStateOf { chapters.indexOfLast { it.second <= pagerState.currentPage } }
+            }
+            // 稳定 key：章节标题可能重名，靠「页序号|标题」+ 重名序号保证唯一
+            val chapterKeys = remember(chapters) { uniqueKeys(chapters.map { it.second.toString() + "|" + it.first }) }
             Column(modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
@@ -1718,9 +1883,9 @@ private fun TextViewer(
                 }
                 if (tocTab == 0) {
                     LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 440.dp)) {
-                        items(chapters.size) { index ->
+                        items(chapters.size, key = { chapterKeys[it] }) { index ->
                             val (chapterTitle, page) = chapters[index]
-                            val current = chapters.indexOfLast { it.second <= pagerState.currentPage } == index
+                            val current = index == currentChapterIndex
                             Text(
                                 text = chapterTitle,
                                 style = MaterialTheme.typography.bodyMedium,
@@ -1758,8 +1923,8 @@ private fun TextViewer(
                     )
                 } else {
                     LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 440.dp)) {
-                        items(bookmarkPages.size) { index ->
-                            val page = bookmarkPages[index]
+                        // 页码本身就是稳定且唯一的 key
+                        items(bookmarkPages, key = { it }) { page ->
                             Row(
                                 modifier =
                                     Modifier
@@ -2070,7 +2235,7 @@ private fun ViewerTopBar(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         IconButton(onClick = onBack) {
-            Icon(Lucide.ArrowLeft, contentDescription = null, tint = Color.White)
+            Icon(Lucide.ArrowLeft, stringResource(R.string.action_back), tint = Color.White)
         }
         Text(
             text = title,

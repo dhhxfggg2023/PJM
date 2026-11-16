@@ -597,4 +597,12 @@
     <string name="reader_reset_layout">Reset layout</string>
     <string name="action_save">Save</string>
     <string name="rename_dialog_hint">Only the display name in the vault changes; the file on disk keeps its name</string>
+    <string name="status_export_partial">Exported %1$d/%2$d; the rest failed</string>
+    <!-- Accessibility content descriptions: read by TalkBack, never rendered -->
+    <string name="cd_switch_to_grid">Switch to grid view</string>
+    <string name="cd_switch_to_list">Switch to list view</string>
+    <string name="cd_password_show">Show password</string>
+    <string name="cd_password_hide">Hide password</string>
+    <string name="cd_decrease">Decrease</string>
+    <string name="cd_increase">Increase</string>
 </resources>

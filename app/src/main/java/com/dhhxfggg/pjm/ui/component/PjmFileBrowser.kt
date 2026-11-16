@@ -13,8 +13,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -31,6 +31,7 @@ import com.dhhxfggg.pjm.R
 import com.dhhxfggg.pjm.domain.shizuku.EmbeddedPrivilegedIo
 import com.dhhxfggg.pjm.domain.util.BiliBridge
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -53,6 +54,17 @@ fun PjmFolderPickerDialog(
     // 传 document URI 会被 ExternalStorageProvider 拒绝。
     var currentTreeUri by remember { mutableStateOf<android.net.Uri?>(null) }
     var searchQuery by remember { mutableStateOf("") }
+    // 核心优化：搜索延迟过滤 —— 输入框保持即时响应，列表只在停止输入 300ms 后重建一次，
+    // 避免每敲一个字符就重新过滤/排序整个目录。
+    var debouncedQuery by remember { mutableStateOf("") }
+    LaunchedEffect(searchQuery) {
+        if (searchQuery.isBlank()) {
+            debouncedQuery = ""
+        } else {
+            delay(300)
+            debouncedQuery = searchQuery
+        }
+    }
 
     val persistedPermissions = remember { context.contentResolver.persistedUriPermissions }
     // 核心修复：授权目标改为整个内部存储根 (primary:)，Android 13+ 无法直接授权 Android/data。
@@ -117,7 +129,7 @@ fun PjmFolderPickerDialog(
     //   1) 目录内容只在目录变化时于 IO 线程加载一次；
     //   2) 搜索只在已加载的结果上做内存过滤。
     val dirEntries by produceState(
-        initialValue = emptyList<Triple<String, Any, ApplicationInfo?>>(),
+        initialValue = emptyList<DirEntry>(),
         currentRawDir,
         currentDocDir,
         currentTreeUri,
@@ -140,32 +152,30 @@ fun PjmFolderPickerDialog(
             }
     }
 
+    // 核心优化：只对已加载好的字段做内存过滤，不触碰任何 DocumentFile / 跨进程 query。
     val nodes =
-        remember(dirEntries, searchQuery) {
+        remember(dirEntries, debouncedQuery) {
             dirEntries
                 .filter {
-                    it.first.contains(searchQuery, ignoreCase = true) ||
-                        (it.second as? File)?.name?.contains(searchQuery, ignoreCase = true) == true
-                }.sortedBy { it.first.lowercase() }
-        }
-
-    // 核心优化：每行都 firstOrNull 扫一遍列表是 O(n²)；预计算一次 name → isDirectory 映射
-    val privilegedByName =
-        remember(privilegedEntries) {
-            privilegedEntries?.associate { it.first.name to it.second }
+                    it.name.contains(debouncedQuery, ignoreCase = true) ||
+                        (it.node as? File)?.name?.contains(debouncedQuery, ignoreCase = true) == true
+                }.sortedBy { it.name.lowercase() }
         }
 
     // 文案在组合期取好：用 LocalContext 读资源不会跟随语言/配置变化（lint: LocalContextResources）
     val systemDirLabel = stringResource(R.string.filebrowser_system_dir)
+    // 取 DocumentFile.name 是跨进程查询：只在目录变化时算一次，不能每次重组都查
     val currentPathDisplay =
-        currentDocDir?.let { doc ->
-            val path = doc.uri.path ?: ""
-            if (path.contains("primary:Android/data")) {
-                "Data/" + path.substringAfterLast("/")
-            } else {
-                doc.name ?: systemDirLabel
-            }
-        } ?: currentRawDir.absolutePath
+        remember(currentDocDir, currentRawDir, systemDirLabel) {
+            currentDocDir?.let { doc ->
+                val path = doc.uri.path ?: ""
+                if (path.contains("primary:Android/data")) {
+                    "Data/" + path.substringAfterLast("/")
+                } else {
+                    doc.name ?: systemDirLabel
+                }
+            } ?: currentRawDir.absolutePath
+        }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -178,7 +188,21 @@ fun PjmFolderPickerDialog(
                     .fillMaxHeight(0.95f)
                     .clip(MaterialTheme.shapes.extraLarge),
         ) {
-            Box(modifier = Modifier.fillMaxSize().blur(radius = 20.dp).background(MaterialTheme.colorScheme.surface.copy(alpha = 0.82f)))
+            // 核心优化：去掉常驻的 blur(20.dp) 离屏模糊（整块背景每帧都要离屏渲染），
+            // 改为静态半透明渐变 —— 观感接近，开销几乎为零。
+            Box(
+                modifier =
+                    Modifier
+                        .fillMaxSize()
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(
+                                    MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+                                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.92f),
+                                ),
+                            ),
+                        ),
+            )
 
             Column(modifier = Modifier.fillMaxSize()) {
                 TopAppBar(
@@ -303,42 +327,13 @@ fun PjmFolderPickerDialog(
                             }
                         }
 
-                        items(nodes) { (name, node, appInfo) ->
-                            // 判断是否为目录（目录可进入，文件仅展示不可点）。
-                            // 核心修复：特权模式下必须用特权枚举的 isDirectory 标志——
-                            // Android 14 的 File API 对 Android/data 下受保护目录 stat 失败，
-                            // File.isDirectory 恒为 false，导致 download 等目录被误识别成文件。
-                            val privilegedFlag =
-                                if (currentDocDir == null && privilegedAvailable) {
-                                    privilegedByName?.get(name)
-                                } else {
-                                    null
-                                }
-                            val isDirectory =
-                                privilegedFlag ?: when (node) {
-                                    is DocumentFile -> node.isDirectory
-                                    is File -> node.isDirectory
-                                    else -> true
-                                }
-                            val fileSize =
-                                if (privilegedFlag != null) {
-                                    if (privilegedFlag) {
-                                        null
-                                    } else {
-                                        when (node) {
-                                            is DocumentFile -> node.length().takeIf { it > 0 }
-                                            is File -> node.length().takeIf { it > 0 }
-                                            else -> null
-                                        }
-                                    }
-                                } else {
-                                    when (node) {
-                                        is DocumentFile -> if (node.isDirectory) null else node.length()
-                                        is File -> if (node.isDirectory) null else node.length()
-                                        else -> null
-                                    }
-                                }
-                            FolderItem(name, appInfo, isDirectory, fileSize) {
+                        items(nodes) { entry ->
+                            // 核心修复：isDirectory / length() 已在 loadDirEntries 的 IO 阶段算好 ——
+                            // DocumentFile 的这两个属性是跨进程 query，绝不能在组合期调用。
+                            val name = entry.name
+                            val node = entry.node
+                            val isDirectory = entry.isDirectory
+                            FolderItem(name, entry.appInfo, isDirectory, entry.fileSize) {
                                 if (!isDirectory) return@FolderItem
                                 if (node is DocumentFile) {
                                     // data 入口（SAF 根授权构建）：点击直接进入 Android/data 的 File 模式，
@@ -532,12 +527,27 @@ private fun loadInstalledApps(context: android.content.Context): List<Triple<Str
 }
 
 /**
+ * 目录条目（一次 IO 加载的结果）。
+ *
+ * `isDirectory` / `fileSize` 在 [loadDirEntries] 的 IO 线程里预先算好 ——
+ * `DocumentFile.isDirectory` / `length()` 在 SAF 下是跨进程 query，
+ * 绝不能在 LazyColumn 的 item 组合期调用（滚动时每行每次重组一次 binder）。
+ */
+private data class DirEntry(
+    val name: String,
+    val node: Any,
+    val appInfo: ApplicationInfo?,
+    val isDirectory: Boolean,
+    val fileSize: Long?,
+)
+
+/**
  * 枚举当前目录内容。
  *
  * **必须在 IO 线程调用** —— 内含 `listFiles()`、SAF 跨进程 `contentResolver.query()`
- * 与 `DocumentFile` 包装。
+ * 与 `DocumentFile` 包装；目录标志与文件大小也在这里一次性算好。
  *
- * @return 每项为 (显示名, File 或 DocumentFile, ApplicationInfo?)
+ * @return 每项为 [DirEntry]（显示名 / File 或 DocumentFile / ApplicationInfo? / 是否目录 / 文件大小）
  */
 @Suppress("LongParameterList")
 private fun loadDirEntries(
@@ -549,7 +559,7 @@ private fun loadDirEntries(
     privilegedEntries: List<Pair<File, Boolean>>?,
     hasRootAuth: Boolean,
     persistedTreeUris: List<Uri>,
-): List<Triple<String, Any, ApplicationInfo?>> {
+): List<DirEntry> {
     if (docDir != null) {
         var filesList = docDir.listFiles().toList()
         if (filesList.isEmpty()) {
@@ -580,11 +590,19 @@ private fun loadDirEntries(
             }
         }
         // 核心修复：目录选择器同时展示文件与目录（文件带图标不可选，仅供确认目录内容）
-        return filesList.map { Triple(it.name ?: "Unknown", it, null) }
+        // SAF 下 isDirectory / length() 都是跨进程 query —— 在这里（IO 线程）各查一次。
+        return filesList.map { doc ->
+            val isDir = doc.isDirectory
+            DirEntry(doc.name ?: "Unknown", doc, null, isDir, if (isDir) null else doc.length())
+        }
     }
 
     if (currentRawDir.absolutePath.endsWith("Android/data")) {
-        return installedApps.map { Triple(it.first, File(currentRawDir, it.second), it.third) }
+        return installedApps.map { (name, pkg, appInfo) ->
+            val appDir = File(currentRawDir, pkg)
+            val isDir = appDir.isDirectory
+            DirEntry(name, appDir, appInfo, isDir, if (isDir) null else appDir.length())
+        }
     }
 
     // 核心修复：隐藏目录过滤不可靠（.data 会被误显示成 data）——
@@ -592,16 +610,23 @@ private fun loadDirEntries(
     // 目录和文件都展示，文件仅供浏览确认，不可选择。
     // 特权模式可用时优先用 shell 身份枚举（Android 14 的 File API 读 Android/data 返回空）；
     // 特权不可用才用 File API。
-    val fileNodes =
+    val fileNodes: List<DirEntry> =
         if (privilegedEntries != null) {
             privilegedEntries
                 .filter { !it.first.name.startsWith(".") }
-                .map { Triple(it.first.name, it.first, null) }
+                .map { (file, isDir) ->
+                    // 特权模式下必须用 shell 枚举的目录标志：Android 14 的 File.isDirectory
+                    // 对 Android/data 下受保护目录恒为 false（会把 download 误判成文件）。
+                    DirEntry(file.name, file, null, isDir, if (isDir) null else file.length().takeIf { it > 0 })
+                }
         } else {
             currentRawDir
                 .listFiles()
                 ?.filter { !it.isHidden && !it.name.startsWith(".") }
-                ?.map { Triple(it.name, it, null) } ?: emptyList()
+                ?.map { file ->
+                    val isDir = file.isDirectory
+                    DirEntry(file.name, file, null, isDir, if (isDir) null else file.length())
+                } ?: emptyList()
         }
 
     // 核心修复：浏览 Android 目录时，File API 在 Android 14+ 看不到受保护的 data 目录（只剩 .data）。
@@ -628,7 +653,7 @@ private fun loadDirEntries(
                     null
                 }
             // data 入口排在最前，优先展示（它受保护但 SAF 可达）
-            if (dataDoc != null) return listOf(Triple("data", dataDoc, null)) + fileNodes
+            if (dataDoc != null) return listOf(DirEntry("data", dataDoc, null, dataDoc.isDirectory, null)) + fileNodes
         }
     }
     return fileNodes

@@ -146,6 +146,18 @@ object CryptoUtils {
         startIndex: Long,
         mode: KeyStreamMode,
     ) {
+        // 核心优化：单字节走 Kotlin 快路径。ZipArchiveOutputStream 会混用 write(int) 与
+        // write(byte[],off,len)，而逐字节一次 JNI 往返（两次数组进出）比异或本身贵一个数量级。
+        // 语义与 native 完全一致：LEGACY_MASK 用 pos & mask，MODULO 用 pos % keyLen。
+        if (len == 1) {
+            val keyIndex =
+                when (mode) {
+                    KeyStreamMode.LEGACY_MASK -> (startIndex and KEY_SIZE_MASK).toInt()
+                    KeyStreamMode.MODULO -> (startIndex % XOR_KEY.size).toInt()
+                }
+            b[off] = (b[off].toInt() xor XOR_KEY[keyIndex].toInt()).toByte()
+            return
+        }
         if (isNativeAvailable) {
             try {
                 transformBytesNative(b, off, len, XOR_KEY, startIndex, mode.ordinal)
@@ -199,7 +211,9 @@ object CryptoUtils {
         onProgress: (Float) -> Unit = {},
     ): Result<Unit> =
         withContext(VaultManager.PjmDispatchers.Crypto) {
-            runCatching {
+            // 核心修复：runCatching 会把 CancellationException 一起吞成 Result.failure，
+            // 破坏结构化并发（取消后任务仍被当普通失败继续收尾）。取消必须原样上抛。
+            try {
                 val totalSize = inputUris.sumOf { FileUtils.getFileSize(context, it) }.coerceAtLeast(1L)
                 VaultManager.ensureDiskSpace(context, totalSize)
 
@@ -219,6 +233,8 @@ object CryptoUtils {
                         // 逐块导出时每次 1MB 的临时分配会累积成大量垃圾，GC 尖峰明显。
                         // 注：变换后就地存放的是密文，因此不再需要逐次清零。
                         var scratch = ByteArray(0)
+                        // 单字节写入复用同一块缓冲：旧实现每次 write(int) 都 byteArrayOf(1) 分配
+                        val singleByte = ByteArray(1)
 
                         val xorWrapper =
                             object : FilterOutputStream(fos) {
@@ -228,9 +244,9 @@ object CryptoUtils {
                                 // 导致同一文件内不同字节用不同 mask 加密，解密端批量读取时部分字节解不开，
                                 // ZIP 数据损坏 → 解密失败。
                                 override fun write(b: Int) {
-                                    val tmp = byteArrayOf((b and 0xFF).toByte())
-                                    transformBytesInPlace(tmp, 0, 1, streamPos, mode)
-                                    out.write(tmp[0].toInt() and 0xFF)
+                                    singleByte[0] = (b and 0xFF).toByte()
+                                    transformBytesInPlace(singleByte, 0, 1, streamPos, mode)
+                                    out.write(singleByte[0].toInt() and 0xFF)
                                     streamPos++
                                 }
 
@@ -275,6 +291,9 @@ object CryptoUtils {
                             zos.encoding = "UTF-8"
                             val buffer = VaultManager.acquireBuffer()
                             var processedBytes = 0L
+                            // 进度节流：旧实现每 1MB 回调一次，GB 级文件上千次 StateFlow 更新
+                            // 会持续触发 UI 重组。按 1% 步进上报（100 次/文件封顶）。
+                            var lastReported = 0f
                             try {
                                 for (uri in inputUris) {
                                     // 用户点进度条 × 时尽快停下（每个文件边界检查一次）
@@ -283,19 +302,32 @@ object CryptoUtils {
                                     val entry = ZipArchiveEntry(fileName)
                                     zos.setLevel(if (FileUtils.shouldCompress(fileName)) Deflater.BEST_SPEED else Deflater.NO_COMPRESSION)
                                     zos.putArchiveEntry(entry)
-                                    context.contentResolver.openInputStream(uri)?.use { fis ->
+                                    // 核心修复：URI 失效/权限被撤时 openInputStream 返回 null，
+                                    // 旧代码用 ?.use{} 静默跳过 —— 容器里少了这个文件却仍报「成功」。
+                                    val fis =
+                                        context.contentResolver.openInputStream(uri)
+                                            ?: throw IOException("Cannot open input stream for $uri")
+                                    fis.use {
                                         var len: Int
                                         while (fis.read(buffer).also { len = it } > 0) {
+                                            // 单个大文件拷贝期间也要能取消，不必等到文件边界
+                                            if (isCancelled()) throw kotlinx.coroutines.CancellationException("encrypt cancelled")
                                             zos.write(buffer, 0, len)
                                             processedBytes += len
-                                            onProgress(processedBytes.toFloat() / totalSize)
+                                            val fraction = (processedBytes.toFloat() / totalSize).coerceIn(0f, 1f)
+                                            if (fraction - lastReported >= 0.01f) {
+                                                lastReported = fraction
+                                                onProgress(fraction)
+                                            }
                                         }
                                     }
                                     zos.closeArchiveEntry()
                                 }
                                 zos.finish()
+                                if (lastReported < 1f) onProgress(1f)
                             } finally {
-                                VaultManager.releaseBuffer(buffer)
+                                // 这块缓冲里是待写盘的用户明文，归池前显式擦除
+                                VaultManager.releaseBuffer(buffer, secure = true)
                             }
                         }
                         // 核心修复：fsync 必须放在 ZIP 输出流关闭【之后】。
@@ -324,6 +356,11 @@ object CryptoUtils {
                     PjmLogger.e(TAG, "Encryption failed for $outputPath", e)
                     throw e
                 }
+                Result.success(Unit)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                Result.failure<Unit>(e)
             }
         }
 
@@ -420,12 +457,23 @@ object CryptoUtils {
                     ZipArchiveInputStream(zipStream, "UTF-8", true, true).use { zis ->
                         var entry: ZipArchiveEntry?
                         while (zis.nextEntry.also { entry = it } != null) {
-                            entry?.name?.let { onEntry(it, zis) }
+                            // 核心修复：zis 由本函数拥有并在 use{} 结束时关闭。消费方
+                            // （如 VaultManager.digestFileToEntity）会在 finally 里 close 传入流，
+                            // 直接传 zis 会导致第二个条目起读不到（多条目只导入第一个）。
+                            // 与 IngestionEngine.extractPjmStream 一致，包一层禁止关闭的 wrapper。
+                            val nonClosing =
+                                object : java.io.FilterInputStream(zis) {
+                                    override fun close() {}
+                                }
+                            entry?.name?.let { onEntry(it, nonClosing) }
                         }
                     }
                 }
             } catch (e: Exception) {
+                // 核心修复：旧实现只记日志不抛，10 条成功 3 条也会显示「完成 3」。
+                // 异常必须上抛，由调用方按失败处理，绝不把部分成功伪装成全成功。
                 PjmLogger.e(TAG, "Decryption failed for $uri", e)
+                throw e
             }
         }
     }
@@ -476,16 +524,19 @@ object CryptoUtils {
         return object : FilterInputStream(inputStream) {
             private var pos = initialPos
 
+            // 单字节读取复用缓冲：read() 逐字节时避免每次分配
+            private val single = ByteArray(1)
+
             // 核心修复：单字节读取与批量读取必须走【同一个】模式与位置计算路径
             // （transformBytesInPlace），与加密端 write(int)/write(byte[],off,len) 保持严格对称，
             // 否则混合读写时部分字节解不开。
             override fun read(): Int {
                 val b = super.read()
                 if (b == -1) return -1
-                val tmp = byteArrayOf(b.toByte())
-                transformBytesInPlace(tmp, 0, 1, pos, mode)
+                single[0] = b.toByte()
+                transformBytesInPlace(single, 0, 1, pos, mode)
                 pos++
-                return tmp[0].toInt() and 0xFF
+                return single[0].toInt() and 0xFF
             }
 
             override fun read(
@@ -511,6 +562,7 @@ object CryptoUtils {
              * 这里退化为「读入后丢弃」，保证 pos 与底层位置始终同步。
              * 代价是跳过 N 字节需要真的读 N 字节，但正确性优先。
              */
+
             override fun skip(n: Long): Long {
                 if (n <= 0) return 0
                 val buf = ByteArray(minOf(n, SKIP_CHUNK).toInt())
@@ -525,6 +577,13 @@ object CryptoUtils {
                 }
                 return skipped
             }
+
+            /**
+             * 核心修复：FilterInputStream 会把 mark/reset/markSupported 透传给底层流。
+             * 若底层支持 mark，reset() 会让数据回退而 pos 不倒退，之后所有字节都用错密钥流
+             * 位置解密（能读、内容全错）。本流的位置是加密状态的固有属性，不支持下退回退。
+             */
+            override fun markSupported(): Boolean = false
         }
     }
 

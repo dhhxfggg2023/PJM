@@ -208,29 +208,39 @@ interface FileDao {
     fun getTotalSizeFlow(): Flow<Long?>
 
     /**
-     * Picks a random file from a category, useful for "Shuffle" features.
+     * 按分类内第 N 条（id 升序）取一批：由调用方生成「随机 offset 集合」后逐个取。
+     *
+     * 旧实现 `ORDER BY RANDOM()` 会对整个分类全表排序 + 建临时表，
+     * 4 万行时每次「随机图片」都卡数秒；且索引完全用不上。
+     * 现在复用 [getCountByCategory] + [getFileByOffset] 的 O(log n) 路径，
+     * 由调用方负责去重与不足量回退。
      */
-    @Query("SELECT * FROM files WHERE category = :category ORDER BY RANDOM() LIMIT 1")
-    suspend fun getRandomFileByCategory(category: String): FileEntity?
+    @Query("SELECT * FROM files WHERE category = :category ORDER BY id LIMIT 1 OFFSET :offset")
+    suspend fun getFileByOffset(
+        category: String,
+        offset: Int,
+    ): FileEntity?
 
     /**
-     * Retrieves a set of random files from a category.
+     * 随机抽取用的键集游标：取分类内 id >= [startId] 的第一条。
+     *
+     * 大库优化：没有 `(category, id)` 复合索引时，`ORDER BY id LIMIT 1 OFFSET n`
+     * 要沿分类索引逐条跳过 n 条（一次抽 50 张 = 50 次分类扫描）；
+     * 改成 `id >= :startId` 后可以从 (category, id) 位置直接 seek，O(log n)。
      */
-    @Query("SELECT * FROM files WHERE category = :category ORDER BY RANDOM() LIMIT :limit")
-    suspend fun getRandomFilesByCategory(
+    @Query("SELECT * FROM files WHERE category = :category AND id >= :startId ORDER BY id LIMIT 1")
+    suspend fun getFirstFileAtOrAfterId(
         category: String,
-        limit: Int,
-    ): List<FileEntity>
+        startId: Long,
+    ): FileEntity?
 
-    /**
-     * Retrieves random files while excluding specific paths.
-     */
-    @Query("SELECT * FROM files WHERE category = :category AND relativePath NOT IN (:excludePaths) ORDER BY RANDOM() LIMIT :limit")
-    suspend fun getRandomFilesByCategoryExcluding(
-        category: String,
-        excludePaths: List<String>,
-        limit: Int,
-    ): List<FileEntity>
+    /** 分类内最小 id（随机起点的下界 + 游标到尾部时的绕回） */
+    @Query("SELECT MIN(id) FROM files WHERE category = :category")
+    suspend fun getMinIdByCategory(category: String): Long?
+
+    /** 分类内最大 id（随机起点的上界） */
+    @Query("SELECT MAX(id) FROM files WHERE category = :category")
+    suspend fun getMaxIdByCategory(category: String): Long?
 
     /**
      * 大库优化：基于主键游标的分页查询（按 id 顺序取页），
@@ -243,18 +253,6 @@ interface FileDao {
         afterId: Long,
         limit: Int,
     ): List<FileEntity>
-
-    /**
-     * 取分类内第 [offset] 条（按 id 升序，0 起），配合随机 offset 实现【均匀随机】封面。
-     * 相比“随机 id 下界”方案，本方法不受全局自增 id 空洞影响——
-     * 视频等分类若大量删除/被其他分类穿插，id 区间存在大空洞，
-     * 随机下界常落空导致回退到首条（封面看起来“不变”）。
-     */
-    @Query("SELECT * FROM files WHERE category = :category ORDER BY id LIMIT 1 OFFSET :offset")
-    suspend fun getFileByOffset(
-        category: String,
-        offset: Int,
-    ): FileEntity?
 
     /**
      * 大库优化：取分类内最近导入的一个文件作为封面（走 lastModified 索引，O(log n)），
@@ -283,4 +281,23 @@ interface FileDao {
         clearAll()
         upsertAll(entities)
     }
+
+    /**
+     * 按分类整体替换：只删该分类的旧行，再插入新行（单事务）。
+     *
+     * 全量同步旧实现用 [replaceAll]（clearAll + 插入全库）——一次「修复/找回文件」要重写
+     * 4 万行，且任何分类读取失败都会连带清掉其它分类。改成按分类替换后，每个分类各自原子，
+     * 未参与本次同步的分类一行都不动。
+     */
+    @Transaction
+    suspend fun replaceCategory(
+        category: String,
+        entities: List<FileEntity>,
+    ) {
+        _internalDeleteByCategory(category)
+        upsertAll(entities)
+    }
+
+    @Query("DELETE FROM files WHERE category = :category")
+    suspend fun _internalDeleteByCategory(category: String)
 }

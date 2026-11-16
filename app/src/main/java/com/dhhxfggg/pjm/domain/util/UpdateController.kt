@@ -48,6 +48,9 @@ object UpdateController {
     private var checkJob: Job? = null
     private var downloadJob: Job? = null
 
+    /** 用户主动 dismiss 掉的版本 tag：只为这一版跳过静默检查，之后发新版仍要提醒 */
+    private var dismissedTag: String? = null
+
     /**
      * 供设置页「检查更新」把结果同步给全局状态（横幅与设置页共用同一条数据）。
      */
@@ -63,7 +66,12 @@ object UpdateController {
         context: Context,
         delayMs: Long = 2500,
     ) {
-        if (checkJob?.isActive == true || _available.value != null || downloadJob?.isActive == true) return
+        // 核心修复：旧实现只要 _available 非空就永久 return，而 dismiss() 不清 _available ——
+        // 用户关掉横幅后，即使之后发布新版本，冷启动静默检查再也不会发起。
+        // 现在只对「已 dismiss 的同一 tag」跳过；新 tag 会重新检查并重置横幅。
+        val shown = _available.value
+        if (checkJob?.isActive == true || downloadJob?.isActive == true) return
+        if (shown != null && shown.latestVersion == dismissedTag) return
         val appContext = context.applicationContext
         checkJob =
             MainApplication.applicationScope.launch {
@@ -103,9 +111,11 @@ object UpdateController {
             }
     }
 
-    /** 用户关闭横幅 */
+    /** 用户关闭横幅：记住被关掉的版本并清空 available，避免下次冷启动被旧结果挡住 */
     fun dismiss() {
+        dismissedTag = _available.value?.latestVersion
         _dismissed.value = true
+        _available.value = null
     }
 
     fun consumeMessage() {

@@ -9,6 +9,7 @@ import com.dhhxfggg.pjm.R
 import com.dhhxfggg.pjm.domain.service.VaultService
 import com.dhhxfggg.pjm.domain.util.*
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -30,12 +31,16 @@ class CryptoViewModel
     constructor(
         private val app: Application,
     ) : AndroidViewModel(app) {
-        private val _events = MutableSharedFlow<CryptoEvent>()
+        // 一次性消费的事件通道（不再用 replay=1 的 SharedFlow）：
+        // · 未被消费的事件留在通道缓冲区里 —— 冷启动 handleIntent 早于 setContent 建立订阅也不会丢；
+        // · 事件一旦被消费就出队 —— Activity 重建不会重放上一条删除/密码请求
+        //   （replay=1 的旧实现在重建时会把上一条再弹一次）。
+        private val _events = Channel<CryptoEvent>(capacity = Channel.UNLIMITED)
 
         /**
-         * Shared flow for cryptographic events that require UI interaction.
+         * Flow of cryptographic events that require UI interaction（每个事件只会被消费一次）。
          */
-        val events = _events.asSharedFlow()
+        val events: Flow<CryptoEvent> = _events.receiveAsFlow()
 
         private val _uiState = MutableStateFlow(CryptoUiState())
 
@@ -98,7 +103,7 @@ class CryptoViewModel
                                             ).show()
                                     }
                                     if (result.uris.isNotEmpty()) {
-                                        _events.emit(CryptoEvent.RequestDeletePermission(result.uris))
+                                        _events.send(CryptoEvent.RequestDeletePermission(result.uris))
                                     }
                                 }
                                 VaultService.ACTION_ENCRYPT -> {
@@ -118,7 +123,7 @@ class CryptoViewModel
                         }
                         is OperationResult.PasswordRequired -> {
                             pendingUris = result.uris
-                            _events.emit(CryptoEvent.RequestPassword(result.fileName))
+                            _events.send(CryptoEvent.RequestPassword(result.fileName))
                         }
                     }
                 }

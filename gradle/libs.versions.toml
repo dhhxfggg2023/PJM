@@ -10,10 +10,10 @@ kotlin = "2.4.10"
 ktlint = "14.2.0"
 
 # AndroidX 核心
-coreKtx = "1.19.0"
+coreKtx = "1.19.1"
 lifecycle = "2.11.0"
 activityCompose = "1.10.0"
-exifinterface = "1.4.0"
+exifinterface = "1.4.2"
 navigationCompose = "2.9.8"
 datastore = "1.1.2"
 hiltNavigationCompose = "1.2.0"
@@ -30,7 +30,6 @@ coroutines = "1.11.0"
 
 # 压缩 / 归档
 commonsCompress = "1.27.1"
-commonsLang3 = "3.17.0"
 xz = "1.10"
 junrar = "7.5.5"
 slf4j = "1.7.36"
@@ -42,15 +41,12 @@ lucide = "2.2.1"
 coil = "3.5.0"
 
 # Media3
-media3 = "1.10.1"
+media3 = "1.11.1"
 
 # 图片缩放/手势（开源库，省得自己造轮子）
 telephoto = "0.19.0"
 # 文本/代码查看（Sora Editor，开源）
 
-
-# 日志
-timber = "5.0.1"
 
 # Shizuku
 shizuku = "13.1.5"
@@ -81,7 +77,6 @@ androidx-compose-ui = { group = "androidx.compose.ui", name = "ui" }
 androidx-compose-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
 androidx-compose-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
 androidx-compose-material3 = { group = "androidx.compose.material3", name = "material3" }
-androidx-compose-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended" }
 androidx-compose-foundation = { group = "androidx.compose.foundation", name = "foundation" }
 
 # ---- Room ----
@@ -100,7 +95,6 @@ kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-
 
 # ---- 压缩 / 归档 ----
 apache-commons-compress = { group = "org.apache.commons", name = "commons-compress", version.ref = "commonsCompress" }
-apache-commons-lang3 = { group = "org.apache.commons", name = "commons-lang3", version.ref = "commonsLang3" }
 tukaani-xz = { group = "org.tukaani", name = "xz", version.ref = "xz" }
 junrar = { group = "com.github.junrar", name = "junrar", version.ref = "junrar" }
 slf4j-android = { group = "org.slf4j", name = "slf4j-android", version.ref = "slf4j" }
@@ -120,9 +114,6 @@ androidx-media3-session = { group = "androidx.media3", name = "media3-session", 
 telephoto-zoomable = { group = "me.saket.telephoto", name = "zoomable", version.ref = "telephoto" }
 telephoto-zoomable-image-coil3 = { group = "me.saket.telephoto", name = "zoomable-image-coil3", version.ref = "telephoto" }
 androidx-media3-common = { group = "androidx.media3", name = "media3-common", version.ref = "media3" }
-
-# ---- 日志 ----
-timber = { group = "com.jakewharton.timber", name = "timber", version.ref = "timber" }
 
 # ---- Shizuku ----
 shizuku-api = { group = "dev.rikka.shizuku", name = "api", version.ref = "shizuku" }

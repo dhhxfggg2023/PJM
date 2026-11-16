@@ -28,6 +28,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
 import androidx.lifecycle.compose.LifecycleResumeEffect
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.composables.icons.lucide.*
 import com.dhhxfggg.pjm.R
 import com.dhhxfggg.pjm.data.model.ManagedAppEntity
@@ -55,10 +56,10 @@ import java.util.Locale
 @Composable
 internal fun AppsTakeoverSettings(takeoverViewModel: TakeoverViewModel) {
     val context = LocalContext.current
-    val enabled by takeoverViewModel.enabled.collectAsState()
-    val managedApps by takeoverViewModel.managedApps.collectAsState()
-    val deleteFailures by takeoverViewModel.deleteFailures.collectAsState()
-    val importFailures by takeoverViewModel.importFailures.collectAsState()
+    val enabled by takeoverViewModel.enabled.collectAsStateWithLifecycle()
+    val managedApps by takeoverViewModel.managedApps.collectAsStateWithLifecycle()
+    val deleteFailures by takeoverViewModel.deleteFailures.collectAsStateWithLifecycle()
+    val importFailures by takeoverViewModel.importFailures.collectAsStateWithLifecycle()
 
     var showPicker by remember { mutableStateOf(false) }
     val supported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q

@@ -8,6 +8,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -51,7 +52,18 @@ sealed class Screen(
 fun AppNavHost(
     navController: NavHostController = rememberNavController(),
     startDestination: String = Screen.Main.route,
+    // 核心修复：singleTask 下 onNewIntent 只会更新 State，而 NavHost 的 startDestination
+    // 仅在首次建图时生效。快捷方式/二次分享需要一条「一次性导航事件」通道。
+    pendingRoute: kotlinx.coroutines.flow.StateFlow<String?> =
+        remember { kotlinx.coroutines.flow.MutableStateFlow(null) },
 ) {
+    val pending by pendingRoute.collectAsStateWithLifecycle()
+    LaunchedEffect(pending) {
+        val route = pending ?: return@LaunchedEffect
+        navController.navigate(route) { launchSingleTop = true }
+        @Suppress("UNCHECKED_CAST")
+        (pendingRoute as? kotlinx.coroutines.flow.MutableStateFlow<String?>)?.value = null
+    }
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
     // 给调试版慢帧统计标注当前页面，日志里能直接看到是哪一屏在掉帧

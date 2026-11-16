@@ -18,6 +18,8 @@ import androidx.room.PrimaryKey
         Index(value = ["lastModified"]),
         // 分类列表是 WHERE category=? ORDER BY lastModified DESC，复合索引直接出顺序，省掉 4 万行排序
         Index(value = ["category", "lastModified"]),
+        // 随机抽取 / 键集分页是 WHERE category=? AND id >= ? ORDER BY id，复合索引直接 seek
+        Index(value = ["category", "id"]),
     ],
 )
 @Immutable

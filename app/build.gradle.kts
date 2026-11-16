@@ -10,7 +10,10 @@ plugins {
     alias(libs.plugins.ktlint)
 }
 
-// 可选：根目录 keystore.properties 存在时使用正式签名；否则回退 debug 签名（保持现有行为）。
+// 签名策略（2026-11-16 用户确认）：根目录 keystore.properties 存在时用正式签名；
+// 否则【暂时】用 debug 签名打 release —— 这是当前明确接受的行为，不是疏漏。
+// 已知影响：debug 证书随构建环境变化，装了这种包的设备后续无法直接覆盖安装正式签名版；
+// 未来要正式发布时，补上 keystore.properties 即自动切回正式签名，无需改本文件。
 // 文件格式：storeFile=/绝对路径/release.jks, storePassword=..., keyAlias=..., keyPassword=...
 val keystorePropertiesFile = rootProject.file("keystore.properties")
 val keystoreProperties =
@@ -19,6 +22,7 @@ val keystoreProperties =
             keystorePropertiesFile.inputStream().use { load(it) }
         }
     }
+val hasReleaseKeystore = keystorePropertiesFile.exists()
 
 android {
     namespace = "com.dhhxfggg.pjm"
@@ -31,8 +35,8 @@ android {
         applicationId = "com.dhhxfggg.pjm"
         minSdk = 24
         targetSdk = 35
-        versionCode = 52
-        versionName = "2.1.5"
+        versionCode = 53
+        versionName = "2.1.6"
 
         ndk {
             // 只留真机架构：x86/x86_64 只有模拟器用得上，留在包里等于让每个用户
@@ -57,7 +61,7 @@ android {
             enableV3Signing = true
             enableV4Signing = true
         }
-        if (keystorePropertiesFile.exists()) {
+        if (hasReleaseKeystore) {
             create("release") {
                 storeFile = file(keystoreProperties.getProperty("storeFile"))
                 storePassword = keystoreProperties.getProperty("storePassword")
@@ -74,8 +78,9 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
+            // 缺正式签名时按当前约定回退 debug 签名（见文件头签名策略说明）。
             signingConfig =
-                if (keystorePropertiesFile.exists()) {
+                if (hasReleaseKeystore) {
                     signingConfigs.getByName("release")
                 } else {
                     signingConfigs.getByName("debug")
@@ -128,7 +133,6 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
-    implementation(libs.androidx.compose.material.icons.extended)
     implementation(libs.androidx.compose.foundation)
 
     // AndroidX 核心
@@ -146,7 +150,6 @@ dependencies {
 
     // 压缩 / 归档
     implementation(libs.apache.commons.compress)
-    implementation(libs.apache.commons.lang3)
     implementation(libs.tukaani.xz)
     implementation(libs.junrar)
     implementation(libs.slf4j.android)
@@ -181,7 +184,6 @@ dependencies {
     implementation(libs.androidx.media3.common)
 
     // 日志
-    implementation(libs.timber)
 
     // Shizuku：以 shell/root 身份访问 Android/data（突破 Android 14 SAF 限制）
     implementation(libs.shizuku.api)

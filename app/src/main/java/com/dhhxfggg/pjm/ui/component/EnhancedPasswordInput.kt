@@ -71,7 +71,10 @@ fun EnhancedPasswordInput(
                             } else {
                                 Lucide.EyeOff
                             },
-                        contentDescription = null,
+                        contentDescription =
+                            stringResource(
+                                if (passwordVisible) R.string.cd_password_hide else R.string.cd_password_show,
+                            ),
                     )
                 }
             },

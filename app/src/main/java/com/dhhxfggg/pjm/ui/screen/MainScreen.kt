@@ -26,6 +26,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
@@ -57,7 +58,7 @@ fun MainScreen(
 ) {
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
-    val uiState by mainViewModel.uiState.collectAsState()
+    val uiState by mainViewModel.uiState.collectAsStateWithLifecycle()
 
     val iconPack = rememberIconPack()
 
@@ -142,7 +143,7 @@ fun getCategoryInfo(
     val primaryColor = MaterialTheme.colorScheme.primary
     return when (category) {
         VaultManager.CAT_PJM -> Triple(stringResource(R.string.cat_pjm_display), iconPack.catPjm, primaryColor)
-        VaultManager.CAT_BILI_VIDEOS -> Triple("B站视频", iconPack.catBiliVideos, PresetBiliPink)
+        VaultManager.CAT_BILI_VIDEOS -> Triple(stringResource(R.string.mode_bili_videos), iconPack.catBiliVideos, PresetBiliPink)
         VaultManager.CAT_IMAGES -> Triple(stringResource(R.string.cat_images_display), iconPack.catImages, PresetForest)
         VaultManager.CAT_VIDEOS -> Triple(stringResource(R.string.cat_videos_display), iconPack.catVideos, PresetAmber)
         // 核心修复：音频库原先用 PresetRose(#FF6B9C)，与 B站视频的 PresetBiliPink(#FB7299)
@@ -201,19 +202,24 @@ fun StorageUsageModule(
                             val categoryInfo = getCategoryInfo(category, iconPack)
                             val color = categoryInfo.third
 
-                            val animatedWeight by animateFloatAsState(
-                                targetValue = weight,
-                                animationSpec = spring(stiffness = Spring.StiffnessLow),
-                                label = "weight_$category",
-                            )
+                            // 核心修复：animateFloatAsState 必须按分类 key() ——
+                            // 直接放在 forEach 里时，分类从「0 个非空」变「1 个非空」会复用同一个
+                            // 动画槽位，前一分类的动画状态被后一分类继承，出现权重错位。
+                            key(category) {
+                                val animatedWeight by animateFloatAsState(
+                                    targetValue = weight,
+                                    animationSpec = spring(stiffness = Spring.StiffnessLow),
+                                    label = "weight_$category",
+                                )
 
-                            Box(
-                                modifier =
-                                    Modifier
-                                        .fillMaxHeight()
-                                        .weight(animatedWeight.coerceAtLeast(0.001f))
-                                        .background(color),
-                            )
+                                Box(
+                                    modifier =
+                                        Modifier
+                                            .fillMaxHeight()
+                                            .weight(animatedWeight.coerceAtLeast(0.001f))
+                                            .background(color),
+                                )
+                            }
                         }
                     }
                 }
@@ -291,8 +297,9 @@ fun VaultCategoryCard(
         border = androidx.compose.foundation.BorderStroke(0.5.dp, glassBorderColor),
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
+            // 核心修复：不在组合期做 latestFile.exists() 的 stat 调用（滚动/重组时每次都碰磁盘）。
+            // 文件被删/不可读时交给 Coil 的 error 分支（封面不显示，图标兜底）。
             if (latestFile != null &&
-                latestFile.exists() &&
                 (FileUtils.isImageFile(latestFile.name) || FileUtils.isVideoFile(latestFile.name))
             ) {
                 // 核心优化：用 remember 缓存 ImageRequest 对象，避免每次重组重建；

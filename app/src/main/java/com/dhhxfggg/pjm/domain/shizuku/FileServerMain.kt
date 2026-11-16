@@ -31,9 +31,6 @@ object FileServerMain {
     /** 简单鉴权令牌 */
     private const val AUTH_TOKEN = "pjm_privileged_v1"
 
-    /** 特权服务允许操作的根（共享存储）；其余路径（/data、/system 等）一律拒绝。 */
-    private const val SHARED_ROOT = "/storage/emulated/0"
-
     /** 请求/响应文件名前缀 */
     private const val REQ_PREFIX = "req_"
     private const val RESP_PREFIX = "resp_"
@@ -308,7 +305,8 @@ object FileServerMain {
                     "delete" -> {
                         val path = parts.getOrNull(1) ?: ""
                         val f = File(path)
-                        if (!isSharedStoragePath(path)) {
+                        // 核心修复：与 AIDL 侧统一，禁止删除共享存储根与一级子目录（DCIM/Download 等）。
+                        if (!PrivilegedPaths.isSafeDeleteTarget(path)) {
                             "ERR\tpath not allowed"
                         } else if (!f.exists()) {
                             "OK\ttrue"
@@ -367,21 +365,12 @@ object FileServerMain {
         }
     }
 
-    /** 只允许共享存储（/storage/emulated/0）内的路径。 */
-    private fun isSharedStoragePath(path: String): Boolean =
-        runCatching {
-            val canonical = File(path).canonicalPath
-            canonical == SHARED_ROOT || canonical.startsWith(SHARED_ROOT + "/")
-        }.getOrDefault(false)
+    /** 只允许共享存储（/storage/emulated/0）内的路径。委托共享校验，避免与 AIDL 侧漂移。 */
+    private fun isSharedStoragePath(path: String): Boolean = PrivilegedPaths.isSharedStorage(path)
 
     /** 是否位于指定目录内（用于限制 copy 的落地目录）。 */
     private fun isInsidePath(
         path: String,
         root: File,
-    ): Boolean =
-        runCatching {
-            val canonical = File(path).canonicalPath
-            val rootPath = root.canonicalPath
-            canonical == rootPath || canonical.startsWith(rootPath + "/")
-        }.getOrDefault(false)
+    ): Boolean = PrivilegedPaths.isInside(path, root)
 }

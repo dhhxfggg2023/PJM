@@ -57,7 +57,10 @@ object ShareUtils {
         if (ext.isNotEmpty()) {
             MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext)?.let { return it }
         }
-        return fromResolver ?: FALLBACK_MIME
+        // 核心修复：fromResolver 可能是空串（个别 ContentProvider 返回 ""），
+        // 原来的 `?: FALLBACK_MIME` 只兜住 null —— 空串会被原样返回，
+        // 接收方拿到 type="" 的 Intent 会当作"无类型"，分享面板可能直接不匹配任何应用。
+        return fromResolver?.takeIf { it.isNotBlank() } ?: FALLBACK_MIME
     }
 
     /**
@@ -100,6 +103,11 @@ object ShareUtils {
     /**
      * 构造最终交给 `startActivity` 的 chooser Intent。
      * URI 为空时返回 null。
+     *
+     * 已知风险（本轮刻意不改，只记录）：批量分享把全部 URI 塞进一个 Intent
+     * （EXTRA_STREAM + ClipData），Binder 事务上限约 1MB；经验上超过约 200 项时
+     * 接收方可能抛 TransactionTooLargeException（由调用方的 runCatching 兜住）。
+     * 这里**不做静默截断** —— 截断会变成"少发文件且无提示"，比如实失败更难排查。
      */
     fun createShareChooser(
         context: Context,
@@ -107,6 +115,10 @@ object ShareUtils {
         chooserTitle: String,
     ): Intent? {
         if (uris.isEmpty()) return null
+        // 超过经验上限时留一条日志，便于把"分享没反应"定位到事务超限而不是 MIME/URI
+        if (uris.size > MAX_SAFE_SHARE_ITEMS) {
+            PjmLogger.w(TAG, "批量分享 " + uris.size + " 项，超过约 " + MAX_SAFE_SHARE_ITEMS + " 项时可能触发 TransactionTooLargeException")
+        }
         val mimeType = resolveCommonMimeType(context, uris)
         val multiple = uris.size > 1
         val target =
@@ -160,4 +172,9 @@ object ShareUtils {
     }
 
     private const val CLIP_LABEL = "pjm_share"
+
+    private const val TAG = "ShareUtils"
+
+    /** 批量分享的经验安全上限（Binder 事务 1MB；不强制截断，只用于日志提示） */
+    private const val MAX_SAFE_SHARE_ITEMS = 200
 }

@@ -8,7 +8,6 @@ import com.dhhxfggg.pjm.R
 import com.dhhxfggg.pjm.data.db.FileDao
 import com.dhhxfggg.pjm.data.model.FileEntity
 import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -57,11 +56,14 @@ data class IngestionSummary(
 object VaultManager {
     private const val TAG = "VaultManager"
     private const val VAULT_ROOT = VaultPaths.VAULT_ROOT
+
+    /** 临时文件清理时间窗：只清理 1 小时前的残留（避免误删正在写入的容器） */
+    private const val STALE_TEMP_MIN_AGE_MS = 60L * 60 * 1000
     private val mutex = Mutex()
 
     /**
-     * 数据库写入互斥（核心修复）：全量同步用 replaceAll（clearAll + 插入），
-     * 与导入/打包的 upsert 并发时，clearAll 的窗口会把刚入库的行删掉
+     * 数据库写入互斥（核心修复）：全量同步按分类整体替换（只删当前分类再插入），
+     * 与导入/打包的 upsert 并发时，「删分类 → 插入」的窗口会把刚入库的行删掉
      * （文件仍在磁盘，但界面上暂时看不见）。所有写入串行化，代价可以忽略。
      */
     internal val dbWriteMutex = Mutex()
@@ -78,6 +80,17 @@ object VaultManager {
                     Runtime.getRuntime().availableProcessors().coerceIn(2, 8),
                 ).asCoroutineDispatcher()
         val Database = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+
+        /**
+         * 图片/媒体解码专用调度器：只 3 路并发。
+         *
+         * 解码是 CPU + 内存双重密集（一张大图解码后就是几十 MB 堆），和哈希/复制这类
+         * 普通 IO 混在同一个 8 线程池里，会同时把 CPU 与堆打满（OOM 点），还会挤占
+         * 删除/导入等用户可感知的操作。这里固定 3 路，语义等同原 VaultScanner 里
+         * 手写的 Semaphore(3)，但不再占用 IO 池线程。
+         */
+        @OptIn(ExperimentalCoroutinesApi::class)
+        val Decode = Dispatchers.Default.limitedParallelism(3)
     }
 
     const val ADAPTIVE_BUFFER_SIZE = 1024 * 1024
@@ -90,8 +103,18 @@ object VaultManager {
             if (byteArrayPool.isEmpty()) ByteArray(ADAPTIVE_BUFFER_SIZE) else byteArrayPool.removeAt(0)
         }
 
-    fun releaseBuffer(buffer: ByteArray) {
-        Arrays.fill(buffer, 0.toByte())
+    /**
+     * 归还 1MB 缓冲。
+     *
+     * 旧实现每次归还都整块清零：digest / copy / hash 这些高频路径上，
+     * 每块 1MB 的 Arrays.fill 是纯浪费（GB 级复制等于多写几 GB 内存带宽）。
+     * 只有容器/密码相关的缓冲才需要擦除，调用方按需传 [secure] = true。
+     */
+    fun releaseBuffer(
+        buffer: ByteArray,
+        secure: Boolean = false,
+    ) {
+        if (secure) Arrays.fill(buffer, 0.toByte())
         synchronized(byteArrayPool) { if (byteArrayPool.size < 16) byteArrayPool.add(buffer) }
     }
 
@@ -190,7 +213,19 @@ object VaultManager {
                         }
                     }
                     if (inputStream is FileInputStream) {
-                        inputStream.channel.transferTo(0, inputStream.channel.size(), fos.channel)
+                        // 核心修复：FileChannel.transferTo 不保证一次传完（可能只传一部分就返回）。
+                        // 旧实现只调一次且忽略返回值，随后按 fos.channel.position() 截断，
+                        // 等于把「短传后的长度」当成真实内容固化 —— GB 级合并视频会静默损坏。
+                        // 循环传输并强校验：任何短传都抛异常走失败回滚，绝不产出残缺文件。
+                        val srcChannel = inputStream.channel
+                        val srcSize = srcChannel.size()
+                        var pos = 0L
+                        while (pos < srcSize) {
+                            val n = srcChannel.transferTo(pos, srcSize - pos, fos.channel)
+                            if (n <= 0) throw IOException("transferTo stalled at " + pos + " / " + srcSize)
+                            pos += n
+                        }
+                        if (pos != srcSize) throw IOException("transferTo short write: " + pos + " / " + srcSize)
                     } else {
                         val buffer = acquireBuffer()
                         try {
@@ -255,6 +290,9 @@ object VaultManager {
                 )
             } catch (e: Exception) {
                 tempFile.delete()
+                // 核心修复：rename 回退复制中途失败时，半截 targetFile 会留在保险库，
+                // 下次全量同步又会把它当正常文件索引（幽灵条目、占空间、可被分享）。
+                runCatching { if (targetFile.exists()) shredFile(targetFile) }
                 PjmResult.Failure("Ingest failed", exception = e)
             } finally {
                 // 核心修复：本函数消费完输入流后必须关闭它。
@@ -284,6 +322,14 @@ object VaultManager {
     internal fun isTransientFile(file: File): Boolean = file.name.contains(CryptoUtils.TEMP_FILE_MARKER)
 
     /**
+     * 冷启动清理的时间窗：只删 1 小时前的残留。
+     *
+     * 只按文件名判断会与「正在进行的导出」并发：导出线程刚建好 .tmp_ 容器还没写完，
+     * 冷启动清理就把它删掉（导出随后失败，且没有任何提示）。真正的崩溃残留必然早于 1 小时。
+     */
+    private fun isStaleTemp(file: File): Boolean = System.currentTimeMillis() - file.lastModified() > STALE_TEMP_MIN_AGE_MS
+
+    /**
      * 冷启动清理：删除崩溃/被杀进程残留的容器临时文件。
      *
      * 这些文件正常情况下在 rename 成功或 catch 分支里就被删了；只有进程异常终止才会留下。
@@ -296,14 +342,15 @@ object VaultManager {
             var removed = 0
             CATEGORIES.forEach { cat ->
                 getCategoryDir(context, cat).listFiles()?.forEach { f ->
-                    if (f.isFile && isTransientFile(f) && shredFile(f)) removed++
+                    if (f.isFile && isTransientFile(f) && isStaleTemp(f) && shredFile(f)) removed++
                 }
             }
             // 特权文件服务/Shizuku 会把解密后的音视频复制到 getExternalFilesDir/tmp 供 shell 读取。
             // 这些副本不属于保险库、也没有任何清理路径，会长期留在外部私有目录。
+            // 同样加时间窗：可能正被某个进行中的播放/导出任务读取，太新的不动。
             context.getExternalFilesDir(null)?.let { ext ->
                 File(ext, "tmp").listFiles()?.forEach { f ->
-                    if (f.isFile && (f.name.startsWith("embedded_") || f.name.startsWith("shizuku_"))) {
+                    if (f.isFile && (f.name.startsWith("embedded_") || f.name.startsWith("shizuku_")) && isStaleTemp(f)) {
                         if (shredFile(f)) removed++
                     }
                 }
@@ -466,26 +513,56 @@ object VaultManager {
         onProgress: (Float) -> Unit = {},
     ) = withContext(PjmDispatchers.IO) {
         mutex.withLock {
-            val list = mutableListOf<Pair<File, String>>()
+            // 按分类收集文件：后续可以「逐分类取旧行 → 逐分类生成实体」，
+            // 不再需要一次性把全库旧行（4 万行）materialize 到内存里。
+            val filesByCategory = LinkedHashMap<String, MutableList<File>>()
             // 核心修复：跳过容器写入过程中残留的临时文件（`*.tmp_*`）。
             // 它们与正式容器同目录，进程被杀时不会被清理，而 getFileExtension 会把
             // `X.pjm.1.tmp_123` 判成 "pjm" —— 半成品容器就会被当成正式资产索引进文件柜。
+            var listingFailed = false
             CATEGORIES.forEach { cat ->
-                getCategoryDir(context, cat).listFiles()?.filter { it.isFile && !isTransientFile(it) }?.forEach { list.add(it to cat) }
+                val files = getCategoryDir(context, cat).listFiles()
+                if (files == null) {
+                    // listFiles() 返回 null 表示目录不可读/IO 失败，绝不能当成"空目录"。
+                    listingFailed = true
+                    return@forEach
+                }
+                // 成功列举的空目录也要进 map：本分类会被替换成 0 行，清掉库里已不存在文件的
+                // 残留索引；而列举失败、未进入 map 的分类完全不动。
+                val categoryFiles = filesByCategory.getOrPut(cat) { mutableListOf() }
+                files.filter { it.isFile && !isTransientFile(it) }.forEach { f -> categoryFiles.add(f) }
             }
+            val totalCount = filesByCategory.values.sumOf { it.size }
 
             // 核心修复：重建索引时**保留未变化文件的 contentHash**。
             //
-            // 旧实现一律写 null，而 replaceAll 是「先清表再插入」—— 于是每次点「修复/找回文件」
+            // 旧实现一律写 null，而全量同步是「先清表再插入」—— 于是每次点「修复/找回文件」
             // 都把全部 MD5 / 视频感知指纹抹掉，下次查重要把整个库（可能几十 GB）重新读一遍。
             // 用户为了清掉一两条幽灵记录点一次修复，代价是十几分钟的重算，非常不合理。
             //
             // 匹配规则：relativePath 相同**且** size、lastModified 都相同，才认为文件未变、
             // 指纹依然有效。任一项不同就不沿用 —— 宁可重算，也绝不误用过期指纹去判重。
-            val previous = fileDao.getAllFiles().first().associateBy { it.relativePath }
-            val entities =
-                list.mapIndexed { i, (f, c) ->
-                    onProgress(i.toFloat() / list.size)
+            // 核心修复：目录列举失败时绝不清空索引。
+            // 「先清表再插入」时，entities 为空会把 name / importedAt / contentHash 全部抹掉；
+            // 文件还在磁盘上，但原始文件名与入库时间永久丢失。
+            // 旧实现为此把整库旧行读进内存；现在只需一个 COUNT 就知道旧索引是否非空。
+            if (listingFailed && fileDao.getTotalFileCount() > 0L) {
+                PjmLogger.w(TAG, "fullSyncDatabase aborted: category listing failed, keep existing rows")
+                return@withLock
+            }
+            // 逐分类构造实体，再统一在写锁内按分类替换：每个分类各自一个事务，
+            // 未参与本次同步的分类一行都不动（replaceAll 的全局清表不再使用）。
+            val entitiesByCategory = LinkedHashMap<String, List<FileEntity>>()
+            var done = 0
+            filesByCategory.forEach { (category, files) ->
+                // 旧行 map 按分类分批构建、用完即弃：峰值从「全库旧行 + 全库新行」
+                // 降到「单分类旧行 + 全库新行」，4 万行时省下的是成百 MB 的实体拷贝。
+                val previous = fileDao.getFilesByCategoryOnce(category).associateBy { it.relativePath }
+                val categoryEntities = ArrayList<FileEntity>(files.size)
+                files.forEach { f ->
+                    // totalCount 为 0（所有分类都空）时不做除法，避免 NaN 进度
+                    if (totalCount > 0) onProgress(done.toFloat() / totalCount)
+                    done++
                     val relativePath = getRelativePath(context, f)
                     val size = f.length()
                     val lastModified = f.lastModified()
@@ -494,24 +571,30 @@ object VaultManager {
                         old?.contentHash?.takeIf {
                             old.size == size && old.lastModified == lastModified
                         }
-                    FileEntity(
-                        relativePath = relativePath,
-                        // 核心修复：重建索引绝不能把 name 改回磁盘文件名。
-                        // 命名规范里磁盘名是 UUID / PJM_时间，而 name 存的是"导入时的原名"，
-                        // 之前这里写 f.name，一次「修复/找回文件」就把全库原名清成 UUID，
-                        // 库里的文件从此全变成看不出是什么的乱码名。
-                        name = old?.name?.takeIf { it.isNotBlank() } ?: f.name,
-                        size = size,
-                        category = c,
-                        lastModified = lastModified,
-                        isImage = FileUtils.isImageFile(f.name),
-                        extension = FileUtils.getFileExtension(f.name),
-                        contentHash = carriedHash,
-                        // 入库时间同理：丢了就只能退回文件时间，图片的 PJM_时间 命名会跟着漂
-                        importedAt = old?.importedAt ?: 0L,
+                    categoryEntities.add(
+                        FileEntity(
+                            relativePath = relativePath,
+                            // 核心修复：重建索引绝不能把 name 改回磁盘文件名。
+                            // 命名规范里磁盘名是 UUID / PJM_时间，而 name 存的是"导入时的原名"，
+                            // 之前这里写 f.name，一次「修复/找回文件」就把全库原名清成 UUID，
+                            // 库里的文件从此全变成看不出是什么的乱码名。
+                            name = old?.name?.takeIf { it.isNotBlank() } ?: f.name,
+                            size = size,
+                            category = category,
+                            lastModified = lastModified,
+                            isImage = FileUtils.isImageFile(f.name),
+                            extension = FileUtils.getFileExtension(f.name),
+                            contentHash = carriedHash,
+                            // 入库时间同理：丢了就只能退回文件时间，图片的 PJM_时间 命名会跟着漂
+                            importedAt = old?.importedAt ?: 0L,
+                        ),
                     )
                 }
-            withDbWriteLock { fileDao.replaceAll(entities) }
+                entitiesByCategory[category] = categoryEntities
+            }
+            withDbWriteLock {
+                entitiesByCategory.forEach { (category, entities) -> fileDao.replaceCategory(category, entities) }
+            }
         }
     }
 
@@ -699,8 +782,8 @@ data class DuplicateGroup(
 )
 
 /**
- * 带全局写锁的 upsert 扩展（核心修复）：全量同步的 replaceAll 与导入/打包的写入串行，
- * 避免 clearAll 窗口把刚入库的行删掉。
+ * 带全局写锁的 upsert 扩展（核心修复）：全量同步的按分类替换与导入/打包的写入串行，
+ * 避免「删分类 → 插入」窗口把刚入库的行删掉。
  */
 internal suspend fun FileDao.upsertLocked(entity: FileEntity) = VaultManager.withDbWriteLock { upsert(entity) }
 

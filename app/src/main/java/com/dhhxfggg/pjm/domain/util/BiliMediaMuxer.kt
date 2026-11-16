@@ -24,6 +24,10 @@ import java.nio.ByteBuffer
 object BiliMediaMuxer {
     private const val TAG = "BiliMediaMuxer"
 
+    /** 单样本上限：4K/高码率 m4s 的单样本可能远超旧实现的 2MB */
+    private const val INITIAL_SAMPLE_BYTES = 8 * 1024 * 1024
+    private const val MAX_SAMPLE_BYTES = 64 * 1024 * 1024
+
     suspend fun merge(
         context: Context,
         item: BiliBridge.BiliCacheItem,
@@ -34,15 +38,18 @@ object BiliMediaMuxer {
                 val cacheDir = context.cacheDir
                 val vTmp = File(cacheDir, "bili_v_${System.nanoTime()}.m4v")
                 val aTmp = File(cacheDir, "bili_a_${System.nanoTime()}.m4a")
+                // 声明在 try 之外：失败路径的 finally 也要能清理临时副本
+                var vLocal: File? = null
+                var aLocal: File? = null
                 try {
                     // 特权模式：先把 m4s 从 Android/data 复制到本地临时文件（主进程可读），再走既有流程
-                    val vLocal =
+                    vLocal =
                         if (item.shizukuVideoPath != null) {
                             ShizukuBridge.copyToCache(context, item.shizukuVideoPath)
                         } else {
                             null
                         }
-                    val aLocal =
+                    aLocal =
                         if (item.shizukuAudioPath != null) {
                             ShizukuBridge.copyToCache(context, item.shizukuAudioPath)
                         } else {
@@ -80,10 +87,16 @@ object BiliMediaMuxer {
                 } finally {
                     vTmp.delete()
                     aTmp.delete()
-                    // 核心优化：清理共享 tmp 目录残留（copyToShared 产物）
+                    // 核心修复：sniffAndStrip 抛异常时 vLocal/aLocal 会留在外部临时目录，
+                    // 旧实现只在正常路径删，失败路径要等下一次合并的 10 分钟清理。
+                    vLocal?.delete()
+                    aLocal?.delete()
+                    // 核心修复：只清理超过 10 分钟的老残留（copyToShared 产物），绝不误删并发任务的活跃文件
                     try {
                         context.getExternalFilesDir(null)?.let { ext ->
-                            File(ext, "tmp").listFiles()?.forEach { it.delete() }
+                            // 只清 10 分钟前的老残留：避免并发合并时删掉别的任务还在读的活跃临时文件
+                            val cutoff = System.currentTimeMillis() - 10L * 60 * 1000
+                            File(ext, "tmp").listFiles()?.filter { it.isFile && it.lastModified() < cutoff }?.forEach { it.delete() }
                         }
                     } catch (_: Exception) {
                     }
@@ -156,18 +169,25 @@ object BiliMediaMuxer {
             val vTrack = findTrack(videoExtractor, "video/")
             val aTrack = findTrack(audioExtractor, "audio/")
             if (vTrack < 0 || aTrack < 0) throw IOException("找不到音视频轨道 (V:$vTrack, A:$aTrack)")
-            val vIdx = muxer.addTrack(videoExtractor.getTrackFormat(vTrack))
+            val vFormat = videoExtractor.getTrackFormat(vTrack)
+            // 核心修复：MediaMuxer 不会从 track format 继承旋转，竖屏拍摄的视频合并后会躺倒
+            runCatching { muxer.setOrientationHint(vFormat.getInteger(MediaFormat.KEY_ROTATION)) }
+            val vIdx = muxer.addTrack(vFormat)
             val aIdx = muxer.addTrack(audioExtractor.getTrackFormat(aTrack))
             muxer.start()
-            val buffer = ByteBuffer.allocateDirect(2 * 1024 * 1024)
-            val info = MediaCodec.BufferInfo()
-            writeTrack(videoExtractor, vTrack, muxer, vIdx, buffer, info)
-            writeTrack(audioExtractor, aTrack, muxer, aIdx, buffer, info)
+            writeTrack(videoExtractor, vTrack, muxer, vIdx)
+            writeTrack(audioExtractor, aTrack, muxer, aIdx)
             muxer.stop()
+        } catch (e: Exception) {
+            // 半成品 MP4 绝不能留下：上层若已建 DB 记录会得到不可播文件
+            runCatching { outputFile.delete() }
+            throw e
         } finally {
             videoExtractor.release()
             audioExtractor.release()
-            muxer?.release()
+            // 核心修复：stop() 抛异常后再 release() 可能再抛 IllegalStateException，
+            // 会覆盖真正的 IOException。release 失败不应改变主异常。
+            runCatching { muxer?.release() }
         }
     }
 
@@ -176,14 +196,21 @@ object BiliMediaMuxer {
         track: Int,
         mx: MediaMuxer,
         mxIdx: Int,
-        buf: ByteBuffer,
-        info: MediaCodec.BufferInfo,
     ) {
         ex.selectTrack(track)
+        var buf = ByteBuffer.allocateDirect(INITIAL_SAMPLE_BYTES)
+        val info = MediaCodec.BufferInfo()
         while (true) {
             info.offset = 0
-            info.size = ex.readSampleData(buf, 0)
-            if (info.size < 0) break
+            var size = ex.readSampleData(buf, 0)
+            // 核心修复：样本大于缓冲区时 readSampleData 返回 -1，旧实现直接 break 当作 EOS ——
+            // 4K/高码率视频因此"合并成功但后半段/大样本丢失"。按需扩容后重试（EOS 时 sampleTime=-1）。
+            while (size < 0 && ex.sampleTime >= 0 && buf.capacity() < MAX_SAMPLE_BYTES) {
+                buf = ByteBuffer.allocateDirect(minOf(buf.capacity() * 2, MAX_SAMPLE_BYTES))
+                size = ex.readSampleData(buf, 0)
+            }
+            if (size < 0) break
+            info.size = size
             info.presentationTimeUs = ex.sampleTime
             @Suppress("WrongConstant")
             info.flags = ex.sampleFlags

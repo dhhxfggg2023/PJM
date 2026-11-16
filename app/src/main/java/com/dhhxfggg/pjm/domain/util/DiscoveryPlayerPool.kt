@@ -19,6 +19,8 @@ import java.util.ArrayDeque
 object DiscoveryPlayerPool {
     private const val POOL_SIZE = 2
 
+    private const val TAG = "DiscoveryPlayerPool"
+
     private val pool = ArrayDeque<ExoPlayer>()
     private val inUse = mutableSetOf<ExoPlayer>()
 
@@ -73,6 +75,26 @@ object DiscoveryPlayerPool {
             } catch (_: Exception) {
             }
         }
+    }
+
+    /**
+     * 内存压力回收（由 MainApplication 在 onTrimMemory 里调用）。
+     *
+     * 背景：池是进程级单例，最多常驻 [POOL_SIZE] 个 ExoPlayer，每个都握着 MediaCodec
+     * 硬解实例，却从不随系统内存压力收缩 —— 后台时容易被判定为内存大户直接杀进程。
+     *
+     * 语义（刻意如此，不改 acquire/release 契约）：
+     *  - **空闲**实例（在 pool 里）直接 release，下次 acquire 重新创建；
+     *  - **正在使用**（inUse）的实例只 stop、不 release —— 调用方手里还握着这个引用，
+     *    release 之后再用会抛异常。stop 后续播会在下次 prepare 时恢复。
+     */
+    @Synchronized
+    fun trimMemory() {
+        val idle = pool.size
+        pool.forEach { runCatching { it.release() } }
+        pool.clear()
+        inUse.forEach { runCatching { it.stop() } }
+        if (idle > 0) PjmLogger.d(TAG, "内存压力回收：释放空闲播放器 " + idle + " 个，停止在用播放器 " + inUse.size + " 个")
     }
 
     /**

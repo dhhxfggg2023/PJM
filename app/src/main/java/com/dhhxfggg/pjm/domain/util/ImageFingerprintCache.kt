@@ -4,9 +4,10 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
-import android.media.ExifInterface
+import androidx.exifinterface.media.ExifInterface
 import com.dhhxfggg.pjm.data.model.FileEntity
 import java.io.File
+import java.util.UUID
 import kotlin.math.abs
 
 /**
@@ -120,9 +121,8 @@ object ImageFingerprintCache {
         entity: FileEntity,
         fp: ImageFingerprint,
     ) {
-        try {
-            fpFile(context, entity).writeText("${fp.dHash}|${fp.width}|${fp.height}")
-        } catch (_: Exception) {
+        writeAtomic(fpFile(context, entity), entity, ".txt") {
+            it.writeText("${fp.dHash}|${fp.width}|${fp.height}")
         }
     }
 
@@ -182,9 +182,8 @@ object ImageFingerprintCache {
     ) {
         saveFingerprint(context, entity, data.fingerprint)
         saveGray32(context, entity, data.gray32)
-        try {
-            verifySigFile(context, entity).writeBytes(data.verifySig)
-        } catch (_: Exception) {
+        writeAtomic(verifySigFile(context, entity), entity, ".g64") {
+            it.writeBytes(data.verifySig)
         }
     }
 
@@ -537,10 +536,54 @@ object ImageFingerprintCache {
         gray: ByteArray,
     ) {
         if (gray.size != 1024) return
-        try {
-            gray32File(context, entity).writeBytes(gray)
-        } catch (_: Throwable) {
+        writeAtomic(gray32File(context, entity), entity, ".g32") {
+            it.writeBytes(gray)
         }
+    }
+
+    /**
+     * 原子写一个缓存文件。
+     *
+     * 旧实现 `try { writeText/writeBytes } catch(_) {}` 把写失败完全吞掉：
+     * 一旦写盘半途失败（空间不足 / 权限 / 进程被杀），会留下 0 字节或不完整文件，
+     * 而 `hasGray32` / `hasVerifySignature` 只做 stat + 长度判断，于是「缓存不完整」
+     * 被当成命中 —— 40k 图片下「半永久缓存」退化成每轮全量重解码，且没有任何日志。
+     *
+     * 现在先写同目录临时文件再 rename 到目标名；失败重试一次，仍失败则
+     * 记录告警并删除残留文件，让 stat 探测明确判定为未缓存，由调用方重新解码补齐。
+     *
+     * [write] 接收临时文件，由调用方写入内容。
+     */
+    private inline fun writeAtomic(
+        target: File,
+        entity: FileEntity,
+        label: String,
+        write: (File) -> Unit,
+    ) {
+        // 临时名必须唯一：同一实体的指纹/灰度/签名会被前台查重与后台预热并发写，
+        // 固定 .tmp 会让两个写入者互相删掉对方正在写的临时文件。
+        val tmp = File(target.parentFile, target.name + "." + UUID.randomUUID() + ".tmp")
+        repeat(2) { attempt ->
+            try {
+                if (tmp.exists()) tmp.delete()
+                write(tmp)
+                // 同目录 rename 在 POSIX 上原子覆盖目标。不再「先删目标再改名」——
+                // 那条回退一旦在删除后改名失败，会把原本有效的旧缓存也一起弄丢。
+                if (tmp.renameTo(target)) return
+            } catch (e: Throwable) {
+                if (attempt == 1) {
+                    PjmLogger.w(
+                        "ImageFingerprintCache",
+                        "缓存写入失败 $label: ${entity.relativePath} (${e.javaClass.simpleName})",
+                        e,
+                    )
+                }
+            }
+        }
+        // 两次都失败：只清理本次的临时文件。绝不动 target —— 写失败时磁盘上原有的
+        // 缓存可能仍然有效（只是这次没更新），删掉它纯属自损。
+        runCatching { tmp.delete() }
+        PjmLogger.w("ImageFingerprintCache", "缓存写入放弃 $label: ${entity.relativePath}")
     }
 
     /**
@@ -607,7 +650,7 @@ object ImageFingerprintCache {
         }
 
     /**
-     * 采样解码到目标宽度（2 的幂采样，避免全尺寸解码），并应用 EXIF 旋转。
+     * 采样解码到目标边长（2 的幂采样，避免窄高图只按宽度算采样率导致全尺寸解码），并应用 EXIF 旋转。
      * @return (解码后的 Bitmap, 原始宽高) —— 一次读文件头同时用于采样与返回原始分辨率
      */
     private fun decodeSampledWithBounds(
@@ -619,7 +662,8 @@ object ImageFingerprintCache {
             BitmapFactory.decodeFile(file.absolutePath, bounds)
             if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
             var sample = 1
-            while (bounds.outWidth / (sample * 2) >= targetWidth) sample *= 2
+            val maxSide = maxOf(bounds.outWidth, bounds.outHeight)
+            while (maxSide / (sample * 2) >= targetWidth) sample *= 2
             val opts = BitmapFactory.Options().apply { inSampleSize = sample }
             val raw = BitmapFactory.decodeFile(file.absolutePath, opts) ?: return null
             applyExifRotation(raw, file.absolutePath) to (bounds.outWidth to bounds.outHeight)
@@ -633,8 +677,8 @@ object ImageFingerprintCache {
         bmp: Bitmap,
         path: String,
     ): Bitmap {
-        // 注：这里用的是平台版 android.media.ExifInterface（构造时即读完并关闭文件，
-        // 不是 Closeable），因此没有 fd 泄漏；只有 androidx 版才需要 use{}。
+        // 统一改用 androidx 版 ExifInterface（平台版有已知安全缺陷）。
+        // 该实现不是 Closeable：构造时读完所需元数据即释放文件句柄，与平台版一致，无需 use{}。
         val orientation =
             try {
                 ExifInterface(path).getAttributeInt(

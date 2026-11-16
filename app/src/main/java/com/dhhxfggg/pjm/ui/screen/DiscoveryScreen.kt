@@ -41,6 +41,7 @@ import androidx.core.content.FileProvider
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
@@ -85,10 +86,14 @@ fun DiscoveryScreen(
     viewModel: DiscoveryViewModel = hiltViewModel(),
     settingsViewModel: SettingsViewModel = hiltViewModel(),
 ) {
-    val uiState by viewModel.uiState.collectAsState()
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    // 浏览队列窗口：页序号保持全局（baseIndex + 窗口内下标），裁头只抬 baseIndex，
+    // 当前页的位置和内容都不变。items 与 baseIndex 必须来自同一份状态，
+    // 否则会出现「新列表配老页号」的错位帧（正是要避免的可见跳变）。
+    val queueWindow by viewModel.window.collectAsStateWithLifecycle()
     // 每次导航回发现页都按设置里的默认分类重新定一次（VM 会跨导航存活，必须显式重放）
     LaunchedEffect(Unit) { viewModel.applyDefaultMode() }
-    val settingsState by settingsViewModel.uiState.collectAsState()
+    val settingsState by settingsViewModel.uiState.collectAsStateWithLifecycle()
     val predictiveBackEnabled = settingsState.settings.predictiveBackEnabled
 
     val context = LocalContext.current
@@ -103,8 +108,12 @@ fun DiscoveryScreen(
     val scope = rememberCoroutineScope()
     val pagerState =
         rememberPagerState(
-            pageCount = { uiState.items.size },
+            // 总页数用全局页序号：包含已被裁掉的头部，裁剪不会改变当前页位置
+            pageCount = { queueWindow.pageCount },
         )
+    // 正在播放/缓冲的页（按条目 id）：窗口裁剪必须避开它们，否则重建列表会打断解码器。
+    // 只有激活页会写入，切走/销毁时移除，平时最多 1 条。
+    val busyItemIds = remember { mutableStateMapOf<Long, Boolean>() }
     var showDeleteConfirm by remember { mutableStateOf<DiscoveryItem?>(null) }
 
     // 右上角常驻「⋮」菜单的开合状态。
@@ -158,9 +167,9 @@ fun DiscoveryScreen(
     val settledPage by remember { derivedStateOf { pagerState.settledPage } }
     val isPagerScrolling by remember { derivedStateOf { pagerState.isScrollInProgress } }
 
-    LaunchedEffect(settledPage, uiState.items.size) {
+    LaunchedEffect(settledPage, queueWindow.baseIndex, queueWindow.items.size) {
         isInteractionLocked = false
-        if (uiState.items.isNotEmpty() && (settledPage >= (uiState.items.size - 2))) {
+        if (queueWindow.items.isNotEmpty() && (settledPage >= (queueWindow.pageCount - 2))) {
             viewModel.loadMoreItems()
         }
     }
@@ -171,10 +180,20 @@ fun DiscoveryScreen(
     // 并没有真正停留观看，过早计入等于重复了"取批即算看过"的老毛病。
     // 去重集合按 mode 重建（切分类时才丢），同一个路径只写一次库。
     val viewedPaths = remember(uiState.mode) { mutableSetOf<String>() }
-    LaunchedEffect(settledPage, uiState.items.size) {
-        val shown = uiState.items.getOrNull(settledPage) ?: return@LaunchedEffect
+    LaunchedEffect(settledPage, queueWindow.baseIndex, queueWindow.items.size) {
+        val shown = queueWindow.itemAt(settledPage) ?: return@LaunchedEffect
         val path = shown.entity.relativePath
         if (viewedPaths.add(path)) viewModel.markViewed(path)
+    }
+
+    // 把「全局页号 + 现在能不能裁剪」回传 VM。canTrim 用 snapshotFlow 收集（不在组合期读
+    // busyItemIds），播放/暂停变化只唤醒这个协程，不会让整屏重组。
+    // 播放/缓冲中传 false —— 播放中不动列表，避免重建页面打断正在用的解码器；
+    // 播放一停这里会再发一次，VM 用同一个页序号把该裁的补上。
+    LaunchedEffect(settledPage) {
+        snapshotFlow { busyItemIds.isEmpty() }.collect { canTrim ->
+            viewModel.onPageSettled(settledPage, canTrim)
+        }
     }
 
     val finalBottomPadding = if (isFullScreen) 0.dp else bottomPadding
@@ -193,12 +212,12 @@ fun DiscoveryScreen(
                     }
                 },
     ) {
-        if (uiState.items.isEmpty() && uiState.isLoading) {
+        if (queueWindow.items.isEmpty() && uiState.isLoading) {
             // 还在加载：显示转圈
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = MaterialTheme.colorScheme.primary, strokeWidth = 3.dp)
             }
-        } else if (uiState.items.isEmpty()) {
+        } else if (queueWindow.items.isEmpty()) {
             // 核心修复：加载完成但确实没有内容。
             // 原实现只有上面那个分支 —— 库为空时转圈会**永远转下去**，
             // 用户会以为卡住了，实际是根本没东西可看。
@@ -218,10 +237,20 @@ fun DiscoveryScreen(
                 modifier = Modifier.fillMaxSize(),
                 beyondViewportPageCount = 1,
                 userScrollEnabled = !isInteractionLocked,
-                key = { index -> uiState.items.getOrNull(index)?.displayId ?: index },
+                // 页序号是全局的，key 也必须按全局页号取条目：裁头前后可见页的 key 不变，
+                // 页面状态（播放器/图片缩放）不会被重置。
+                key = { page -> queueWindow.itemAt(page)?.displayId ?: (-page - 1L) },
             ) { page ->
-                val item = uiState.items.getOrNull(page)
-                if (item != null) {
+                val item = queueWindow.itemAt(page)
+                if (item == null) {
+                    // 页号在范围内但内容还没就绪（正常不会发生）：显示占位，绝不崩
+                    Box(
+                        modifier = Modifier.fillMaxSize().background(Color.Black),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        CircularProgressIndicator(color = MaterialTheme.colorScheme.primary, strokeWidth = 3.dp)
+                    }
+                } else {
                     Box(modifier = Modifier.fillMaxSize()) {
                         DiscoveryItemRenderer(
                             item = item,
@@ -239,11 +268,20 @@ fun DiscoveryScreen(
                             },
                             onVideoEnded = {
                                 // 自动连播：播完就滚到下一项（跨 视频 / B站视频 两种模式都适用）
-                                val next = (pagerState.currentPage + 1).coerceAtMost(uiState.items.lastIndex)
+                                val lastPage = queueWindow.baseIndex + queueWindow.items.size - 1
+                                val next = (pagerState.currentPage + 1).coerceAtMost(lastPage)
                                 if (next > pagerState.currentPage) {
                                     scope.launch { pagerState.animateScrollToPage(next) }
                                 }
                                 viewModel.loadMoreItems()
+                            },
+                            // 播放/缓冲中不让 VM 裁窗口（onPageSettled 会收到 canTrim=false）
+                            onPlaybackBusyChange = { busy ->
+                                if (busy) {
+                                    busyItemIds[item.displayId] = true
+                                } else {
+                                    busyItemIds.remove(item.displayId)
+                                }
                             },
                         )
                     }
@@ -253,7 +291,7 @@ fun DiscoveryScreen(
 
         // 操作入口固定在右上角，并且整屏只渲染这一个菜单：
         // 之前菜单写在每个 pager 页面里，翻页时前后几页各弹一个，看起来就是"冒出好几个分享/删除"
-        val currentItem = uiState.items.getOrNull(settledPage)
+        val currentItem = queueWindow.itemAt(settledPage)
         if (!isFullScreen && currentItem != null) {
             Box(
                 modifier =
@@ -353,6 +391,7 @@ fun DiscoveryAudioRenderer(
     onLongPress: () -> Unit,
     onAudioEnded: () -> Unit,
     fallbackCoverPath: String? = null,
+    onPlaybackBusyChange: ((Boolean) -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val iconPack = rememberIconPack()
@@ -374,14 +413,23 @@ fun DiscoveryAudioRenderer(
             val listener =
                 object : Player.Listener {
                     override fun onPlaybackStateChanged(state: Int) {
+                        // 缓冲开始/结束也算"忙"：播放中裁剪窗口会打断正在用的解码器
+                        onPlaybackBusyChange?.invoke(player.isPlaybackBusy())
                         if (state == Player.STATE_ENDED) onAudioEnded()
+                    }
+
+                    override fun onIsPlayingChanged(isPlaying: Boolean) {
+                        onPlaybackBusyChange?.invoke(player.isPlaybackBusy())
                     }
                 }
             player.addListener(listener)
+            // 监听器在 prepare() 之后才挂上，先主动上报一次当前状态
+            onPlaybackBusyChange?.invoke(player.isPlaybackBusy())
             onDispose {
                 player.removeListener(listener)
                 DiscoveryPlayerPool.release(player)
                 exoPlayer = null
+                onPlaybackBusyChange?.invoke(false)
             }
         }
     }
@@ -522,6 +570,7 @@ fun DiscoveryItemRenderer(
     onLockChange: (Boolean) -> Unit,
     onLongPress: () -> Unit,
     onVideoEnded: () -> Unit,
+    onPlaybackBusyChange: ((Boolean) -> Unit)? = null,
     audioCoverPath: String? = null,
 ) {
     key(item.displayId) {
@@ -535,6 +584,7 @@ fun DiscoveryItemRenderer(
                     onLongPress = onLongPress,
                     onAudioEnded = onVideoEnded,
                     fallbackCoverPath = audioCoverPath,
+                    onPlaybackBusyChange = onPlaybackBusyChange,
                 )
             is DiscoveryItem.Video ->
                 DiscoveryVideoRenderer(
@@ -547,6 +597,7 @@ fun DiscoveryItemRenderer(
                     onLockChange,
                     onLongPress,
                     onVideoEnded,
+                    onPlaybackBusyChange = onPlaybackBusyChange,
                 )
         }
     }
@@ -584,6 +635,7 @@ fun DiscoveryVideoRenderer(
     onLockChange: (Boolean) -> Unit,
     onLongPress: () -> Unit,
     onVideoEnded: () -> Unit,
+    onPlaybackBusyChange: ((Boolean) -> Unit)? = null,
 ) {
     val context = LocalContext.current
     // 手势回调不是组合作用域，用 LocalResources（跟随语言/配置变化）而不是 LocalContext 读资源
@@ -611,15 +663,24 @@ fun DiscoveryVideoRenderer(
             val listener =
                 object : Player.Listener {
                     override fun onPlaybackStateChanged(s: Int) {
+                        // 缓冲开始/结束也算"忙"：播放中裁剪窗口会打断正在用的解码器
+                        onPlaybackBusyChange?.invoke(player.isPlaybackBusy())
                         // 播完自动连播下一项（发现页两种视频模式共用）
                         if (s == Player.STATE_ENDED) onVideoEnded()
                     }
+
+                    override fun onIsPlayingChanged(isPlaying: Boolean) {
+                        onPlaybackBusyChange?.invoke(player.isPlaybackBusy())
+                    }
                 }
             player.addListener(listener)
+            // 监听器在 prepare() 之后才挂上，先主动上报一次当前状态
+            onPlaybackBusyChange?.invoke(player.isPlaybackBusy())
             onDispose {
                 player.removeListener(listener)
                 DiscoveryPlayerPool.release(player)
                 exoPlayer = null
+                onPlaybackBusyChange?.invoke(false)
             }
         }
     }
@@ -667,6 +728,10 @@ fun DiscoveryVideoRenderer(
                         var startPosition = 0L
                         // 松手要对齐到这个位置；拖到哪就算哪（取消也一样）
                         var lastPosition = 0L
+                        // 边拖边 seek 要节流（和查看器同一套 80ms）：每帧 seek 会不停打断解码器
+                        var lastScrubSeekAt = 0L
+                        // 提示文案只在「差几秒」变化时重建：以前每帧 getString + 写 state
+                        var lastShownDiffSec = Long.MIN_VALUE
                         detectHorizontalDragGestures(
                             onDragStart = {
                                 onLockChange(true)
@@ -674,16 +739,20 @@ fun DiscoveryVideoRenderer(
                                 dragTotalX = 0f
                                 startPosition = exoPlayer?.currentPosition ?: 0L
                                 lastPosition = startPosition
+                                lastShownDiffSec = Long.MIN_VALUE
                                 progress.scrubTo(startPosition)
                             },
                             onDragEnd = {
                                 onLockChange(false)
                                 seekLabel = ""
+                                // 节流可能没跟上最后一小段：松手补齐到最终位置
+                                exoPlayer?.seekTo(lastPosition)
                                 progress.endScrub(lastPosition)
                             },
                             onDragCancel = {
                                 onLockChange(false)
                                 seekLabel = ""
+                                exoPlayer?.seekTo(lastPosition)
                                 progress.endScrub(lastPosition)
                             },
                             onHorizontalDrag = { change, dragAmount ->
@@ -697,17 +766,24 @@ fun DiscoveryVideoRenderer(
                                 val seekOffsetMs = (total * seekRatio).toLong()
                                 val targetPosition = (startPosition + seekOffsetMs).coerceIn(0L, total)
 
-                                exoPlayer?.seekTo(targetPosition)
                                 lastPosition = targetPosition
                                 progress.scrubTo(targetPosition)
+                                val now = System.currentTimeMillis()
+                                if (now - lastScrubSeekAt > 80L) {
+                                    lastScrubSeekAt = now
+                                    exoPlayer?.seekTo(targetPosition)
+                                }
 
                                 val diffSec = (targetPosition - startPosition) / 1000
-                                seekLabel =
-                                    if (diffSec >= 0) {
-                                        resources.getString(R.string.fast_seek_forward, diffSec)
-                                    } else {
-                                        resources.getString(R.string.fast_seek_backward, diffSec)
-                                    }
+                                if (diffSec != lastShownDiffSec) {
+                                    lastShownDiffSec = diffSec
+                                    seekLabel =
+                                        if (diffSec >= 0) {
+                                            resources.getString(R.string.fast_seek_forward, diffSec)
+                                        } else {
+                                            resources.getString(R.string.fast_seek_backward, diffSec)
+                                        }
+                                }
 
                                 change.consume()
                             },
@@ -735,7 +811,7 @@ fun DiscoveryVideoRenderer(
             ) {
                 Icon(
                     Lucide.Play,
-                    null,
+                    stringResource(R.string.action_play),
                     modifier = Modifier.size(80.dp),
                     tint = Color.White.copy(alpha = 0.8f),
                 )
@@ -817,3 +893,6 @@ private fun shareDiscoveryItem(
     runCatching { context.startActivity(chooser) }
         .onFailure { Toast.makeText(context, context.getString(R.string.toast_share_nothing_available), Toast.LENGTH_SHORT).show() }
 }
+
+/** 播放器是否正在播放/缓冲：发现页据此决定能不能裁剪浏览队列窗口（播放中不动列表）。 */
+private fun ExoPlayer.isPlaybackBusy(): Boolean = playWhenReady && (isPlaying || playbackState == Player.STATE_BUFFERING)

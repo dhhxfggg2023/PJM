@@ -14,11 +14,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.composables.icons.lucide.*
+import com.dhhxfggg.pjm.R
 import com.dhhxfggg.pjm.ui.component.PjmSlider
 import com.dhhxfggg.pjm.ui.theme.PresetAmber
 import com.dhhxfggg.pjm.ui.theme.PresetBiliPink
@@ -235,7 +237,7 @@ internal fun SettingsStepper(
                 val newValue = (sliderValue - step).coerceIn(valueRange)
                 sliderValue = newValue
                 onValueChange(newValue)
-            }) { Icon(Lucide.Minus, null) }
+            }) { Icon(Lucide.Minus, stringResource(R.string.cd_decrease)) }
             PjmSlider(
                 value = sliderValue,
                 onValueChange = { sliderValue = it },
@@ -247,7 +249,7 @@ internal fun SettingsStepper(
                 val newValue = (sliderValue + step).coerceIn(valueRange)
                 sliderValue = newValue
                 onValueChange(newValue)
-            }) { Icon(Lucide.Plus, null) }
+            }) { Icon(Lucide.Plus, stringResource(R.string.cd_increase)) }
         }
     }
 }

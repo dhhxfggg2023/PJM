@@ -22,10 +22,14 @@ import com.dhhxfggg.pjm.data.model.ViewHistoryEntity
  *
  * 历史说明：v9 之前的 schema 演进曾长期依赖 destructive migration（无历史 JSON），
  * 无法补写；当前所有在网安装的数据库均为 v9。自 v9 起启用严格迁移策略。
+ *
+ * 风险备忘（本轮不补 v8 及更早的迁移路径）：迁移表是从 v9→v10 才开始注册的，v8 及更早的
+ * 数据库没有任何迁移路径，会按上面的 fail-fast 直接崩溃。「在网均为 v9」只是注释里的说法，
+ * 尚未按发布历史逐版本确认 —— 若确实还有 v8 在网，需要补 MIGRATION_8_9 或给出升级引导。
  */
 @Database(
     entities = [FileEntity::class, ViewHistoryEntity::class, ManagedAppEntity::class, TakeoverJobEntity::class],
-    version = 14,
+    version = 15,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -137,9 +141,33 @@ abstract class AppDatabase : RoomDatabase() {
             }
 
         /**
+         * v14 → v15：为大库查询补两个索引（只加索引、不改数据）。
+         *
+         * - `files(category, id)`：随机抽取/键集分页是 `WHERE category=? AND id >= ? ORDER BY id`，
+         *   `(category, lastModified)` 用不上这种访问路径，复合索引可直接 seek。
+         * - `takeover_jobs(status)`：设置页按状态 COUNT/IN 清理，不必全表扫描。
+         *
+         * 两条都是 `CREATE INDEX IF NOT EXISTS`，重复执行安全。
+         */
+        private val MIGRATION_14_15 =
+            object : Migration(14, 15) {
+                override fun migrate(db: SupportSQLiteDatabase) {
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_files_category_id` ON `files` (`category`, `id`)")
+                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_takeover_jobs_status` ON `takeover_jobs` (`status`)")
+                }
+            }
+
+        /**
          * 显式迁移注册表。
          */
         val MIGRATIONS: Array<Migration> =
-            arrayOf(MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14)
+            arrayOf(
+                MIGRATION_9_10,
+                MIGRATION_10_11,
+                MIGRATION_11_12,
+                MIGRATION_12_13,
+                MIGRATION_13_14,
+                MIGRATION_14_15,
+            )
     }
 }

@@ -7,6 +7,14 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import com.dhhxfggg.pjm.domain.util.AudioSettings
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 
 /**
  * 后台音频播放服务（Media3 官方 MediaSessionService）。
@@ -18,6 +26,10 @@ import com.dhhxfggg.pjm.domain.util.AudioSettings
 class AudioPlaybackService : MediaSessionService() {
     private var mediaSession: MediaSession? = null
     private lateinit var player: ExoPlayer
+
+    /** 播放中同步「应用内音量」的协程（ExoPlayer 只能在主线程访问） */
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var volumeSyncJob: Job? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -31,6 +43,7 @@ class AudioPlaybackService : MediaSessionService() {
                 setHandleAudioBecomingNoisy(true)
             }
         player.volume = AudioSettings.appVolume(this)
+        startVolumeSync()
         // 拔耳机/断蓝牙自动暂停（成熟播放器都这么做，避免声音突然外放）
         // 点通知/锁屏回到 App
         val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
@@ -48,6 +61,31 @@ class AudioPlaybackService : MediaSessionService() {
         mediaSession = sessionBuilder.build()
     }
 
+    /**
+     * 播放中同步「应用内音量」。
+     *
+     * 核心修复：`player.volume` 原先只在 onCreate 读一次 —— 用户在设置页播放中调音量
+     * 要等 MediaSessionService 被重新创建才生效。AudioSettings 只提供同步读取接口
+     * （本轮改造范围不含 domain/util），因此只在【播放中】按 500ms 轮询：
+     * 读的是进程内 SharedPreferences 内存值，暂停/停止时完全空转，代价可忽略。
+     */
+    private fun startVolumeSync() {
+        if (volumeSyncJob != null) return
+        volumeSyncJob =
+            scope.launch {
+                var applied = player.volume
+                while (isActive) {
+                    delay(VOLUME_SYNC_INTERVAL_MS)
+                    if (!player.isPlaying) continue
+                    val target = AudioSettings.appVolume(this@AudioPlaybackService)
+                    if (target != applied) {
+                        player.volume = target
+                        applied = target
+                    }
+                }
+            }
+    }
+
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = mediaSession
 
     override fun onTaskRemoved(rootIntent: Intent?) {
@@ -59,11 +97,19 @@ class AudioPlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        volumeSyncJob?.cancel()
+        volumeSyncJob = null
+        scope.cancel()
         mediaSession?.run {
             player.release()
             release()
         }
         mediaSession = null
         super.onDestroy()
+    }
+
+    companion object {
+        /** 播放中检查「应用内音量」的间隔：够快让音量条听起来即时，又不至于空转 */
+        private const val VOLUME_SYNC_INTERVAL_MS = 500L
     }
 }

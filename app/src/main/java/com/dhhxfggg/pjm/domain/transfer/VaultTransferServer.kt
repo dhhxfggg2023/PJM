@@ -1,15 +1,16 @@
 package com.dhhxfggg.pjm.domain.transfer
 
 import com.dhhxfggg.pjm.data.model.FileEntity
+import com.dhhxfggg.pjm.domain.util.PjmLogger
 import java.io.BufferedOutputStream
 import java.io.File
 import java.io.OutputStream
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.URLDecoder
+import java.security.MessageDigest
 import java.text.SimpleDateFormat
 import java.util.Locale
-import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -20,14 +21,27 @@ import java.util.concurrent.atomic.AtomicInteger
  * · 每个连接一个线程（固定 8 个），多个文件并行下载不会互相卡；
  * · 目录页带分类/时间段筛选，点条目直接下载，文件名用库内显示名。
  *
- * 只监听 127.0.0.1：电脑端执行一次 `adb forward tcp:8787 tcp:8787` 后访问 http://127.0.0.1:8787/。
- * 服务本身没有口令，局域网直连必须保持关闭，安全边界就靠这条回环限制。
+ * 只监听 127.0.0.1，且**只绑 preferredPort（默认 8787）**：电脑端执行一次
+ * `adb forward tcp:8787 tcp:8787` 后访问 http://127.0.0.1:8787/。端口被占用时 [start] 直接
+ * 返回 false（不再漂移到 8788+，否则 PC 端 forward 到 8787 永远连不上）。
+ *
+ * 安全边界说明：回环地址**不按 UID 隔离**，同机任意应用都能连 127.0.0.1:8787。
+ * 鉴权：数据接口（`/`、`/file`、`/api/…`）要求请求头 `X-PJM-Token` 或查询参数 `?token=` 与
+ * [authTokenProvider] 返回的令牌一致，否则 401（响应体带 `upgrade:1`，让旧 PJM-Link 能提示「请更新」）。
+ * `/api/hello` 保持开放，只报告端口与是否需要鉴权，便于 PC 端在拿令牌前先探测。
+ * 令牌只防「同机其它应用误连/顺手抓一把」：回环地址不按 UID 隔离，能读应用外部私有目录的进程
+ * 同样能读到令牌文件，因此本服务仍只适用于「通过 adb 隧道、设备上无可信疑虑」的场景，不是加密通道。
  */
 class VaultTransferServer(
     private val vaultRoot: File,
     private val filesProvider: () -> List<FileEntity>,
     private val displayName: (FileEntity) -> String,
     private val preferredPort: Int = 8787,
+    /**
+     * 访问令牌提供者；返回 null 表示不鉴权（单元测试/旧行为）。
+     * 手机端每次开启服务随机生成并写入外部私有目录，PC 通过 adb 读取后随请求带上。
+     */
+    private val authTokenProvider: () -> String? = { null },
 ) {
     private var serverSocket: ServerSocket? = null
     private var pool = newPool()
@@ -36,9 +50,26 @@ class VaultTransferServer(
     private companion object {
         /** 并发下载连接数上限 */
         const val POOL_SIZE = 8
+
+        /** 请求行/请求头单行字符上限：无上限时一行 10MB 的头就能把解析线程撑爆 */
+        const val MAX_LINE_CHARS = 8192
+
+        /** 索引页每页条数：旧实现固定 take(20000)，4 万条的库第一页就要渲染 2 万行 */
+        const val PAGE_SIZE = 200
     }
 
-    private fun newPool() = Executors.newFixedThreadPool(POOL_SIZE)
+    private fun newPool() =
+        java.util.concurrent.ThreadPoolExecutor(
+            POOL_SIZE,
+            POOL_SIZE,
+            30L,
+            java.util.concurrent.TimeUnit.SECONDS,
+            // 核心修复：原 FixedThreadPool 用无界 LinkedBlockingQueue —— 只连不发的客户端
+            // 可以无限排队占住 fd，8 个 worker 卡 15s 后服务整体假死。改为有界队列，
+            // 队列满时直接拒绝（AbortPolicy 抛异常），由 accept 循环关掉这个连接。
+            java.util.concurrent.ArrayBlockingQueue(POOL_SIZE * 2),
+            { r -> Thread(r, "pjm-transfer-worker").apply { isDaemon = true } },
+        )
 
     @Volatile
     var isRunning: Boolean = false
@@ -53,15 +84,15 @@ class VaultTransferServer(
         if (pool.isShutdown) pool = newPool()
         val socket =
             runCatching {
-                var s: ServerSocket? = null
                 // 只绑回环：PC 端通过 adb forward 接 127.0.0.1:8787，
-                // 同一 Wi-Fi/局域网的任何人都连不上这台手机
+                // 同一 Wi-Fi/局域网的任何人都连不上这台手机。
+                //
+                // 核心修复：**只绑 preferredPort，不再漂移到 8788..8795**。
+                // PC 端 forward 固定在 8787，端口漂移后手机页面显示「运行中」，
+                // 电脑却永远连不上（adbd 转发到一个没人监听的端口）。
+                // 端口被占用时直接返回 false，由 UI 提示「端口被占用」。
                 val loopback = java.net.InetAddress.getByName("127.0.0.1")
-                for (p in preferredPort..(preferredPort + 8)) {
-                    s = runCatching { ServerSocket(p, 50, loopback) }.getOrNull()
-                    if (s != null) break
-                }
-                s
+                ServerSocket(preferredPort, 50, loopback)
             }.getOrNull() ?: return false
         serverSocket = socket
         isRunning = true
@@ -70,7 +101,15 @@ class VaultTransferServer(
                 val client = runCatching { socket.accept() }.getOrNull() ?: break
                 val executor = pool
                 if (executor.isShutdown) break
-                runCatching { executor.execute { runCatching { handle(client) } } }
+                // soTimeout 必须在入队前设置：排队中的 socket 不会进入 handle，也就设不到超时
+                runCatching { client.soTimeout = 15000 }
+                val queued =
+                    runCatching {
+                        executor.execute {
+                            runCatching { handle(client) }.onFailure { PjmLogger.w("Transfer", "request failed", it) }
+                        }
+                    }
+                if (queued.isFailure) runCatching { client.close() }
             }
         }, "pjm-transfer-accept").start()
         return true
@@ -88,7 +127,7 @@ class VaultTransferServer(
         socket.use { client ->
             client.soTimeout = 15000
             val input = client.getInputStream().bufferedReader(Charsets.UTF_8)
-            val requestLine = input.readLine() ?: return
+            val requestLine = readLineLimited(input, MAX_LINE_CHARS) ?: return
             val parts = requestLine.split(' ')
             if (parts.size < 2) return
             val method = parts[0]
@@ -96,7 +135,7 @@ class VaultTransferServer(
             // 读掉请求头
             val headers = HashMap<String, String>()
             while (true) {
-                val line = input.readLine() ?: break
+                val line = readLineLimited(input, MAX_LINE_CHARS) ?: return
                 if (line.isEmpty()) break
                 val idx = line.indexOf(':')
                 if (idx > 0) headers[line.substring(0, idx).trim().lowercase(Locale.US)] = line.substring(idx + 1).trim()
@@ -104,8 +143,17 @@ class VaultTransferServer(
             val out = BufferedOutputStream(client.getOutputStream())
             val path = target.substringBefore('?')
             val query = parseQuery(target.substringAfter('?', ""))
+
+            // 数据端点必须带令牌（/api/hello 保持开放，供 PC 探测版本与鉴权能力）。
+            // 老版 PJM-Link 不带令牌会收到 401 + upgrade 提示；浏览器访问用 ?token=<令牌>。
+            if (isTokenRequired(path) && !isAuthorized(headers, query)) {
+                writeUnauthorized(out)
+                out.flush()
+                return
+            }
+
             when {
-                path == "/" || path == "/index.html" -> writeIndex(out, query)
+                path == "/" || path == "/index.html" -> writeIndex(out, query, query["token"] ?: headers["x-pjm-token"])
                 path == "/file" || path == "/api/file" -> writeFile(out, method, query["path"].orEmpty(), headers["range"])
                 path == "/api/hello" -> writeHello(out)
                 path == "/api/files" -> writeFilesJson(out, query)
@@ -115,9 +163,15 @@ class VaultTransferServer(
         }
     }
 
-    /** PC 工具握手：确认对面是 PJM 手机端，并拿到文件总数 */
+    /** PC 工具握手：确认对面是 PJM 手机端，并拿到文件总数与实际监听端口 */
     private fun writeHello(out: OutputStream) {
-        val json = "{\"app\":\"pjm\",\"files\":" + filesProvider().size + "}"
+        // port 是新增字段（只加不改）：老客户端忽略未知字段，新客户端可用它校验
+        // adb forward 的目标端口是否真的是本服务，避免"页面运行中但连不上"的静默错配。
+        // auth=1 告诉新客户端「必须带令牌」；老客户端忽略该字段（随后会收到 401）。
+        val authRequired = authTokenProvider() != null
+        val json =
+            "{\"app\":\"pjm\",\"files\":" + filesProvider().size +
+                ",\"port\":" + port + ",\"auth\":" + (if (authRequired) 1 else 0) + "}"
         writeText(out, 200, "application/json; charset=utf-8", json)
     }
 
@@ -129,10 +183,16 @@ class VaultTransferServer(
         val category = query["category"].orEmpty()
         val fromMs = query["from"]?.toLongOrNull() ?: 0L
         val toMs = query["to"]?.toLongOrNull() ?: 0L
+        // 可选 limit：PC 端可以分批拉，默认 0 = 不限制（已发布客户端不带这个参数，行为不变）
+        val limit = query["limit"]?.toIntOrNull()?.takeIf { it > 0 } ?: 0
+        // 同一实体在一次请求里只算一次显示名（normalizedDisplayName 是字符串处理，4 万条时不值得重复跑）
+        val nameCache = HashMap<String, String>()
         val json = java.lang.StringBuilder()
         json.append('[')
         var first = true
-        filesProvider().forEach { entity ->
+        var emitted = 0
+        for (entity in filesProvider()) {
+            if (limit > 0 && emitted >= limit) break
             val stamp = entity.importedAt.takeIf { it > 0 } ?: entity.lastModified
             val keep =
                 (category.isEmpty() || entity.category == category) &&
@@ -141,8 +201,11 @@ class VaultTransferServer(
             if (keep) {
                 if (!first) json.append(',')
                 first = false
+                emitted++
                 json.append("{\"p\":\"").append(jsonEscape(entity.relativePath))
-                json.append("\",\"n\":\"").append(jsonEscape(displayName(entity)))
+                json
+                    .append("\",\"n\":\"")
+                    .append(jsonEscape(nameCache.getOrPut(entity.relativePath) { displayName(entity) }))
                 json.append("\",\"s\":").append(entity.size)
                 json.append(",\"m\":").append(entity.lastModified)
                 json.append(",\"i\":").append(entity.importedAt)
@@ -171,12 +234,18 @@ class VaultTransferServer(
     private fun writeIndex(
         out: OutputStream,
         query: Map<String, String>,
+        token: String?,
     ) {
+        // 令牌透传：浏览器是「按链接跳转」而非按请求头，不往链接里带上令牌，
+        // 用户点第一个文件/下一页就会 401。表头/分页/文件链接全都继承当前令牌。
+        val tokenQuery = if (token.isNullOrEmpty()) "" else "&token=" + urlEncode(token)
+        val tokenInput = if (token.isNullOrEmpty()) "" else "<input type='hidden' name='token' value='" + escape(token) + "'>"
         val category = query["category"].orEmpty()
         val from = query["from"].orEmpty()
         val to = query["to"].orEmpty()
         val fromMs = parseDate(from)
-        val toMs = parseDate(to)
+        // 核心修复：to 解析出来是当天 00:00，用 stamp <= toMs 会把「今天」入库的文件全过滤掉
+        val toMs = parseDate(to)?.let { it + 86_399_999L }
         val all = filesProvider()
         val filtered =
             all.filter { entity ->
@@ -187,6 +256,11 @@ class VaultTransferServer(
                     (toMs == null || stamp <= toMs)
             }
         val totalBytes = filtered.sumOf { it.size }
+        // 分页：每页 PAGE_SIZE 条，默认第 0 页。旧实现固定 take(20000)，
+        // 4 万条的库光第一页就要拼 2 万行 HTML，PC 浏览器打开明显变慢。
+        val pageCount = if (filtered.isEmpty()) 1 else (filtered.size + PAGE_SIZE - 1) / PAGE_SIZE
+        val page = (query["page"]?.toIntOrNull() ?: 0).coerceIn(0, pageCount - 1)
+        val pageItems = filtered.drop(page * PAGE_SIZE).take(PAGE_SIZE)
         val body = StringBuilder()
         body.append("<!doctype html><html><head><meta charset='utf-8'>")
         body.append("<meta name='viewport' content='width=device-width,initial-scale=1'>")
@@ -203,7 +277,8 @@ class VaultTransferServer(
             .append(" 个文件 · ")
             .append(formatSize(totalBytes))
             .append("</p>")
-        body.append("<form method='get' action='/'>")
+        body.append("<form method='get' action='/'>").append(tokenInput)
+
         body.append("<select name='category'><option value=''>全部分类</option>")
         listOf("images" to "图片", "videos" to "视频", "bili_videos" to "B站视频", "audios" to "音频", "texts" to "文本", "pjm" to "PJM 容器", "others" to "其它").forEach { (key, label) ->
             body.append("<option value='").append(key).append("'")
@@ -211,18 +286,49 @@ class VaultTransferServer(
             body.append(">").append(label).append("</option>")
         }
         body.append("</select> ")
-        body.append("<input type='date' name='from' value='").append(from).append("'> ")
-        body.append("<input type='date' name='to' value='").append(to).append("'> ")
+        // 核心修复：from/to 直接来自 query 参数，原样拼进属性会被注入（反射型 XSS）
+        body.append("<input type='date' name='from' value='").append(escape(from)).append("'> ")
+        body.append("<input type='date' name='to' value='").append(escape(to)).append("'> ")
         body.append("<button type='submit'>筛选</button></form><ul>")
-        filtered.take(20000).forEach { entity ->
-            body.append("<li><a href='/file?path=").append(urlEncode(entity.relativePath)).append("'>")
+        // 同一实体在一次请求里只算一次显示名（与 /api/files 同理）
+        val nameCache = HashMap<String, String>()
+        pageItems.forEach { entity ->
             body
-                .append(escape(displayName(entity)))
+                .append("<li><a href='/file?path=")
+                .append(urlEncode(entity.relativePath))
+                .append(tokenQuery)
+                .append("'>")
+            body
+                .append(escape(nameCache.getOrPut(entity.relativePath) { displayName(entity) }))
                 .append("</a> <span class='muted'>")
                 .append(formatSize(entity.size))
                 .append("</span></li>")
         }
-        body.append("</ul></body></html>")
+        // 上一页/下一页：只带筛选参数 + page，不再把整份清单塞进一页
+        val listQuery = "category=" + urlEncode(category) + "&from=" + urlEncode(from) + "&to=" + urlEncode(to) + tokenQuery
+        body
+            .append("</ul><p class='muted'>第 ")
+            .append(page + 1)
+            .append(" / ")
+            .append(pageCount)
+            .append(" 页")
+        if (page > 0) {
+            body
+                .append(" · <a href='/?")
+                .append(listQuery)
+                .append("&page=")
+                .append(page - 1)
+                .append("'>上一页</a>")
+        }
+        if (page < pageCount - 1) {
+            body
+                .append(" · <a href='/?")
+                .append(listQuery)
+                .append("&page=")
+                .append(page + 1)
+                .append("'>下一页</a>")
+        }
+        body.append("</p></body></html>")
         writeText(out, 200, "text/html; charset=utf-8", body.toString())
     }
 
@@ -247,6 +353,11 @@ class VaultTransferServer(
             return
         }
         val length = file.length()
+        if (length == 0L) {
+            // 核心修复：空文件是合法资产，旧实现统一走 416，PC 端永远下不下来
+            writeText(out, 200, "application/octet-stream", "")
+            return
+        }
         var start = 0L
         var end = length - 1
         var partial = false
@@ -273,7 +384,7 @@ class VaultTransferServer(
                 }
             }
         }
-        if (length <= 0L || start >= length || (partial && end < start)) {
+        if (start >= length || (partial && end < start)) {
             // 416：范围不可满足必须明说，否则下载器会拿着 206 + 0 长度一直重试
             writeText(
                 out = out,
@@ -319,7 +430,48 @@ class VaultTransferServer(
                 out.write(buffer, 0, read)
                 remaining -= read
             }
+            // 核心修复：边读边发必须校验实际发出的字节数。文件在发送过程中被并发删除/改写
+            // （入库、清理、改名都可能）时，读循环会提前 break，PC 拿到的是**截断包**。
+            // 此时响应头已发出，改不了状态码；至少记日志，绝不静默当成功。
+            if (remaining != 0L) {
+                PjmLogger.w(
+                    "Transfer",
+                    "文件在发送途中被改动，已中断: " + entity.relativePath +
+                        " 期望 " + contentLength + " 字节，剩余 " + remaining,
+                )
+            }
         }
+    }
+
+    /** 需要令牌的路径：索引页与文件数据；握手/健康检查保持开放 */
+    private fun isTokenRequired(path: String): Boolean =
+        path == "/" ||
+            path == "/index.html" ||
+            path == "/file" ||
+            path == "/api/file" ||
+            path == "/api/files"
+
+    private fun isAuthorized(
+        headers: Map<String, String>,
+        query: Map<String, String>,
+    ): Boolean {
+        val expected = authTokenProvider() ?: return true
+        val supplied = headers["x-pjm-token"] ?: query["token"] ?: return false
+        // 常量时间比较，避免按字节提前返回
+        return MessageDigest.isEqual(
+            expected.toByteArray(Charsets.UTF_8),
+            supplied.toByteArray(Charsets.UTF_8),
+        )
+    }
+
+    private fun writeUnauthorized(out: OutputStream) {
+        writeText(
+            out = out,
+            code = 401,
+            contentType = "application/json; charset=utf-8",
+            body = "{\"error\":\"auth\",\"upgrade\":1,\"hint\":\"请更新 PJM-Link，或带 ?token=<令牌> 访问\"}",
+            extraHeaders = "WWW-Authenticate: PJM-Token\r\n",
+        )
     }
 
     private fun writeText(
@@ -345,9 +497,25 @@ class VaultTransferServer(
             206 -> "206 Partial Content"
             400 -> "400 Bad Request"
             404 -> "404 Not Found"
+            401 -> "401 Unauthorized"
             416 -> "416 Range Not Satisfiable"
             else -> code.toString()
         }
+
+    /** 带长度上限的 readLine：超长直接返回 null（调用方放弃该请求），避免分配无上限的字符串 */
+    private fun readLineLimited(
+        reader: java.io.Reader,
+        maxChars: Int,
+    ): String? {
+        val sb = StringBuilder(128)
+        while (true) {
+            val c = reader.read()
+            if (c == -1) return if (sb.isEmpty()) null else sb.toString()
+            if (c == '\n'.code) return sb.toString().trimEnd('\r')
+            if (sb.length >= maxChars) return null
+            sb.append(c.toChar())
+        }
+    }
 
     private fun parseQuery(raw: String): Map<String, String> {
         if (raw.isEmpty()) return emptyMap()
@@ -375,6 +543,8 @@ class VaultTransferServer(
             .replace("<", "&lt;")
             .replace(">", "&gt;")
             .replace("\"", "&quot;")
+            // 本页属性用单引号包裹，单引号也必须转义，否则 value='...' 仍可被闭合注入
+            .replace("'", "&#39;")
 
     private fun parseDate(raw: String): Long? {
         if (raw.isBlank()) return null

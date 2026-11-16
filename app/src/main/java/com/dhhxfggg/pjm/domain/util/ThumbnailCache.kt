@@ -64,7 +64,6 @@ object ThumbnailCache {
         if (!source.exists() || !FileUtils.isVideoFile(entity.name)) return null
 
         val output = thumbFile(context, entity)
-        if (output.exists()) output.delete()
 
         val retriever = MediaMetadataRetriever()
         var frame: Bitmap? = null
@@ -78,16 +77,15 @@ object ThumbnailCache {
                     ?: return null
 
             scaled = scaleDown(frame, MAX_WIDTH)
-            FileOutputStream(output).use { fos ->
+            writeAtomic(output) { fos ->
                 scaled.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, fos)
-                fos.flush()
             }
             output
         } catch (_: Throwable) {
             // 核心修复：catch 由 Exception 放宽到 Throwable。
             // 4K 视频帧约 33MB，3 并发解码极易抛 OutOfMemoryError —— 那是 Error 不是 Exception，
             // 旧代码会让它冒泡到 MainApplication.applicationScope 直接崩溃。
-            output.delete()
+            // 原子写保证失败时不会破坏已有的有效缩略图，这里不再删除目标文件。
             null
         } finally {
             // 核心修复：显式回收中间 Bitmap。ImageFingerprintCache 一直有做（注释写明「防 OOM」），
@@ -114,7 +112,6 @@ object ThumbnailCache {
         if (!source.exists() || !FileUtils.isImageFile(entity.name)) return null
 
         val output = thumbFile(context, entity)
-        if (output.exists()) output.delete()
 
         var bmp: Bitmap? = null
         var scaled: Bitmap? = null
@@ -127,17 +124,47 @@ object ThumbnailCache {
             val decodeOpts = BitmapFactory.Options().apply { inSampleSize = sample }
             bmp = BitmapFactory.decodeFile(source.absolutePath, decodeOpts) ?: return null
             scaled = scaleDown(bmp, MAX_WIDTH)
-            FileOutputStream(output).use { fos ->
+            writeAtomic(output) { fos ->
                 scaled.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, fos)
-                fos.flush()
             }
             output
         } catch (_: Throwable) {
-            output.delete()
             null
         } finally {
             recycleIfDistinct(scaled, bmp)
             bmp?.let { runCatching { it.recycle() } }
+        }
+    }
+
+    /**
+     * 原子写缩略图：先写同目录随机名临时文件，再 rename 到目标。
+     * 旧写法先 delete 目标再直接写 —— 并发生成（后台同步 + 入库后立即生成）会互删互写，
+     * 进程被杀时还会留下被 hasThumbnail 当作有效缓存的截断 JPEG。
+     */
+    private fun writeAtomic(
+        target: File,
+        write: (java.io.OutputStream) -> Unit,
+    ) {
+        val parent = target.parentFile ?: return
+        if (!parent.exists()) parent.mkdirs()
+        val tmp =
+            File(
+                parent,
+                target.name + "." +
+                    java.util.UUID
+                        .randomUUID()
+                        .toString()
+                        .take(8) + ".tmp",
+            )
+        try {
+            FileOutputStream(tmp).use { fos ->
+                write(fos)
+                fos.flush()
+                fos.fd.sync()
+            }
+            if (!tmp.renameTo(target)) throw java.io.IOException("rename thumbnail failed: $target")
+        } finally {
+            if (tmp.exists()) tmp.delete()
         }
     }
 

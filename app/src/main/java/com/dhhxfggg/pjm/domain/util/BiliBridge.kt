@@ -310,6 +310,11 @@ object BiliBridge {
     ): Int {
         // 纵深防御：即使调用方漏判，也只允许清理 B 站下载目录内的树
         if (!isInsideBiliDownload(base)) return 0
+        // 核心修复：isAvailable 每次都要写请求文件 + 轮询 sleep(100)，旧实现每个目录调 3 次；
+        // 500 个目录就是上千次 IPC（最低 100 秒）。整个清理只算一次。
+        val privileged = runCatching { EmbeddedPrivilegedIo.isAvailable(context) }.getOrDefault(false)
+        // 列表读取失败时绝不能把"读不到"当成"没有音视频"继续删
+        var listingFailed = false
         var cleaned = 0
         // 1) 收集 base 下所有子目录（不含 base 本身）
         val dirs = mutableListOf<String>()
@@ -321,7 +326,7 @@ object BiliBridge {
             if (depth > 8) return
             val entries =
                 try {
-                    if (EmbeddedPrivilegedIo.isAvailable(context)) {
+                    if (privileged) {
                         EmbeddedPrivilegedIo.listFiles(context, d)
                     } else {
                         try {
@@ -332,7 +337,10 @@ object BiliBridge {
                     }
                 } catch (_: Exception) {
                     null
-                } ?: return
+                } ?: run {
+                    listingFailed = true
+                    return
+                }
             entries.filter { it.isDirectory }.forEach { sub ->
                 val full = "$d/${sub.name}"
                 dirs.add(full)
@@ -352,7 +360,7 @@ object BiliBridge {
             if (depth > 8) return
             val entries =
                 try {
-                    if (EmbeddedPrivilegedIo.isAvailable(context)) {
+                    if (privileged) {
                         EmbeddedPrivilegedIo.listFiles(context, d)
                     } else {
                         try {
@@ -363,7 +371,10 @@ object BiliBridge {
                     }
                 } catch (_: Exception) {
                     null
-                } ?: return
+                } ?: run {
+                    listingFailed = true
+                    return
+                }
             entries.forEach { e ->
                 val full = "$d/${e.name}"
                 if (e.isDirectory) {
@@ -374,16 +385,31 @@ object BiliBridge {
             }
         }
         walkMedia(base, 0)
+        // 任一目录读取失败就放弃本轮清理（安全优先：绝不因"读不到"误删用户数据）
+        if (listingFailed) return 0
+
+        // 核心修复：旧实现对每个待删目录都扫一遍 mediaFiles（O(目录数 × 文件数)，
+        // 几千目录 × 两万文件 = 千万级字符串比较）。预先展开媒体文件的祖先目录集合，查询 O(1)。
+        val mediaAncestorDirs: Set<String> =
+            buildSet {
+                mediaFiles.forEach { file ->
+                    var idx = file.lastIndexOf('/')
+                    while (idx > 0) {
+                        add(file.substring(0, idx))
+                        idx = file.lastIndexOf('/', idx - 1)
+                    }
+                }
+            }
 
         // 3) 深度优先（路径中 '/' 越多越深），删除目录树内不含任何音视频的目录
         dirs.sortedByDescending { it.count { c -> c == '/' } }.forEach { dir ->
             if (dir == base || !dir.startsWith(base)) return@forEach
             // 目录树内是否有音视频（含自身及所有后代）
-            val hasMedia = mediaFiles.any { it.startsWith("$dir/") }
+            val hasMedia = dir in mediaAncestorDirs
             if (hasMedia) return@forEach
             val ok =
                 try {
-                    if (EmbeddedPrivilegedIo.isAvailable(context)) {
+                    if (privileged) {
                         EmbeddedPrivilegedIo.deletePath(context, dir)
                     } else {
                         try {

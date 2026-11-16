@@ -38,6 +38,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.core.content.IntentCompat
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import coil3.compose.AsyncImage
 import coil3.compose.AsyncImagePainter
@@ -69,7 +70,7 @@ import com.dhhxfggg.pjm.ui.viewmodel.CryptoViewModel
 import com.dhhxfggg.pjm.ui.viewmodel.SettingsViewModel
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.MutableStateFlow
 import java.io.File
 
 /**
@@ -83,7 +84,7 @@ class MainActivity : ComponentActivity() {
     private var permissionsGrantedState by mutableStateOf(false)
     private var shareGatewayUris by mutableStateOf<List<Uri>?>(null)
     private var passwordRequestInfo by mutableStateOf<String?>(null)
-    private var initialRoute by mutableStateOf<String?>(null)
+    private val initialRoute = MutableStateFlow<String?>(null)
     private var isShieldActive by mutableStateOf(true)
 
     private var deletePendingUris by mutableStateOf<List<Uri>?>(null)
@@ -132,10 +133,10 @@ class MainActivity : ComponentActivity() {
         handleIntent(intent)
 
         setContent {
-            val uiState by settingsViewModel.uiState.collectAsState()
+            val uiState by settingsViewModel.uiState.collectAsStateWithLifecycle()
             val settings = uiState.settings
             // 核心修复：多任务进度模型 —— 并行的后台任务各自独立进度条
-            val activeTasks by VaultManager.activeTasks.collectAsState()
+            val activeTasks by VaultManager.activeTasks.collectAsStateWithLifecycle()
             // 同一时间只显示一条进度：多个任务叠三根进度条既挤又互相遮挡
             val activeList = activeTasks.filter { it.isActive }
             val opTasks = activeList.take(1)
@@ -149,7 +150,9 @@ class MainActivity : ComponentActivity() {
             val contentBlur by animateDpAsState(targetValue = if (isShieldVisible) 80.dp else 0.dp, label = "ShieldBlur")
 
             LaunchedEffect(Unit) {
-                cryptoViewModel.events.collectLatest { event ->
+                // 核心修复：collectLatest 会在后一事件到来时取消前一事件的处理块，
+                // 而该块内含 IO 计算删除候选，连续两次结果会丢前一次。改用 collect 保证逐个处理完。
+                cryptoViewModel.events.collect { event ->
                     when (event) {
                         is CryptoViewModel.CryptoEvent.RequestPassword -> passwordRequestInfo = event.fileName
                         is CryptoViewModel.CryptoEvent.RequestDeletePermission -> {
@@ -196,7 +199,10 @@ class MainActivity : ComponentActivity() {
                         Box(modifier = Modifier.fillMaxSize()) {
                             // 终极隐私加固：当处于后台或隐私盾开启时，直接在内容层应用高强度模糊
                             Box(modifier = Modifier.fillMaxSize().blur(radius = contentBlur)) {
-                                AppNavHost(startDestination = initialRoute ?: Screen.Main.route)
+                                AppNavHost(
+                                    startDestination = Screen.Main.route,
+                                    pendingRoute = initialRoute,
+                                )
                             }
 
                             // 顶部全局进度卡片：核心修复——并行的多个任务各自独立显示进度条（紧凑堆叠，不产生错位）
@@ -645,7 +651,7 @@ class MainActivity : ComponentActivity() {
         if (intent.getStringExtra("shortcutId") ==
             "cabinet"
         ) {
-            initialRoute = Screen.FileViewer.createRoute(VaultManager.CAT_OTHERS)
+            initialRoute.value = Screen.FileViewer.createRoute(VaultManager.CAT_OTHERS)
             return
         }
         val uris =
@@ -659,16 +665,8 @@ class MainActivity : ComponentActivity() {
         // 利用 MANAGE_EXTERNAL_STORAGE 触发批量导入/填满存储（confused deputy）。
         val safeUris = uris.take(200).filter { it.scheme == "content" || it.scheme == "file" }
         if (safeUris.isEmpty()) return
-        safeUris.forEach {
-            try {
-                if (it.authority !=
-                    "$packageName.fileprovider"
-                ) {
-                    contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                }
-            } catch (_: Exception) {
-            }
-        }
+        // 核心修复：拿持久化读权限最多是 200 次跨进程调用，原先在主线程同步跑（分享大量文件时
+        // 首帧明显卡顿）。现在放到下面协程的 IO 段里、且排在判定与入库之前，保证时序不变。
         // 拆分 PJM 与其他文件：
         // - PJM 加密包（含 .pjm.N 分卷）→ 自动解密并导入，无需确认
         // - 其他文件 → 弹出选择（合并入库 / 打包加密）
@@ -680,6 +678,8 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             val (allPjm, rest) =
                 withContext(Dispatchers.IO) {
+                    // 权限必须先于后面的判空/入库拿到，同一段串行代码天然有序
+                    grantPersistableRead(safeUris)
                     val (namedPjm, remaining) =
                         safeUris.partition { FileUtils.isPjmFile(FileUtils.getFileName(this@MainActivity, it)) }
                     val (detectedPjm, others) =
@@ -691,6 +691,22 @@ class MainActivity : ComponentActivity() {
                 cryptoViewModel.handleStore(allPjm)
             }
             if (rest.isNotEmpty()) shareGatewayUris = rest
+        }
+    }
+
+    /**
+     * 批量拿持久化读权限（跨进程调用，放 IO 线程执行）。
+     *
+     * 单个 uri 失败（provider 不支持 / 授权已失效）只忽略该条，不影响其它 uri 与后续导入。
+     */
+    private fun grantPersistableRead(uris: List<Uri>) {
+        uris.forEach { uri ->
+            try {
+                if (uri.authority != "$packageName.fileprovider") {
+                    contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+            } catch (_: Exception) {
+            }
         }
     }
 
@@ -727,8 +743,21 @@ private fun DeleteCandidateRow(
     context: android.content.Context,
     uri: Uri,
 ) {
-    val fileName = FileUtils.getFileName(context, uri)
-    val fileSize = FileUtils.getFileSize(context, uri)
+    // 核心修复：getFileName / getFileSize 都是 ContentResolver query（跨进程调用），
+    // 原先在组合期同步跑 —— 一次弹 200 行的删除确认会把首帧卡住。
+    // 改为 remember(uri) + IO 异步补齐：先用 uri 末段兜底，拿到真实名字/大小再刷新。
+    var fileName by remember(uri) { mutableStateOf(uri.lastPathSegment?.substringAfterLast('/').orEmpty()) }
+    var fileSize by remember(uri) { mutableStateOf(-1L) }
+    LaunchedEffect(uri) {
+        val (name, size) =
+            withContext(Dispatchers.IO) {
+                val resolvedName = runCatching { FileUtils.getFileName(context, uri) }.getOrNull()
+                val resolvedSize = runCatching { FileUtils.getFileSize(context, uri) }.getOrDefault(-1L)
+                resolvedName to resolvedSize
+            }
+        if (!name.isNullOrBlank()) fileName = name
+        if (size >= 0L) fileSize = size
+    }
     var loadFailed by remember(uri) { mutableStateOf(false) }
     val isVideo =
         listOf("mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "3gp", "ts")
@@ -776,7 +805,7 @@ private fun DeleteCandidateRow(
         Column(Modifier.weight(1f)) {
             Text(fileName, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(
-                FileUtils.formatFileSize(fileSize),
+                if (fileSize >= 0L) FileUtils.formatFileSize(fileSize) else "",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

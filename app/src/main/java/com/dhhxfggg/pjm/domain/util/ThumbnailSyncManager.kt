@@ -102,6 +102,8 @@ class ThumbnailSyncManager
             try {
                 val validNames = videos.map { ThumbnailCache.thumbName(it) }.toHashSet()
                 ThumbnailCache.thumbDir(context).listFiles()?.forEach { f ->
+                    // 跳过正在写入的临时文件（<name>.<uuid>.tmp）：并发生成时删掉它会让本次写入失败
+                    if (f.name.endsWith(".tmp")) return@forEach
                     if (f.name !in validNames) {
                         try {
                             f.delete()
@@ -122,6 +124,8 @@ class ThumbnailSyncManager
                         val validNames = HashSet<String>(images.size * 2)
                         images.forEach { validNames.addAll(ImageFingerprintCache.fingerprintFileNames(it)) }
                         ImageFingerprintCache.fingerprintDir(context).listFiles()?.forEach { f ->
+                            // 同上：原子写的临时文件不属于任何白名单，不能被当成孤儿删掉
+                            if (f.name.endsWith(".tmp")) return@forEach
                             if (f.name !in validNames) {
                                 try {
                                     f.delete()

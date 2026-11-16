@@ -76,8 +76,9 @@ fun ZoomableVaultImage(
                     currentOnZoomedChange((it ?: 1f) > 1.05f)
                 }
             }
-            ZoomableAsyncImage(
-                model =
+            // 请求对象只跟文件走：以前每次重组都新建一个 Builder + Request（纯分配）
+            val imageRequest =
+                remember(file) {
                     ImageRequest
                         .Builder(context)
                         .data(file)
@@ -85,7 +86,10 @@ fun ZoomableVaultImage(
                         .precision(Precision.INEXACT)
                         // 本地文件不需要 Coil 的磁盘缓存副本（解码结果它也不缓存）
                         .diskCachePolicy(CachePolicy.DISABLED)
-                        .build(),
+                        .build()
+                }
+            ZoomableAsyncImage(
+                model = imageRequest,
                 contentDescription = null,
                 state = rememberZoomableImageState(zoomableState),
                 modifier = Modifier.fillMaxSize(),

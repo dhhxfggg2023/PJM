@@ -119,6 +119,33 @@ class SettingsManager
         }
 
         suspend fun resetAllSettings() {
-            context.dataStore.edit { preferences -> preferences.clear() }
+            // 核心修复：迁移完成标志不能随「恢复出厂设置」一起被清掉，
+            // 否则下次冷启动会重跑一次性命名迁移（虽有幂等保护，但属非预期行为）。
+            // 先读出这两个标志，清空后再写回。
+            val namingDone = isPjmNamingMigrationDone()
+            val migrationDone = context.dataStore.data.first()[KEY_MIGRATION_DONE] ?: false
+            context.dataStore.edit { preferences ->
+                preferences.clear()
+                if (migrationDone) preferences[KEY_MIGRATION_DONE] = true
+                if (namingDone) preferences[KEY_PJM_NAMING_MIGRATION_V2] = true
+            }
+            // 核心修复：SharedPreferences 实例在进程内缓存了 mMap，直接删 shared_prefs/*.xml
+            // 并不会让已持有的实例重载 —— 用户「恢复出厂设置」后读到的仍是旧值，
+            // 直到杀进程才生效。改按文件名逐个 edit().clear().commit()：同步清掉内存态
+            // 与磁盘态，且无需硬编码名单，今后新增的 prefs 文件也会一并覆盖。
+            runCatching {
+                val spDir = java.io.File(context.applicationInfo.dataDir, "shared_prefs")
+                spDir
+                    .listFiles()
+                    ?.filter { it.isFile && it.name.endsWith(".xml") }
+                    ?.forEach { file ->
+                        val name = file.name.removeSuffix(".xml")
+                        context
+                            .getSharedPreferences(name, Context.MODE_PRIVATE)
+                            .edit()
+                            .clear()
+                            .commit()
+                    }
+            }
         }
     }

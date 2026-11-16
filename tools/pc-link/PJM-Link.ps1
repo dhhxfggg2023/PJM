@@ -11,6 +11,9 @@ $script:LogLock = [object]::new()
 $script:Categories = @('images','videos','bili_videos','audios','texts','pjm','others')
 # 选定的设备序列号；非空时所有 adb 子命令都带 -s
 $script:Serial = $null
+# 传输服务令牌：手机每次开启服务随机生成并写入外部私有目录，这里通过 adb 读取后随请求带上
+$script:AndroidPackage = 'com.dhhxfggg.pjm'
+$script:TokenPath = '/sdcard/Android/data/' + $script:AndroidPackage + '/files/pjm_transfer_token'
 
 function Write-Log {
     param([string]$Message, [string]$Level = '信息')
@@ -89,6 +92,21 @@ function Invoke-Adb {
     }
 }
 
+# 读取手机端传输令牌（App 每次开启服务都会重新生成）。
+# 返回空串表示读不到 —— 此时数据请求会收到 401，提示用户更新 App / 重启传输服务。
+function Get-PjmToken {
+    param([string]$AdbPath)
+    if ([string]::IsNullOrEmpty($AdbPath)) { return '' }
+    try {
+        $r = Invoke-Adb -AdbPath $AdbPath -Arguments ('shell cat ' + $script:TokenPath) -TimeoutMs 5000
+        if ($r.ExitCode -eq 0) {
+            $t = ([string]$r.Out).Trim()
+            if ($t -match '^[0-9a-fA-F]{16,128}$') { return $t }
+        }
+    } catch { }
+    return ''
+}
+
 function Remove-Tunnels {
     param([string]$AdbPath, $Runtime = $null)
     if ([string]::IsNullOrEmpty($AdbPath)) { return }
@@ -146,6 +164,19 @@ function Get-DiskInfo {
     return [pscustomobject]@{ Root = $full; Fs = $fs; Free = $free; Total = $total; Writable = $writable }
 }
 
+# FAT32 单文件硬上限（4GiB - 1）；文档里承诺「超了会直接报错」，这里落实门禁。
+# 上限按 0xFFFFFFFF（4294967295）取，留 1 字节余量给文件系统元数据。
+$script:Fat32MaxFileBytes = [long]4294967294
+
+function Test-Fat32FileLimit {
+    param([long]$Bytes)
+    if ($Bytes -le 0) { return }  # 未知大小：由写入后的长度校验兜底，不提前误报
+    $d = Get-DiskInfo
+    if ([string]$d.Fs -eq 'FAT32' -and $Bytes -gt $script:Fat32MaxFileBytes) {
+        throw ('目标磁盘是 FAT32，单文件不能超过 4GB；该文件 ' + (Format-Bytes $Bytes) + '，已提前停止以免写出损坏的半截文件。请改用 NTFS/exFAT 磁盘。')
+    }
+}
+
 function Get-Folders {
     $list = [System.Collections.ArrayList]::new()
     foreach ($cat in $script:Categories) {
@@ -179,6 +210,34 @@ function Get-SafeName {
     return $safe
 }
 
+# P1-2：.part 命名与清理。
+# 旧实现按【目标文件名】命名 .part（pull 用 $target.Name，push 用 $target.Path），
+# 两个问题：同名不同内容的文件会互相续传/覆盖；Get-UniqueTarget 与 .part 落盘之间
+# 存在 TOCTOU 窗口；中断后 .part 永久残留（孤儿）。
+# 现在按「分类/日期/安全名 + 内容身份」派生稳定的短哈希作为 part 名，
+# 原子创建（CreateNew）避免 TOCTOU，并清理超过 24h 的陈旧 .part。
+function Get-PartPath {
+    param([string]$Category, [string]$Date, [string]$Identity, [string]$Extension = '.part')
+    $tmpDir = Join-Path $script:Data '.tmp'
+    if (-not (Test-Path -LiteralPath $tmpDir)) { New-Item -ItemType Directory -Path $tmpDir -Force | Out-Null }
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $raw = $Category + '|' + $Date + '|' + $Identity
+        $hex = ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($raw))) -replace '-', '')
+        return (Join-Path $tmpDir ($hex.Substring(0, 24) + $Extension))
+    } finally { $sha.Dispose() }
+}
+
+function Remove-StalePartFiles {
+    $tmpDir = Join-Path $script:Data '.tmp'
+    if (-not (Test-Path -LiteralPath $tmpDir)) { return }
+    $cutoff = (Get-Date).AddHours(-24)
+    try {
+        Get-ChildItem -LiteralPath $tmpDir -File -Filter '*.part' -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -lt $cutoff } | ForEach-Object {
+            try { Remove-Item -LiteralPath $_.FullName -Force; Write-Log ('清理陈旧临时文件：' + $_.Name) } catch { }
+        }
+    } catch { }
+}
 function Get-UniqueTarget {
     param([string]$Directory, [string]$FileName)
     $candidate = Join-Path $Directory $FileName
@@ -198,40 +257,102 @@ function Get-UniqueTarget {
     throw '同名文件过多，无法生成新文件名'
 }
 
-function Read-Ledger {
-    $path = Join-Path $script:Data '.pjm-transfer.json'
-    $map = @{}
-    if (-not (Test-Path -LiteralPath $path)) { return $map }
+# 两份账本、两种键（P2 文档核对后钉死，勿再写混）：
+#   · 拉取账本 .pjm-transfer.json：键 = 源路径|大小|修改时间（p|s|m），由电脑发起拉取时用；
+#   · 推送账本 .pjm-push.tsv：键 = 分类|uuid（cat|uuid），手机推送时用，按 uuid 认文件。
+# P1-1：账本跨 runspace / 进程互斥。
+# 拉取账本（.pjm-transfer.json）由 pull runspace 读写，推送账本（.pjm-push.tsv）由
+# server runspace 读写；两者各自「读-改-写」，旧 Save-Ledger 还用固定 .tmp 文件名，
+# 并发时互相覆盖 / 丢计数。用与数据目录绑定的命名 Mutex 串行化所有账本操作。
+function Get-LedgerMutexName {
+    $sha = [System.Security.Cryptography.SHA256]::Create()
     try {
-        $raw = [IO.File]::ReadAllText($path, [Text.Encoding]::UTF8)
-        if ([string]::IsNullOrWhiteSpace($raw)) { return $map }
-        $obj = $raw | ConvertFrom-Json
-        if ($null -ne $obj.entries) {
-            foreach ($prop in $obj.entries.PSObject.Properties) { $map[$prop.Name] = $prop.Value }
+        $bytes = [Text.Encoding]::UTF8.GetBytes($script:Data.ToUpperInvariant())
+        $hex = ([BitConverter]::ToString($sha.ComputeHash($bytes)) -replace '-', '')
+        return ('PJM-Link-Ledger-' + $hex.Substring(0, 20))
+    } finally { $sha.Dispose() }
+}
+
+function Invoke-WithLedgerLock {
+    param([scriptblock]$Body)
+    $mutex = $null
+    $owned = $false
+    try {
+        $mutex = [System.Threading.Mutex]::new($false, (Get-LedgerMutexName))
+        try { $owned = $mutex.WaitOne(15000) }
+        catch [System.Threading.AbandonedMutexException] { $owned = $true }
+        if (-not $owned) {
+            Write-Log '账本互斥锁等待超时：本次操作可能与其他写入竞争' '警告'
+            & $Body
+            return
         }
-    } catch {
-        Write-Log ('账本损坏，已备份并重建：' + $_.Exception.Message) '警告'
-        try {
-            $backup = (Join-Path $script:Data ('.pjm-transfer.json.bad-' + (Get-Date -Format 'yyyyMMddHHmmss')))
-            Copy-Item -LiteralPath $path -Destination $backup -Force
-        } catch { }
+        try { & $Body } finally { $mutex.ReleaseMutex() }
+    } finally {
+        if ($null -ne $mutex) { $mutex.Dispose() }
     }
+}
+
+# hashtable 是引用类型：scriptblock 内对其做索引赋值会修改同一个对象，
+# 不受 PowerShell 子作用域「变量赋值不外泄」影响，故下面各账本函数都传引用而非靠输出。
+function Read-Ledger {
+    $map = @{}
+    [void](Invoke-WithLedgerLock {
+        $path = Join-Path $script:Data '.pjm-transfer.json'
+        if (-not (Test-Path -LiteralPath $path)) { return }
+        try {
+            $raw = [IO.File]::ReadAllText($path, [Text.Encoding]::UTF8)
+            if ([string]::IsNullOrWhiteSpace($raw)) { return }
+            $obj = $raw | ConvertFrom-Json
+            if ($null -ne $obj.entries) {
+                foreach ($prop in $obj.entries.PSObject.Properties) { $map[$prop.Name] = $prop.Value }
+            }
+        } catch {
+            Write-Log ('账本损坏，已备份并重建：' + $_.Exception.Message) '警告'
+            try {
+                $backup = (Join-Path $script:Data ('.pjm-transfer.json.bad-' + (Get-Date -Format 'yyyyMMddHHmmss')))
+                Copy-Item -LiteralPath $path -Destination $backup -Force
+            } catch { }
+        }
+    })
     return $map
 }
 
 function Save-Ledger {
     param([hashtable]$Map)
-    $path = Join-Path $script:Data '.pjm-transfer.json'
-    $tmp = $path + '.tmp'
-    $obj = [ordered]@{ version = 1; entries = $Map }
-    $json = $obj | ConvertTo-Json -Depth 6
-    [IO.File]::WriteAllText($tmp, $json, $script:Utf8)
-    if (Test-Path -LiteralPath $path) {
-        try { [IO.File]::Replace($tmp, $path, $null) }
-        catch { Move-Item -LiteralPath $tmp -Destination $path -Force }
-    } else {
-        [IO.File]::Move($tmp, $path)
-    }
+    [void](Invoke-WithLedgerLock {
+        $path = Join-Path $script:Data '.pjm-transfer.json'
+        # 合并：调用方的 $Map 是一轮任务开始时的快照，整文件覆盖会丢掉
+        # 这期间其它写入者新增的条目。先重读现有账本再叠加本次结果。
+        $merged = @{}
+        if (Test-Path -LiteralPath $path) {
+            try {
+                $raw = [IO.File]::ReadAllText($path, [Text.Encoding]::UTF8)
+                if (-not [string]::IsNullOrWhiteSpace($raw)) {
+                    $obj = $raw | ConvertFrom-Json
+                    if ($null -ne $obj.entries) {
+                        foreach ($prop in $obj.entries.PSObject.Properties) { $merged[$prop.Name] = $prop.Value }
+                    }
+                }
+            } catch { Write-Log ('账本重读失败，仅保留本次结果：' + $_.Exception.Message) '警告' }
+        }
+        foreach ($k in @($Map.Keys)) { $merged[$k] = $Map[$k] }
+        # 唯一临时名：旧实现固定用 $path + '.tmp'，两个写入者会互相踩踏。
+        $tmp = $path + '.' + [Guid]::NewGuid().ToString('N') + '.tmp'
+        try {
+            $json = ([ordered]@{ version = 1; entries = $merged }) | ConvertTo-Json -Depth 6
+            [IO.File]::WriteAllText($tmp, $json, $script:Utf8)
+            if (Test-Path -LiteralPath $path) {
+                try { [IO.File]::Replace($tmp, $path, $null) }
+                catch { Move-Item -LiteralPath $tmp -Destination $path -Force }
+            } else {
+                [IO.File]::Move($tmp, $path)
+            }
+        } catch {
+            Write-Log ('拉取账本写入失败：' + $_.Exception.Message) '错误'
+        } finally {
+            if (Test-Path -LiteralPath $tmp) { try { Remove-Item -LiteralPath $tmp -Force } catch { } }
+        }
+    })
 }
 
 function Convert-ToEpochMs {
@@ -258,6 +379,7 @@ function Get-HttpErrorText {
         if ($null -ne $we.Response) {
             $code = [int]$we.Response.StatusCode
             if ($code -eq 404) { return '手机端没有这个接口（HTTP 404），请确认 App 版本支持 PC Link' }
+            if ($code -eq 401) { return '手机端要求令牌：请确认 PJM-Link 与 App 为配套版本；在手机上关掉再打开一次传输服务后重试' }
             return ('HTTP ' + $code + '：' + $we.Message)
         }
         if ($we.Status -eq [System.Net.WebExceptionStatus]::ConnectFailure) { return '连不上手机服务 127.0.0.1:8787，请确认 USB 调试已授权、手机端已打开传输服务' }
@@ -286,9 +408,11 @@ function Invoke-PullJob {
         $ledger = Read-Ledger
         $url = 'http://127.0.0.1:8787/api/files?category=&from=0&to=0'
         Write-Log '正在获取手机文件清单…'
+        $pjmToken = Get-PjmToken -AdbPath ([string]$Runtime.State.Adb)
         $req = [System.Net.HttpWebRequest]::Create($url)
         $req.Timeout = 20000
         $req.ReadWriteTimeout = 30000
+        if (-not [string]::IsNullOrEmpty($pjmToken)) { $req.Headers['X-PJM-Token'] = $pjmToken }
         $Runtime.CurrentWeb = $req
         $resp = $req.GetResponse()
         $reader = [IO.StreamReader]::new($resp.GetResponseStream(), [Text.Encoding]::UTF8)
@@ -340,7 +464,12 @@ function Invoke-PullJob {
             $destDir = Join-Path (Join-Path $script:Data $cat) $date
             if (-not (Test-Path -LiteralPath $destDir)) { New-Item -ItemType Directory -Path $destDir -Force | Out-Null }
             $target = Get-UniqueTarget -Directory $destDir -FileName $name
-            $part = Join-Path $tmpDir ($target.Name + '.part')
+            # 文档承诺的 FAT32 提前报错：在发起下载 / 建 .part 之前就拦下，
+            # 避免 FAT32 写到 4GB 才失败、留下半截文件。
+            Test-Fat32FileLimit -Bytes $s
+            # P1-2：按「分类/日期/源路径/大小/修改时间」派生唯一 part 名，
+            # 同名不同内容的文件不再共享同一个临时文件，也不会互相误续传。
+            $part = Get-PartPath -Category $cat -Date $date -Identity ($p + '|' + $s + '|' + $m)
             $fileBytes = [long]0
             $web = $null
             $fs = $null
@@ -360,6 +489,7 @@ function Invoke-PullJob {
                 $web.Timeout = 20000
                 $web.ReadWriteTimeout = 30000
                 $web.KeepAlive = $false
+                if (-not [string]::IsNullOrEmpty($pjmToken)) { $web.Headers['X-PJM-Token'] = $pjmToken }
                 if ($partLen -gt 0) { [void]$web.AddRange($partLen) }
                 $Runtime.CurrentWeb = $web
                 $resp = $web.GetResponse()
@@ -492,13 +622,15 @@ function ConvertFrom-JsonFast {
 
 function Get-RequestJson {
     param($Context)
+    # 一次查询即可：旧写法对 Get-DiskInfo 调了 4 次（每次都做磁盘 IO + 可写探测）。
+    $d = Get-DiskInfo
     return (@{
         root = $script:Data
         disk = @{
-            fs = [string](Get-DiskInfo).Fs
-            free = [long](Get-DiskInfo).Free
-            total = [long](Get-DiskInfo).Total
-            writable = [bool](Get-DiskInfo).Writable
+            fs = [string]$d.Fs
+            free = [long]$d.Free
+            total = [long]$d.Total
+            writable = [bool]$d.Writable
         }
         folders = @(Get-Folders)
         push = @{
@@ -549,33 +681,35 @@ function Get-PushLedgerPath {
 
 function Initialize-PushLedger {
     param($Runtime)
-    $ledger = $Runtime.Ledger
-    if ([bool]$ledger.loaded) { return }
-    $ledger.loaded = $true
-    $path = Get-PushLedgerPath
-    if (-not (Test-Path -LiteralPath $path)) { return }
-    try {
-        foreach ($line in [IO.File]::ReadAllLines($path, $script:Utf8)) {
-            if ([string]::IsNullOrWhiteSpace($line)) { continue }
-            $tab = $line.IndexOf([char]9)
-            if ($tab -le 0) { continue }
-            $key = $line.Substring(0, $tab)
-            if (-not $ledger.map.ContainsKey($key)) { $ledger.map[$key] = $line.Substring($tab + 1) }
+    [void](Invoke-WithLedgerLock {
+        $ledger = $Runtime.Ledger
+        if ([bool]$ledger.loaded) { return }
+        $path = Get-PushLedgerPath
+        if (Test-Path -LiteralPath $path) {
+            try {
+                foreach ($line in [IO.File]::ReadAllLines($path, $script:Utf8)) {
+                    if ([string]::IsNullOrWhiteSpace($line)) { continue }
+                    $tab = $line.IndexOf([char]9)
+                    if ($tab -le 0) { continue }
+                    $key = $line.Substring(0, $tab)
+                    if (-not $ledger.map.ContainsKey($key)) { $ledger.map[$key] = $line.Substring($tab + 1) }
+                }
+            } catch { Write-Log ('推送记录读取失败：' + $_.Exception.Message) '警告' }
         }
-    } catch {
-        Write-Log ('推送记录读取失败：' + $_.Exception.Message) '警告'
-    }
+        # 加载完成后再置位：旧实现先置位再读，并发时另一 runspace 会读到空账本
+        $ledger.loaded = $true
+    })
 }
 
 function Add-PushLedgerEntry {
     param($Runtime, [string]$Key, [string]$RelativePath)
     if ([string]::IsNullOrWhiteSpace($Key)) { return }
-    $Runtime.Ledger.map[$Key] = $RelativePath
-    try {
-        [IO.File]::AppendAllText((Get-PushLedgerPath), $Key + [char]9 + $RelativePath + [Environment]::NewLine, $script:Utf8)
-    } catch {
-        Write-Log ('推送记录写入失败：' + $_.Exception.Message) '警告'
-    }
+    [void](Invoke-WithLedgerLock {
+        $Runtime.Ledger.map[$Key] = $RelativePath
+        try {
+            [IO.File]::AppendAllText((Get-PushLedgerPath), $Key + [char]9 + $RelativePath + [Environment]::NewLine, $script:Utf8)
+        } catch { Write-Log ('推送记录写入失败：' + $_.Exception.Message) '错误' }
+    })
 }
 
 # 推送是否还在进行：手机端 10 秒没有任何字节进来就认为已经停了，
@@ -600,6 +734,14 @@ function Receive-UploadFile {
     $dir = Join-Path (Join-Path $script:Data $cat) $date
     if (-not (Test-Path -LiteralPath $dir)) { [void](New-Item -ItemType Directory -Path $dir -Force) }
     $length = [long]$Context.Request.ContentLength64
+    # 与 pull 路径一致：FAT32 4GB 门禁必须在建 .part 之前。
+    # 注意要先耗尽请求流或返回错误，否则手机端会一直等响应；这里直接 500 返回。
+    try { Test-Fat32FileLimit -Bytes $length }
+    catch {
+        Write-Log ('拒绝接收：' + $_.Exception.Message) '错误'
+        try { Write-HttpText $Context 500 ('{"ok":false,"error":' + (ConvertTo-Json -InputObject $_.Exception.Message) + '}') } catch { }
+        return
+    }
     $index = [int]$Context.Request.Headers['X-PJM-Index']
     $number = [int]$Context.Request.Headers['X-PJM-Total']
     $push = $Runtime.Push
@@ -636,10 +778,15 @@ function Receive-UploadFile {
     }
 
     $target = Get-UniqueTarget -Directory $dir -FileName $safe
-    $part = $target.Path + '.part'
+    # P1-2：与 pull 一致，按内容身份派生唯一 part 名（uuid + 安全名）。
+    $part = Get-PartPath -Category $cat -Date $date -Identity ($ledgerKey + '|' + $safe)
     $stream = $null
     try {
-        $stream = [IO.File]::Open($part, [IO.FileMode]::Create, [IO.FileAccess]::Write, [IO.FileShare]::None)
+        # P1-2：push 不续传，先清掉上次中断留下的同名残留（否则 CreateNew 会失败），
+        # 再用 CreateNew 原子创建：两路并发同 identity 时只有一路能成功，
+        # 另一路抛 IOException，避免交叉写同一个文件。
+        if (Test-Path -LiteralPath $part) { Remove-Item -LiteralPath $part -Force }
+        $stream = [IO.File]::Open($part, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
         $buffer = [byte[]]::new(262144)
         $written = [long]0
         $lastTick = $now
@@ -680,13 +827,40 @@ function Invoke-ServerLoop {
         $listener.Start()
         $Runtime.Listener = $listener
         Write-Log '电脑端取回服务已启动：127.0.0.1:8788（手机可读 PJM-Transfer）'
+        # P1-4：连续 GetContext 失败计数。listener 可能已被外部 Stop()（如退出流程）
+        # 或端口被临时占用，单纯 continue 会变成刷日志死循环，故达到阈值尝试重启。
+        $contextFailures = 0
         while (-not $Runtime.QuitEvent.WaitOne(0)) {
             $ctx = $null
-            try { $ctx = $listener.GetContext() }
+            try {
+                $ctx = $listener.GetContext()
+                $contextFailures = 0
+            }
             catch {
                 if ($Runtime.QuitEvent.WaitOne(0)) { break }
-                Write-Log ('取回服务监听异常：' + $_.Exception.Message) '错误'
-                break
+                $contextFailures++
+                # P1-4：单次 GetContext 异常（客户端断连、临时 socket 错误）不该终止整个服务。
+                # 旧实现直接 break，一次抖动就让电脑端取回服务永久停摆。
+                if ($contextFailures -ge 5) {
+                    Write-Log ('取回服务连续异常 ' + $contextFailures + ' 次，尝试重启监听：' + $_.Exception.Message) '错误'
+                    try { $listener.Stop(); $listener.Close() } catch { }
+                    try {
+                        $fresh = [System.Net.HttpListener]::new()
+                        $fresh.Prefixes.Add('http://127.0.0.1:8788/')
+                        $fresh.Start()
+                        $listener = $fresh
+                        $Runtime.Listener = $fresh
+                        $contextFailures = 0
+                        Write-Log '取回服务监听已重启'
+                    } catch {
+                        Write-Log ('取回服务重启失败，3 秒后重试：' + $_.Exception.Message) '错误'
+                        Start-Sleep -Seconds 3
+                    }
+                } else {
+                    Write-Log ('取回服务监听异常（继续监听）：' + $_.Exception.Message) '警告'
+                    Start-Sleep -Milliseconds 200
+                }
+                continue
             }
             try {
                 $path = $ctx.Request.Url.AbsolutePath
@@ -820,8 +994,10 @@ function New-Runtime {
 }
 
 function Select-AdbDevice {
-    param([string]$AdbPath, $Runtime)
-    $r = Invoke-Adb -AdbPath $AdbPath -Arguments 'devices' -TimeoutMs 8000 -Runtime $Runtime
+    param([string]$AdbPath, $Runtime, [int]$TimeoutMs = 8000)
+    # UI 线程的定时健康检查用短超时：正常 adb devices 是毫秒级，
+    # 只在 adb 卡死时才不至于让窗口冻结 8 秒。
+    $r = Invoke-Adb -AdbPath $AdbPath -Arguments 'devices' -TimeoutMs $TimeoutMs -Runtime $Runtime
     if ($r.ExitCode -ne 0) { return $null }
     $usb = $null
     $any = $null
@@ -838,6 +1014,43 @@ function Select-AdbDevice {
     return $any
 }
 
+# P1-3：设备重连。
+# 旧实现只在启动时选一次 $script:Serial，之后拔插数据线 / 换手机 / 重新授权，
+# serial 就过期了：所有 adb 子命令继续带旧 -s，隧道也还绑在旧设备上，永久失效。
+# 这里由 UI 定时器每 5 秒轻量检查一次：设备列表变了（或状态不是「已连接」）
+# 就重选 serial 并重建 forward / reverse 隧道。
+# 注意：不调用 wait-for-device —— 它会阻塞 UI 线程 10 秒；设备列表里出现
+# 已授权 device 即可重建隧道，无需等待。
+function Ensure-Connection {
+    param($Runtime)
+    if ($null -eq $Runtime) { return }
+    $adb = [string]$Runtime.State.Adb
+    if ([string]::IsNullOrEmpty($adb)) { return }
+    $serial = Select-AdbDevice -AdbPath $adb -Runtime $Runtime -TimeoutMs 3000
+    if ([string]::IsNullOrEmpty($serial)) {
+        if ($Runtime.State.Device -ne '未找到手机') {
+            Write-Log '设备已断开：等待重新连接 USB 并授权调试' '警告'
+            $Runtime.State.Device = '未找到手机'
+        }
+        return
+    }
+    if ($serial -eq $script:Serial -and $Runtime.State.Device -eq '已连接') { return }
+    Write-Log ('设备变化：' + ($script:Serial) + ' → ' + $serial + '，重建 USB 隧道')
+    $script:Serial = $serial
+    $fwd = Invoke-Adb -AdbPath $adb -Arguments 'forward tcp:8787 tcp:8787' -TimeoutMs 3000 -Runtime $Runtime
+    $rev = Invoke-Adb -AdbPath $adb -Arguments 'reverse tcp:8788 tcp:8788' -TimeoutMs 3000 -Runtime $Runtime
+    if ($fwd.ExitCode -eq 0 -and $rev.ExitCode -eq 0) {
+        $Runtime.State.Device = '已连接'
+        Write-Log ('隧道已重建：设备 ' + $serial)
+    } else {
+        $Runtime.State.Device = '隧道建立失败'
+        Write-Log ('隧道重建失败：forward=' + ($fwd.Err + $fwd.Out).Trim() + ' reverse=' + ($rev.Err + $rev.Out).Trim()) '错误'
+    }
+    # 之前若未启动取回服务（例如启动时没连上），现在补上
+    if ($Runtime.State.Device -eq '已连接' -and $null -eq $Runtime.Listener -and $null -eq $Runtime.ServerJob) {
+        [void](Start-Pull -Runtime $Runtime -Mode 'server')
+    }
+}
 function Initialize-Connection {
     param($Runtime)
     $adb = Find-Adb
@@ -858,14 +1071,10 @@ function Initialize-Connection {
         return
     }
     Write-Log ('使用设备：' + $script:Serial)
-    $Runtime.State.Device = '等待手机连接...'
-    Write-Log '等待手机连接（最多 10 秒）...'
-    $r = Invoke-Adb -AdbPath $adb -Arguments 'wait-for-device' -TimeoutMs 10000 -Runtime $Runtime
-    if ($r.TimedOut) {
-        $Runtime.State.Device = '未连接（等待超时）'
-        Write-Log '没有等到手机：请检查数据线，并在手机上允许 USB 调试' '错误'
-        return
-    }
+    # P1-3：不再用 wait-for-device 阻塞启动（最多 10 秒且拔插后无法自愈）。
+    # Select-AdbDevice 只认「已授权 device」，能选到就说明可以直接建隧道；
+    # 后续由 UI 定时器的 Ensure-Connection 负责断线重连。
+    $Runtime.State.Device = '正在建立隧道...'
     $r = Invoke-Adb -AdbPath $adb -Arguments 'forward tcp:8787 tcp:8787' -TimeoutMs 8000 -Runtime $Runtime
     if ($r.ExitCode -ne 0) {
         $Runtime.State.Device = '隧道建立失败'
@@ -906,23 +1115,33 @@ function Stop-Pull {
     Write-Log '正在停止接收...'
 }
 
-function Wait-PullJob {
-    param($Runtime, [int]$TimeoutMs = 5000)
-    $job = $Runtime.Job
-    if ($null -eq $job) { return }
+# P2：统一的后台 runspace 释放（EndInvoke + IAsyncResult + PowerShell + Runspace）。
+# pull job 与 server job 共用，避免退出时留下未释放的句柄锁住工具目录。
+function Stop-JobEntry {
+    param($Entry, [int]$TimeoutMs = 5000)
+    if ($null -eq $Entry) { return }
     try {
-        if (-not $job.Handle.IsCompleted) { [void]$job.Handle.AsyncWaitHandle.WaitOne($TimeoutMs) }
-        if (-not $job.Handle.IsCompleted) {
-            try { $job.Ps.Stop() } catch { }
-            [void]$job.Handle.AsyncWaitHandle.WaitOne(1000)
+        if ($null -ne $Entry.Handle -and -not $Entry.Handle.IsCompleted) {
+            [void]$Entry.Handle.AsyncWaitHandle.WaitOne($TimeoutMs)
         }
-        try { [void]$job.Ps.EndInvoke($job.Handle) } catch { }
+        if ($null -ne $Entry.Handle -and -not $Entry.Handle.IsCompleted) {
+            try { $Entry.Ps.Stop() } catch { }
+            [void]$Entry.Handle.AsyncWaitHandle.WaitOne(1000)
+        }
+        if ($null -ne $Entry.Handle) { try { [void]$Entry.Ps.EndInvoke($Entry.Handle) } catch { } }
+        try { $Entry.Handle.AsyncWaitHandle.Close() } catch { }
     } catch { }
     finally {
-        try { $job.Ps.Dispose() } catch { }
-        try { $job.Runspace.Dispose() } catch { }
-        $Runtime.Job = $null
+        try { $Entry.Ps.Dispose() } catch { }
+        try { $Entry.Runspace.Dispose() } catch { }
     }
+}
+
+function Wait-PullJob {
+    param($Runtime, [int]$TimeoutMs = 5000)
+    if ($null -eq $Runtime.Job) { return }
+    Stop-JobEntry -Entry $Runtime.Job -TimeoutMs $TimeoutMs
+    $Runtime.Job = $null
 }
 
 function Start-MainWindow {
@@ -1152,10 +1371,26 @@ function Start-MainWindow {
 
     $btnExit.Add_Click({ $script:Ui.Form.Close() })
 
+    # P1-3：每 5 秒（定时器 300ms）做一次设备/隧道健康检查，避免每次 Tick 都跑 adb。
+    # P2：磁盘剩余空间也按同一节奏刷新 —— 旧实现只在启动时取一次快照，
+    # 传完几十 GB 之后窗口里的「剩余空间」还是旧数字，会误导用户。
+    $script:LastConnectionCheck = [long]0
     $timer.Add_Tick({
         try {
             $rt = $script:Runtime
             if ($null -eq $rt) { return }
+            $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+            if (($nowMs - [long]$script:LastConnectionCheck) -gt 5000) {
+                $script:LastConnectionCheck = $nowMs
+                Ensure-Connection -Runtime $rt
+                try {
+                    $d = Get-DiskInfo
+                    $rt.State.Fs = [string]$d.Fs
+                    $rt.State.Free = [long]$d.Free
+                    $rt.State.Total = [long]$d.Total
+                    $rt.State.Writable = [bool]$d.Writable
+                } catch { Write-Log ('磁盘状态刷新失败：' + $_.Exception.Message) '警告' }
+            }
             $st = $rt.State
             $task = $rt.Task
             $deviceText = '设备：' + $st.Device
@@ -1208,7 +1443,10 @@ function Start-MainWindow {
                 $script:Ui.Log.SelectionStart = $script:Ui.Log.TextLength
                 $script:Ui.Log.ScrollToCaret()
             }
-        } catch { }
+        } catch {
+            # P1-4：定时器回调里任何异常都不该静默消失（旧实现空 catch，界面会莫名停更）。
+            Write-Log ('界面刷新异常：' + $_.Exception.Message) '警告'
+        }
     })
 
     $form.Add_FormClosing({
@@ -1223,12 +1461,11 @@ function Start-MainWindow {
             $script:Ui.Timer.Stop()
             $script:Runtime.QuitEvent.Set()
             try { if ($null -ne $script:Runtime.Listener) { $script:Runtime.Listener.Stop() } } catch { }
-            try {
-                if ($null -ne $script:Runtime.ServerJob) {
-                    $script:Runtime.ServerJob.Ps.Stop()
-                    $script:Runtime.ServerJob.Runspace.Dispose()
-                }
-            } catch { }
+            # P2：ServerJob 与 pull job 一样要走完整释放（EndInvoke + Ps/Runspace.Dispose）。
+            # 旧实现只 Stop + Dispose Runspace，PowerShell / IAsyncResult 句柄会残留，
+            # 关窗后进程仍可能锁着工具目录。抽成通用函数，两个 job 共用。
+            Stop-JobEntry -Entry $script:Runtime.ServerJob -TimeoutMs 3000
+            $script:Runtime.ServerJob = $null
             Stop-Pull -Runtime $script:Runtime
             Wait-PullJob -Runtime $script:Runtime -TimeoutMs 5000
             if (-not [string]::IsNullOrEmpty($script:Runtime.State.Adb)) {
@@ -1236,9 +1473,14 @@ function Start-MainWindow {
             }
             Stop-BundledAdb
             Write-Log 'PJM Link 已退出'
-        } catch { }
+        } catch {
+            # P1-4：退出清理失败不能静默，否则残留 adb / runspace 会锁住工具目录。
+            Write-Log ('退出清理异常：' + $_.Exception.Message) '错误'
+        }
     })
 
+    # P1-2：启动时清一次陈旧 .part（24h 以上），覆盖「只用手机推送、从不点接收」的用户。
+    Remove-StalePartFiles
     Initialize-Connection -Runtime $runtime
     if ($runtime.State.Device -eq '已连接') { [void](Start-Pull -Runtime $runtime -Mode 'server') }
     $timer.Start()

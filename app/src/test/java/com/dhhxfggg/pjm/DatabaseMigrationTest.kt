@@ -99,6 +99,68 @@ class DatabaseMigrationTest {
         return db.query(sql, arrayOf(name)).use { it.moveToFirst() }
     }
 
+    /**
+     * v14 → v15：两个新索引必须存在，且迁移 SQL 可重复执行（`IF NOT EXISTS`）。
+     */
+    @Test
+    fun migration14To15_addsIndexesIdempotently() {
+        val raw = db.openHelper.writableDatabase
+        val migration = AppDatabase.MIGRATIONS.first { it.endVersion == 15 }
+
+        migration.migrate(raw)
+
+        assertTrue("files(category, id) 索引必须存在", indexExists(raw, "index_files_category_id"))
+        assertTrue("takeover_jobs(status) 索引必须存在", indexExists(raw, "index_takeover_jobs_status"))
+
+        // 幂等：重复执行不能因索引已存在而抛错
+        migration.migrate(raw)
+        assertTrue(indexExists(raw, "index_files_category_id"))
+        assertTrue(indexExists(raw, "index_takeover_jobs_status"))
+    }
+
+    /**
+     * 按分类整体替换只影响目标分类：其它分类的旧行必须原样保留。
+     */
+    @Test
+    fun replaceCategory_onlyReplacesTargetCategory() =
+        runBlocking {
+            fileDao.upsertAll(
+                listOf(
+                    fileEntity("images", "a.jpg"),
+                    fileEntity("images", "b.jpg"),
+                    fileEntity("videos", "c.mp4"),
+                ),
+            )
+
+            fileDao.replaceCategory("images", listOf(fileEntity("images", "new.jpg")))
+
+            assertEquals(1, fileDao.getCountByCategory("images"))
+            assertEquals(1, fileDao.getCountByCategory("videos"))
+            assertEquals("new.jpg", fileDao.getFilesByCategoryOnce("images").single().name)
+        }
+
+    private fun fileEntity(
+        category: String,
+        name: String,
+    ) = FileEntity(
+        relativePath = "$category/$name",
+        name = name,
+        size = 1L,
+        category = category,
+        lastModified = 0L,
+        isImage = name.endsWith(".jpg"),
+        extension = name.substringAfterLast('.'),
+        contentHash = null,
+    )
+
+    private fun indexExists(
+        db: SupportSQLiteDatabase,
+        name: String,
+    ): Boolean {
+        val sql = "SELECT name FROM sqlite_master WHERE type='index' AND name = ?"
+        return db.query(sql, arrayOf(name)).use { it.moveToFirst() }
+    }
+
     /** 迁移 SQL 独立验证：在裸 SQLite 上执行 MIGRATION_9_10 后，view_history 可正常读写 */
     @Test
     fun migrationSql_createsViewHistoryTableUsable() {

@@ -602,4 +602,13 @@
     <string name="reader_reset_layout">恢复默认排版</string>
     <string name="action_save">保存</string>
     <string name="rename_dialog_hint">只改库里的显示名，磁盘文件名保持不变</string>
+    <!-- 导出到相册：部分成功提示 -->
+    <string name="status_export_partial">已导出 %1$d/%2$d 个，其余失败</string>
+    <!-- 无障碍 contentDescription：只给 TalkBack 读，不出现在界面上 -->
+    <string name="cd_switch_to_grid">切换到网格视图</string>
+    <string name="cd_switch_to_list">切换到列表视图</string>
+    <string name="cd_password_show">显示密码</string>
+    <string name="cd_password_hide">隐藏密码</string>
+    <string name="cd_decrease">减小</string>
+    <string name="cd_increase">增大</string>
 </resources>

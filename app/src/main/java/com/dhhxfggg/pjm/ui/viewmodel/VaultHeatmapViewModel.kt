@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.util.Calendar
+import java.util.Locale
 import javax.inject.Inject
 
 /** 入库热力图：单日入库数量 */
@@ -88,7 +89,10 @@ class VaultHeatmapViewModel
                     )
                 val sizeSamples =
                     sampleCategories.associateWith { category ->
-                        runCatching { fileDao.getSizesByCategory(category) }.getOrDefault(emptyList())
+                        // getSizesByCategory 会把该分类的 size 全读出来（4 万行都可能），旧实现把
+                        // 7 份全量列表原样塞进 UI State（每次重组都持有）。直方图只需要形状：
+                        // 按固定步长等距抽样，每个分类最多留 SIZE_SAMPLE_LIMIT 个样本。
+                        downsampleSizes(runCatching { fileDao.getSizesByCategory(category) }.getOrDefault(emptyList()))
                     }
                 var current = 0
                 var cursor = if ((counts[today] ?: 0) > 0) today else today - 1
@@ -117,6 +121,20 @@ class VaultHeatmapViewModel
                         isLoading = false,
                     )
             }
+        }
+
+        /**
+         * 等距抽样（不是随机抽）：保留原列表顺序，直方图形状不失真，样本数有上界。
+         */
+        private fun downsampleSizes(sizes: List<Long>): List<Long> {
+            if (sizes.size <= SIZE_SAMPLE_LIMIT) return sizes
+            val step = (sizes.size + SIZE_SAMPLE_LIMIT - 1) / SIZE_SAMPLE_LIMIT
+            return sizes.filterIndexed { index, _ -> index % step == 0 }.take(SIZE_SAMPLE_LIMIT)
+        }
+
+        private companion object {
+            /** 每个分类最多保留多少条 size 样本（只用于直方图） */
+            const val SIZE_SAMPLE_LIMIT = 200
         }
     }
 
@@ -156,5 +174,5 @@ internal fun formatEpochDay(epochDay: Long): String {
     var m = 1
     while (m < 12 && epochDayOf(y, m + 1, 1) <= epochDay) m++
     val d = (epochDay - epochDayOf(y, m, 1)).toInt() + 1
-    return String.format("%04d-%02d-%02d", y, m, d)
+    return String.format(Locale.US, "%04d-%02d-%02d", y, m, d)
 }

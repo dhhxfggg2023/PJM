@@ -21,6 +21,9 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import com.composables.icons.lucide.*
 import com.dhhxfggg.pjm.R
 import com.dhhxfggg.pjm.data.model.Settings
@@ -38,6 +41,7 @@ import com.dhhxfggg.pjm.ui.theme.PresetRose
 import com.dhhxfggg.pjm.ui.viewmodel.SettingsViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -546,11 +550,17 @@ internal fun BilibiliSettings(
     val authRecordsDestroyedMsg = stringResource(R.string.toast_auth_records_destroyed)
     val copiedMsg = stringResource(R.string.toast_copied_to_clipboard)
 
-    // 检测 PJM 内置特权服务（shell 身份）是否在线
-    val privilegedReady by produceState(initialValue = false) {
-        while (true) {
-            value = EmbeddedPrivilegedIo.isAvailable(context)
-            delay(3000)
+    // 检测 PJM 内置特权服务（shell 身份）是否在线。
+    // 核心修复：只在页面可见（STARTED）时轮询 —— 原来 while(true) 在页面离屏后仍每 3 秒
+    // ping 一次特权进程，且没有停止路径。现在用 repeatOnLifecycle，退到后台即停止。
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    var privilegedReady by remember { mutableStateOf(false) }
+    LaunchedEffect(lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (isActive) {
+                privilegedReady = EmbeddedPrivilegedIo.isAvailable(context)
+                delay(3000)
+            }
         }
     }
     // 状态变化时用横幅提示（就绪/未运行），不做成按钮
@@ -769,19 +779,15 @@ internal fun MaintenanceSettings(
             // 显示的只是「点一下能被清掉」的部分：cacheDir 里的临时文件与阅读器分页缓存。
             // 缩略图（filesDir/thumbnails、filesDir/pjm_thumbnail_cache）不在这里，也不会被「清除缓存」删除：
             // 它们由 ThumbnailCache 跟着源文件走，源文件删掉时同步删除，不需要用户手动清。
+            // 核心修复：旧实现 while(true) 每 2 秒递归遍历 cacheDir + logs 并触发整块重组，
+            // 只要设置页在屏上就持续抢 IO。改为 refreshToken 变化时单次计算（清除缓存/日志已刷新它）。
             val cacheBytes by
                 produceState(0L, refreshToken) {
-                    while (true) {
-                        value = withContext(Dispatchers.IO) { dirSizeBytes(ctx.cacheDir) }
-                        delay(2000)
-                    }
+                    value = withContext(Dispatchers.IO) { dirSizeBytes(ctx.cacheDir) }
                 }
             val logBytes by
                 produceState(0L, refreshToken) {
-                    while (true) {
-                        value = withContext(Dispatchers.IO) { dirSizeBytes(File(ctx.filesDir, "logs")) }
-                        delay(2000)
-                    }
+                    value = withContext(Dispatchers.IO) { dirSizeBytes(File(ctx.filesDir, "logs")) }
                 }
             // 核心修复：清除缓存与清除日志分离
             SettingsButton(

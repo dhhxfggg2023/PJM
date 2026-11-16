@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.content.pm.Signature
 import android.net.Uri
 import android.os.Build
+import android.provider.Settings
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -117,12 +118,22 @@ object UpdateChecker {
                     }
                     val body = conn.inputStream.bufferedReader().use { it.readText() }
                     val json = JSONObject(body)
-                    val latestTag = json.optString("tag_name", "").removePrefix("v")
+                    // 版本前缀同时接受小写 v 与大写 V（GitHub tag 由人写，历史上出现过 V1.8.8）
+                    val latestTag = json.optString("tag_name", "").removePrefix("v").removePrefix("V")
                     val releaseNotes = json.optString("body", "").take(500)
                     val htmlUrl = json.optString("html_url", RELEASE_PAGE)
 
                     if (latestTag.isEmpty()) {
                         return@withContext CheckResult.Failed("远程版本信息为空")
+                    }
+                    // 核心修复：版本号解析失败必须报失败态。旧实现把不可解析的版本按 0 处理，
+                    // 于是「本地版本号解析不出来」（如 versionName 为 null → "未知"）时
+                    // 远程永远被判定为更新 —— 界面永远显示有更新。这里前置校验两侧都能解析。
+                    if (parseVersion(latestTag) == null) {
+                        return@withContext CheckResult.Failed("远程版本号格式无法解析: $latestTag")
+                    }
+                    if (parseVersion(current) == null) {
+                        return@withContext CheckResult.Failed("无法解析本地版本号: $current")
                     }
                     // 版本比较：逐段数字比较（支持 1.8.7 / 1.10.0）
                     return@withContext if (isNewer(latestTag, current)) {
@@ -283,23 +294,47 @@ object UpdateChecker {
 
             var conn: HttpURLConnection? = null
             try {
-                conn = URL(url).openConnection() as HttpURLConnection
-                conn.requestMethod = "GET"
-                conn.connectTimeout = TIMEOUT_MS
-                conn.readTimeout = 30000
-                conn.setRequestProperty("User-Agent", "PJM-Android")
-                // GitHub release 下载是 302 到 objects.githubusercontent.com，自动跟随
-                conn.instanceFollowRedirects = true
-
-                // 302 之后的真实地址也要再校验一次：白名单只管住了初始 URL
-                if (!isTrustedDownloadUrl(conn.url.toString())) {
-                    PjmLogger.e(TAG, "下载被重定向到未授权地址: " + conn.url)
-                    return@withContext DownloadResult.Error("下载地址不可信，已阻止")
+                // 核心修复：关闭自动重定向，手工逐跳校验 Location。
+                // 旧实现 instanceFollowRedirects=true，且在 responseCode 之前读 conn.url ——
+                // 此时请求尚未发出，拿到的恒为初始 URL，注释宣称的「302 后再校验」完全不存在，
+                // GitHub 的 Location 指向任意主机都会被自动跟随下载。
+                var currentUrl = url
+                var finalConn: HttpURLConnection? = null
+                for (hop in 0 until 5) {
+                    if (!isTrustedDownloadUrl(currentUrl)) {
+                        PjmLogger.e(TAG, "下载地址不在白名单内: $currentUrl")
+                        return@withContext DownloadResult.Error("下载地址不可信，已阻止")
+                    }
+                    val c = URL(currentUrl).openConnection() as HttpURLConnection
+                    conn = c
+                    c.requestMethod = "GET"
+                    c.connectTimeout = TIMEOUT_MS
+                    c.readTimeout = 30000
+                    c.setRequestProperty("User-Agent", "PJM-Android")
+                    c.instanceFollowRedirects = false
+                    val code = c.responseCode
+                    if (code in 301..308 && code != 304) {
+                        val location = c.getHeaderField("Location")
+                        if (location.isNullOrBlank()) {
+                            return@withContext DownloadResult.Error("重定向缺少 Location")
+                        }
+                        // 相对 Location 按当前 URL 解析，再走下一跳的白名单校验
+                        currentUrl = runCatching { URL(URL(currentUrl), location).toString() }.getOrDefault(location)
+                        c.disconnect()
+                        conn = null
+                        continue
+                    }
+                    if (code != 200) {
+                        return@withContext DownloadResult.Error("下载失败 (HTTP $code)")
+                    }
+                    finalConn = c
+                    break
                 }
-                val code = conn.responseCode
+                val code = finalConn?.responseCode ?: return@withContext DownloadResult.Error("重定向次数过多，已阻止")
                 if (code != 200) {
                     return@withContext DownloadResult.Error("下载失败 (HTTP $code)")
                 }
+                conn = finalConn
                 val total = conn.contentLengthLong
                 if (total > MAX_APK_BYTES) {
                     return@withContext DownloadResult.Error("安装包体积异常，已阻止")
@@ -328,6 +363,13 @@ object UpdateChecker {
                 if (apkFile.length() <= 0) {
                     return@withContext DownloadResult.Error("下载内容为空")
                 }
+                // 核心修复：有 Content-Length 时必须校验实际收到的字节数。
+                // 旧实现直接进入签名校验，截断的包会让 getPackageArchiveInfo 解析失败，
+                // 于是用户看到的是「安装包签名校验未通过」（误导），而不是「下载不完整」。
+                if (total > 0 && downloaded != total) {
+                    apkFile.delete()
+                    return@withContext DownloadResult.Error("下载不完整（$downloaded/$total 字节），请重试")
+                }
                 // 关键：签名不一致的包直接丢弃，绝不交给系统安装器
                 if (!isSameSignerAsInstalled(context, apkFile)) {
                     apkFile.delete()
@@ -348,9 +390,40 @@ object UpdateChecker {
 
     /**
      * 通过 FileProvider + 系统安装器拉起 APK 安装。
-     * @return true 表示已成功拉起安装界面
+     *
+     * Android 8.0+ 必须先获得「安装未知应用」授权，否则系统安装器会被直接拒绝拉起
+     * （用户只看到"无法安装"却不知道去哪开）。这里先引导到系统授权页并返回 false，
+     * 由调用方用 `R.string.msg_update_install_fallback` 提示"允许后重试"。
+     *
+     * @return true 表示已成功拉起安装界面（未授权时返回 false）
      */
     fun installApk(
+        context: Context,
+        apkFile: File,
+    ): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !context.packageManager.canRequestPackageInstalls()) {
+            PjmLogger.w(TAG, "缺少「安装未知应用」授权，引导到系统设置")
+            openUnknownSourcesSettings(context)
+            return false
+        }
+        return launchInstaller(context, apkFile)
+    }
+
+    /** 打开本应用的「安装未知应用」授权页（失败只记日志，不影响调用方拿到 false） */
+    private fun openUnknownSourcesSettings(context: Context) {
+        try {
+            val intent =
+                Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
+                    data = Uri.parse("package:" + context.packageName)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            PjmLogger.w(TAG, "打开「安装未知应用」设置失败: " + e.message)
+        }
+    }
+
+    private fun launchInstaller(
         context: Context,
         apkFile: File,
     ): Boolean =
@@ -388,6 +461,20 @@ object UpdateChecker {
             PjmLogger.e(TAG, "无法打开 Release 页面", e)
         }
     }
+
+    /**
+     * 解析版本号的数字段；一个数字段都没有时返回 null（表示"不可比较"）。
+     *
+     * 与 [isNewer] 互补：[isNewer] 只做宽松比较，本函数用于「两侧到底能不能比」的前置校验，
+     * 避免把一个解析不出来的版本号当成 0 去比，从而永远判定"有新版本"。
+     */
+    internal fun parseVersion(raw: String): List<Int>? =
+        raw
+            .removePrefix("v")
+            .removePrefix("V")
+            .split(".")
+            .mapNotNull { it.toIntOrNull() }
+            .takeIf { it.isNotEmpty() }
 
     /**
      * 逐段数字比较版本号 a 是否比 b 新。

@@ -8,6 +8,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
@@ -36,6 +38,13 @@ import kotlinx.coroutines.withContext
  * 两者共用同一套判定规则（见 [isHashComparable]），避免出现"手动说没事、后台说坏了"。
  */
 object IntegritySweeper {
+    /**
+     * 串行化整轮抽查：cursor / total_bad 是「读-改-写」，
+     * 并发两轮会互相覆盖（丢计数、cursor 回退导致同一批反复抽查）。
+     * 冷启动自动抽查与手动触发可能重叠，这里用一把锁保证状态推进不交叉。
+     */
+    private val sweepMutex = Mutex()
+
     private const val PREFS = "pjm_integrity_prefs"
     private const val KEY_LAST_RUN = "last_run_at"
     private const val KEY_CURSOR = "cursor_path"
@@ -97,6 +106,8 @@ object IntegritySweeper {
         val totalBad: Long,
         val wrapped: Boolean,
         val problems: List<String>,
+        /** 本轮因读取失败（IO 错误 / 文件被占用）而跳过、未做结论的文件数 */
+        val skipped: Int = 0,
     )
 
     /**
@@ -126,7 +137,8 @@ object IntegritySweeper {
         if (notDue) return null
 
         // 先落时间戳再跑：即使本次中途被杀，也不会每次启动都重跑一遍
-        prefs.edit().putLong(KEY_LAST_RUN, now).apply()
+        // 同步落盘：apply() 在进程被杀前不保证写盘，会让下次启动重复跑一轮。
+        prefs.edit().putLong(KEY_LAST_RUN, now).commit()
         return sweep(context, fileDao)
     }
 
@@ -137,71 +149,89 @@ object IntegritySweeper {
         context: Context,
         fileDao: FileDao,
     ): Report =
-        withContext(Dispatchers.IO) {
-            // 让位用户操作：抽查不紧急，不值得和导入/删除抢 IO。
-            // 但**不无限等** —— 见 [MAX_BUSY_WAIT_MS]。
-            var waited = 0L
-            while (VaultManager.isOperationActive && waited < MAX_BUSY_WAIT_MS) {
-                delay(BUSY_POLL_MS)
-                waited += BUSY_POLL_MS
+        sweepMutex.withLock {
+            withContext(Dispatchers.IO) {
+                // 让位用户操作：抽查不紧急，不值得和导入/删除抢 IO。
+                // 但**不无限等** —— 见 [MAX_BUSY_WAIT_MS]。
+                var waited = 0L
+                while (VaultManager.isOperationActive && waited < MAX_BUSY_WAIT_MS) {
+                    delay(BUSY_POLL_MS)
+                    waited += BUSY_POLL_MS
+                }
+
+                val all = fileDao.getAllFiles().first()
+                if (all.isEmpty()) return@withContext Report(0, 0, 0, 0, false, emptyList())
+
+                val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                // 只排序一次：旧实现在 sortedBy 之后又 drop(...).take(...)，
+                // 4 万行时等于把整表额外复制两遍（内存峰值与 GC 停顿都高）。
+                // 这里直接按下标 subList 取窗口 —— 视图，不复制。
+                val sorted = all.sortedBy { it.relativePath }
+                val cursor = prefs.getString(KEY_CURSOR, null)
+                // 按 relativePath 排序后二分定位游标，避免依赖列表顺序稳定
+                val start =
+                    if (cursor == null) {
+                        0
+                    } else {
+                        sorted.indexOfFirst { it.relativePath > cursor }.let { if (it < 0) 0 else it }
+                    }
+
+                val batch = sorted.subList(start, minOf(start + BATCH_SIZE, sorted.size))
+                var missing = 0
+                var corrupted = 0
+                var skipped = 0
+                val problems = mutableListOf<String>()
+
+                batch.forEach { entity ->
+                    val file = VaultManager.getFileFromEntity(context, entity)
+                    if (!file.exists()) {
+                        missing++
+                        problems += "${entity.name} ｜ 文件已丢失"
+                        return@forEach
+                    }
+                    if (isHashComparable(entity.contentHash, entity.name)) {
+                        val actual = VaultScanner.calculateHash(file)
+                        when {
+                            // null = 读取失败（瞬时 IO 错误 / 文件被占用），不是内容变化。
+                            // 旧写法 `null != 已存哈希` 恒为 true，健康文件会被误报「已损坏」。
+                            actual == null -> {
+                                skipped++
+                                PjmLogger.w("IntegritySweeper", "跳过 ${entity.name}：读取失败，无法计算哈希")
+                            }
+                            actual != entity.contentHash -> {
+                                corrupted++
+                                problems += "${entity.name} ｜ 内容不一致（可能已损坏）"
+                            }
+                        }
+                    }
+                }
+
+                val wrapped = start + batch.size >= sorted.size
+                val totalBad = prefs.getLong(KEY_TOTAL_BAD, 0L) + missing + corrupted
+                val summary =
+                    "抽查 ${batch.size} 个，丢失 $missing，损坏 $corrupted" +
+                        (if (skipped > 0) "，跳过 $skipped（读取失败）" else "") +
+                        (if (wrapped) "（已完成一整轮，游标归零）" else "")
+
+                // 本函数整体跑在 Dispatchers.IO 上，apply() 不会落到主线程；
+                // 游标丢失最多重抽一批，不值得再同步阻塞 IO 线程。
+                prefs
+                    .edit()
+                    .putString(KEY_CURSOR, if (wrapped) null else batch.lastOrNull()?.relativePath)
+                    .putLong(KEY_TOTAL_BAD, totalBad)
+                    .putString(KEY_LAST_SUMMARY, summary)
+                    .apply()
+
+                _problems.value = problems
+
+                PjmLogger.i(
+                    "IntegritySweeper",
+                    "完整性抽查：$summary（累计 $totalBad）",
+                )
+                problems.take(20).forEach { PjmLogger.w("IntegritySweeper", "  · $it") }
+
+                Report(batch.size, missing, corrupted, totalBad, wrapped, problems, skipped)
             }
-
-            val all = fileDao.getAllFiles().first()
-            if (all.isEmpty()) return@withContext Report(0, 0, 0, 0, false, emptyList())
-
-            val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            val sorted = all.sortedBy { it.relativePath }
-            val cursor = prefs.getString(KEY_CURSOR, null)
-            // 按 relativePath 排序后二分定位游标，避免依赖列表顺序稳定
-            val start =
-                if (cursor == null) {
-                    0
-                } else {
-                    sorted.indexOfFirst { it.relativePath > cursor }.let { if (it < 0) 0 else it }
-                }
-
-            val batch = sorted.drop(start).take(BATCH_SIZE)
-            var missing = 0
-            var corrupted = 0
-            val problems = mutableListOf<String>()
-
-            batch.forEach { entity ->
-                val file = VaultManager.getFileFromEntity(context, entity)
-                if (!file.exists()) {
-                    missing++
-                    problems += "${entity.name} ｜ 文件已丢失"
-                    return@forEach
-                }
-                if (isHashComparable(entity.contentHash, entity.name) &&
-                    VaultScanner.calculateHash(file) != entity.contentHash
-                ) {
-                    corrupted++
-                    problems += "${entity.name} ｜ 内容不一致（可能已损坏）"
-                }
-            }
-
-            val wrapped = start + batch.size >= sorted.size
-            val totalBad = prefs.getLong(KEY_TOTAL_BAD, 0L) + missing + corrupted
-            val summary =
-                "抽查 ${batch.size} 个，丢失 $missing，损坏 $corrupted" +
-                    if (wrapped) "（已完成一整轮，游标归零）" else ""
-
-            prefs
-                .edit()
-                .putString(KEY_CURSOR, if (wrapped) null else batch.lastOrNull()?.relativePath)
-                .putLong(KEY_TOTAL_BAD, totalBad)
-                .putString(KEY_LAST_SUMMARY, summary)
-                .apply()
-
-            _problems.value = problems
-
-            PjmLogger.i(
-                "IntegritySweeper",
-                "完整性抽查：$summary（累计 $totalBad）",
-            )
-            problems.take(20).forEach { PjmLogger.w("IntegritySweeper", "  · $it") }
-
-            Report(batch.size, missing, corrupted, totalBad, wrapped, problems)
         }
 
     /** 上次抽查的可读摘要（供设置页展示），没有则返回 null */

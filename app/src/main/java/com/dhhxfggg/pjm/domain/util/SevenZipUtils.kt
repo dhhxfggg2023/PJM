@@ -30,6 +30,19 @@ object SevenZipUtils {
     ) : Exception(context.getString(R.string.error_insufficient_storage_extract))
 
     /**
+     * 无法从 URI 打开输入流（provider 失效 / 权限撤销 / 文件已被删）。
+     *
+     * 旧实现 `openInputStream(uri)?.use { ... }` 在 null 时静默跳过复制，
+     * 却仍对空的临时文件执行解压 —— 结果是不可预期的 junrar 异常，
+     * 甚至可能被当成「解压中失败」向用户报错。
+     * 现在显式抛出，并由 [isNotArchiveError] 归类为 [ExtractOutcome.NOT_AN_ARCHIVE]，
+     * 让调用方回退为「按普通文件入库」。
+     */
+    class NotAnArchiveException(
+        message: String,
+    ) : Exception(message)
+
+    /**
      * 解压结果。
      *
      * 核心修复：原来 `extractArchive` 只返回 `Boolean`，把两种完全不同的情况都压成 `false` ——
@@ -59,6 +72,10 @@ object SevenZipUtils {
     ): ExtractOutcome {
         val appContext = context.applicationContext
         val fileName = FileUtils.getFileName(appContext, uri)
+        // 核心修复：password 是调用方在多个并发解压任务间共享的数组。若各任务直接用同一个
+        // 数组，第一个结束的任务在 finally 里清零就会把其余任务正在读的密码抹成 '0'，
+        // 造成「密码正确却报需要密码 / 解压失败」。每个任务只操作自己的副本。
+        val localPassword = password?.copyOf()
 
         return try {
             appContext.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
@@ -72,13 +89,13 @@ object SevenZipUtils {
                     val lowerName = fileName.lowercase()
                     when {
                         lowerName.endsWith(".7z") ->
-                            extract7z(appContext, channel, password, fileName, onStatus, onProgress, onEntry)
+                            extract7z(appContext, channel, localPassword, fileName, onStatus, onProgress, onEntry)
                         lowerName.endsWith(".rar") -> {
                             processWithTempFile(appContext, uri, fileName) { tempFile ->
-                                extractRar(tempFile, password, fileName, onStatus, onEntry)
+                                extractRar(tempFile, localPassword, fileName, onStatus, onEntry)
                             }
                         }
-                        else -> extractZip(appContext, channel, password, fileName, onStatus, onProgress, onEntry)
+                        else -> extractZip(appContext, channel, localPassword, fileName, onStatus, onProgress, onEntry)
                     }
                     ExtractOutcome.EXTRACTED
                 }
@@ -93,13 +110,14 @@ object SevenZipUtils {
             // 其余（IO 错误、空间不足、压缩炸弹）属于真失败，必须上报。
             if (isNotArchiveError(e)) ExtractOutcome.NOT_AN_ARCHIVE else ExtractOutcome.FAILED
         } finally {
-            password?.let { Arrays.fill(it, '0') }
+            localPassword?.let { Arrays.fill(it, '0') }
         }
     }
 
     /** 判断异常是否意味着「这个文件压根不是有效的压缩包」 */
-    private fun isNotArchiveError(e: Exception): Boolean =
-        e is java.util.zip.ZipException ||
+    internal fun isNotArchiveError(e: Exception): Boolean =
+        e is NotAnArchiveException ||
+            e is java.util.zip.ZipException ||
             e is java.io.EOFException ||
             e is IllegalArgumentException ||
             e.message?.contains("not a valid", ignoreCase = true) == true ||
@@ -139,8 +157,14 @@ object SevenZipUtils {
 
         val tempFile = File(context.cacheDir, "ext_idx_${System.nanoTime()}")
         try {
-            context.contentResolver.openInputStream(uri)?.use { input ->
-                tempFile.outputStream().use { output -> input.copyTo(output, VaultManager.ADAPTIVE_BUFFER_SIZE) }
+            // 核心修复：拿不到输入流时绝不能继续对空临时文件解压。
+            // 抛 NotAnArchiveException → extractArchive 归类为 NOT_AN_ARCHIVE →
+            // 调用方回退「按普通文件入库」，而不是对着空文件跑 junrar 或误报失败。
+            val input =
+                context.contentResolver.openInputStream(uri)
+                    ?: throw NotAnArchiveException("Cannot open input stream for $fileName")
+            input.use { src ->
+                tempFile.outputStream().use { output -> src.copyTo(output, VaultManager.ADAPTIVE_BUFFER_SIZE) }
             }
             block(tempFile)
         } finally {

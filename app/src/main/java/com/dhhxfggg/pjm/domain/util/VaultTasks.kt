@@ -184,6 +184,10 @@ object VaultTasks {
     }
 
     fun notifyCacheCleared() {
+        // 核心修复：清缓存信号必须真正清掉常驻的分类列表缓存，
+        // 否则 CategoryListCache.invalidate() 永远无人调用、过期条目一直占内存。
+        com.dhhxfggg.pjm.data.repository.CategoryListCache
+            .invalidate()
         _cacheClearedSignal.tryEmit(Unit)
     }
 

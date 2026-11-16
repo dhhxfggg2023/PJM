@@ -1,5 +1,6 @@
 package com.dhhxfggg.pjm.domain.util
 
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.zip.ZipFile
 
@@ -19,6 +20,21 @@ object EpubExtractor {
     private val ITEMREF = Regex("""<itemref\s[^>]*>""")
     private val ATTR_ID = Regex("""\bid\s*=\s*"([^"]*)" """.trim())
     private val ATTR_HREF = Regex("""href\s*=\s*"([^"]*)" """.trim())
+
+    // 逐章转换会反复调用，Regex 建一次即可（每次 new 都要重新编译模式，开销可观）
+    private val SCRIPT_STYLE_RE = Regex("""(?is)<(script|style)[^>]*>.*?</\1>""")
+    private val BR_RE = Regex("""<br\s*/?>""", RegexOption.IGNORE_CASE)
+    private val BLOCK_CLOSE_RE = Regex("""</(p|div|h[1-6]|li|tr|section|article)>""", RegexOption.IGNORE_CASE)
+    private val LI_OPEN_RE = Regex("""<li[^>]*>""", RegexOption.IGNORE_CASE)
+    private val WS_RE = Regex("[ \t\u00A0]+")
+    private val BLANK_LINES_RE = Regex("""\n{3,}""")
+    private val TAG_RE = Regex("""<[^>]+>""")
+    private val NUM_ENTITY_RE = Regex("""&#(\d+);""")
+    private val H_RE = Regex("""<h[1-3][^>]*>(.*?)</h[1-3]>""", RegexOption.DOT_MATCHES_ALL)
+    private val NAV_HREF_RE = Regex("""<a\s[^>]*href\s*=\s*"([^"#]+)[^"]*"[^>]*>(.*?)</a>""", RegexOption.DOT_MATCHES_ALL)
+
+    /** 单个 zip 条目上限；超过视为 zip 炸弹，直接放弃该条目 */
+    private const val MAX_ENTRY_BYTES = 32L * 1024 * 1024
 
     fun extract(file: File): Result? {
         if (!file.exists() || file.length() <= 0L) return null
@@ -73,7 +89,24 @@ object EpubExtractor {
     ): String? =
         runCatching {
             val entry = zip.getEntry(path) ?: zip.getEntry(path.replace('\\', '/')) ?: return null
-            zip.getInputStream(entry).use { decode(it.readBytes()) }
+            if (entry.size > MAX_ENTRY_BYTES) return null
+            zip.getInputStream(entry).use { input ->
+                // 大小未知（size == -1，ZIP64/流式）时不能 readBytes() 全量读入 ——
+                // 被篡改的压缩包可声明极小压缩体积、解出几十 GB 直接打爆内存。
+                // 这里按块限长读取，超过上限立即放弃该条目。
+                val initialSize = if (entry.size in 1L..MAX_ENTRY_BYTES) entry.size.toInt() else 0
+                val out = ByteArrayOutputStream(minOf(initialSize, 1 shl 20))
+                val buf = ByteArray(8192)
+                var total = 0L
+                while (true) {
+                    val n = input.read(buf)
+                    if (n < 0) break
+                    total += n
+                    if (total > MAX_ENTRY_BYTES) return null
+                    out.write(buf, 0, n)
+                }
+                decode(out.toByteArray())
+            }
         }.getOrNull()
 
     /** 先按 UTF-8 解，出现替换字符再按 GB18030 —— 不少中文书的 XHTML 是 GBK */
@@ -93,19 +126,23 @@ object EpubExtractor {
         while (true) {
             val idx = tag.indexOf(key, i, ignoreCase = true)
             if (idx < 0) return null
-            var v = idx + key.length
-            while (v < tag.length && tag[v].isWhitespace()) v++
-            if (v < tag.length && tag[v] == '=') {
-                v++
+            // 裸子串匹配会命中属性值里的同名文本（如 href="...id=..." 里的 id）；
+            // 真正的属性名前面必须是空白（标签名与第一个属性之间、属性与属性之间）。
+            if (idx > 0 && tag[idx - 1].isWhitespace()) {
+                var v = idx + key.length
                 while (v < tag.length && tag[v].isWhitespace()) v++
-                if (v < tag.length && (tag[v] == '"' || tag[v] == '\'')) {
-                    val quote = tag[v]
-                    val end = tag.indexOf(quote, v + 1)
-                    if (end > v) return tag.substring(v + 1, end)
-                } else {
-                    var end = v
-                    while (end < tag.length && !tag[end].isWhitespace() && tag[end] != '>') end++
-                    if (end > v) return tag.substring(v, end)
+                if (v < tag.length && tag[v] == '=') {
+                    v++
+                    while (v < tag.length && tag[v].isWhitespace()) v++
+                    if (v < tag.length && (tag[v] == '"' || tag[v] == '\'')) {
+                        val quote = tag[v]
+                        val end = tag.indexOf(quote, v + 1)
+                        if (end > v) return tag.substring(v + 1, end)
+                    } else {
+                        var end = v
+                        while (end < tag.length && !tag[end].isWhitespace() && tag[end] != '>') end++
+                        if (end > v) return tag.substring(v, end)
+                    }
                 }
             }
             i = idx + key.length
@@ -131,7 +168,7 @@ object EpubExtractor {
             Regex("""<item\s[^>]*properties\s*=\s*"[^"]*nav[^"]*"[^>]*>""").find(opf)?.value?.let { attr(it, "href") }
         if (navHref != null) {
             readEntry(zip, join(base, navHref))?.let { nav ->
-                Regex("""<a\s[^>]*href\s*=\s*"([^"#]+)[^"]*"[^>]*>(.*?)</a>""", RegexOption.DOT_MATCHES_ALL)
+                NAV_HREF_RE
                     .findAll(nav)
                     .forEach { m ->
                         val href = join(base, m.groupValues[1].trim())
@@ -144,26 +181,26 @@ object EpubExtractor {
     }
 
     private fun firstHeading(html: String): String? =
-        Regex("""<h[1-3][^>]*>(.*?)</h[1-3]>""", RegexOption.DOT_MATCHES_ALL)
+        H_RE
             .find(html)
             ?.groupValues
             ?.get(1)
             ?.let { stripTags(it).trim().ifBlank { null } }
 
     private fun htmlToText(html: String): String {
-        var s = html.replace(Regex("""(?is)<(script|style)[^>]*>.*?</\1>"""), " ")
-        s = s.replace(Regex("""<br\s*/?>""", RegexOption.IGNORE_CASE), "\n")
-        s = s.replace(Regex("""</(p|div|h[1-6]|li|tr|section|article)>""", RegexOption.IGNORE_CASE), "\n")
-        s = s.replace(Regex("""<li[^>]*>""", RegexOption.IGNORE_CASE), "· ")
+        var s = html.replace(SCRIPT_STYLE_RE, " ")
+        s = s.replace(BR_RE, "\n")
+        s = s.replace(BLOCK_CLOSE_RE, "\n")
+        s = s.replace(LI_OPEN_RE, "· ")
         s = stripTags(s)
         s = unescape(s)
-        s = s.replace(Regex("[ \t\u00A0]+"), " ")
+        s = s.replace(WS_RE, " ")
         s = s.lines().joinToString("\n") { it.trim() }
-        s = s.replace(Regex("\n{3,}"), "\n\n")
+        s = s.replace(BLANK_LINES_RE, "\n\n")
         return s.trim()
     }
 
-    private fun stripTags(s: String): String = s.replace(Regex("""<[^>]+>"""), "")
+    private fun stripTags(s: String): String = s.replace(TAG_RE, "")
 
     private fun unescape(s: String): String =
         s
@@ -174,7 +211,7 @@ object EpubExtractor {
             .replace("&quot;", "\"")
             .replace("&#39;", "'")
             .replace("&apos;", "'")
-            .replace(Regex("""&#(\d+);""")) { m ->
+            .replace(NUM_ENTITY_RE) { m ->
                 m.groupValues[1].toIntOrNull()?.let { String(Character.toChars(it)) } ?: m.value
             }
 }

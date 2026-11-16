@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.composables.icons.lucide.*
 import com.dhhxfggg.pjm.R
 import com.dhhxfggg.pjm.data.model.FileEntity
@@ -74,11 +75,11 @@ fun SettingsScreen(
     // 直接分享源文件需要 Activity 才能 startActivity（Context 可能不是 Activity）
     val activity = context as? Activity
     val scope = rememberCoroutineScope()
-    val uiState by settingsViewModel.uiState.collectAsState()
+    val uiState by settingsViewModel.uiState.collectAsStateWithLifecycle()
     val settings = uiState.settings
     // 应用接管：主页卡片要显示已接管数量，页面本身也复用同一个 ViewModel
     val takeoverViewModel: TakeoverViewModel = hiltViewModel()
-    val managedApps by takeoverViewModel.managedApps.collectAsState()
+    val managedApps by takeoverViewModel.managedApps.collectAsStateWithLifecycle()
 
     var currentPage by remember { mutableStateOf<SettingsPage?>(null) }
 
@@ -169,14 +170,14 @@ fun SettingsScreen(
                     // 记录会话内授权树，重开选择器时传入，用户可立即点开应用内部文件夹
                     lastSafTreeUri = uri
                     // 回到对应选择器（用户可自由浏览应用内部，选目录后确定扫描）
+                    // 注意：这里只构造「稍后要执行」的 lambda。原实现在分支里先赋值再返回 lambda，
+                    // 而下面两行立刻把两个 picker 都置 false —— 那次赋值是永远被覆盖的死代码。
                     val reopenPicker: () -> Unit =
                         when (action) {
                             "merged" -> {
-                                showMergedFolderPicker = true;
                                 { showMergedFolderPicker = true }
                             }
                             else -> {
-                                showPjmFolderPicker = true;
                                 { showPjmFolderPicker = true }
                             }
                         }
@@ -257,8 +258,8 @@ fun SettingsScreen(
     // 应用内下载状态：统一由进程级的 UpdateController 持有。
     // 原来这些状态都在本页的 remember 里，离开设置页/旋转屏幕就丢，
     // 且下载协程绑在 rememberCoroutineScope() 上会被直接取消。
-    val updateDownloadProgress by UpdateController.downloadProgress.collectAsState()
-    val updateDownloadMessage by UpdateController.message.collectAsState()
+    val updateDownloadProgress by UpdateController.downloadProgress.collectAsStateWithLifecycle()
+    val updateDownloadMessage by UpdateController.message.collectAsStateWithLifecycle()
 
     Scaffold(
         topBar = {

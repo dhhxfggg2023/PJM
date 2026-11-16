@@ -99,11 +99,20 @@ class FileRepositoryImpl
         override suspend fun getRandomFileByCategory(category: String): FileEntity? {
             // 核心修复（所有分类封面都要能随机变）：
             // 旧实现“随机 id 下界 + id>= 定位”在 id 存在大空洞的分类（如视频库经大量删除/穿插）
-            // 会频繁落空回退到首条 → 封面看起来不变。
-            // 现改为按【记录数】均匀随机：count → 随机 offset → 按 id 取第 offset 条。
-            // 并在记录数 > 1 时避开上次选中的同一条，保证点一下封面确实变化。
+            // 会频繁落空回退到首条 → 封面看起来不变；现按【记录数】均匀随机取 offset。
+            //
+            // 大库性能补齐：offset 版是 O(n) 扫描。id 区间没有被删出大空洞时（span <= count*4，
+            // 平均空洞 <= 4），改用键集游标随机起点，O(log n) 且分布仍然均匀；
+            // 空洞过大时保留原 offset 方案，保证封面随机性不退化。
             val count = fileDao.getCountByCategory(category)
             if (count <= 0) return null
+            val minId = fileDao.getMinIdByCategory(category)
+            val maxId = fileDao.getMaxIdByCategory(category)
+            if (minId != null && maxId != null && maxId > minId && maxId - minId <= count * 4L) {
+                val picked = pickByCursor(category, count, minId, maxId) ?: return null
+                lastRandomFileId[category] = picked.id
+                return picked
+            }
             var offset = Random.nextInt(count)
             val lastId = lastRandomFileId[category]
             if (lastId != null && count > 1) {
@@ -116,6 +125,28 @@ class FileRepositoryImpl
             val picked = fileDao.getFileByOffset(category, offset) ?: return null
             lastRandomFileId[category] = picked.id
             return picked
+        }
+
+        /**
+         * 键集游标抽一张：分类内随机主键 → 取 id >= 起点 的第一条；
+         * 正好是上次那条时从它的下一条再取（到尾部就绕回分类最小 id）。
+         */
+        private suspend fun pickByCursor(
+            category: String,
+            count: Int,
+            minId: Long,
+            maxId: Long,
+        ): FileEntity? {
+            val start = minId + Random.nextLong(maxId - minId + 1)
+            val first =
+                fileDao.getFirstFileAtOrAfterId(category, start)
+                    ?: fileDao.getFirstFileAtOrAfterId(category, minId)
+                    ?: return null
+            if (count <= 1) return first
+            val lastId = lastRandomFileId[category]
+            if (lastId == null || first.id != lastId) return first
+            return fileDao.getFirstFileAtOrAfterId(category, first.id + 1)
+                ?: fileDao.getFirstFileAtOrAfterId(category, minId)
         }
 
         /**
@@ -162,6 +193,16 @@ class FileRepositoryImpl
             if (count <= 0) return null
             // 日期种子 + 分类名 → 稳定 offset：同一天永远同一张，跨天自动换
             val offset = Math.floorMod(daySeed * 31 + category.hashCode(), count)
+            // 大库优化：把 offset 按 id 区间比例换算成键集起点，避免 OFFSET 逐行扫描；
+            // 同一天仍稳定映射到同一条；id 空洞过大时回退原方案。
+            val minId = fileDao.getMinIdByCategory(category)
+            val maxId = fileDao.getMaxIdByCategory(category)
+            if (minId != null && maxId != null && maxId > minId && maxId - minId <= count * 8L) {
+                val span = maxId - minId + 1
+                val start = minId + (offset.toLong() * span / count).coerceIn(0L, span - 1)
+                return fileDao.getFirstFileAtOrAfterId(category, start)
+                    ?: fileDao.getFirstFileAtOrAfterId(category, minId)
+            }
             return fileDao.getFileByOffset(category, offset)
         }
 

@@ -11,6 +11,7 @@ import com.dhhxfggg.pjm.domain.util.VaultNaming
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.random.Random
 
 /**
  * 直接分享源文件的结果。
@@ -57,67 +58,67 @@ class RandomPickController(
                 onDone(false)
                 return@launch
             }
-            VaultManager.updateProgress(0.05f, app.getString(R.string.status_random_pick), taskId = VaultManager.TASK_ENCRYPT)
-            // 从 PJM 图片库（images 分类）随机取 count 张（不足则取全部）
-            val entities = fileDao.getRandomFilesByCategory(VaultManager.CAT_IMAGES, count.coerceIn(1, MAX_RANDOM_PICK))
-            if (entities.isEmpty()) {
-                VaultManager.clearProgress(VaultManager.TASK_ENCRYPT)
-                Toast.makeText(app, app.getString(R.string.toast_random_pick_empty), Toast.LENGTH_LONG).show()
-                onDone(false)
-                VaultManager.endOperation(VaultManager.TASK_ENCRYPT)
-                return@launch
-            }
-            // 实体 → 库内文件 → Uri
-            val images =
-                entities.mapNotNull { entity ->
-                    val f = VaultManager.getFileFromEntity(app, entity)
-                    if (f.exists()) Uri.fromFile(f) else null
+            try {
+                VaultManager.updateProgress(0.05f, app.getString(R.string.status_random_pick), taskId = VaultManager.TASK_ENCRYPT)
+                // 从 PJM 图片库（images 分类）随机取 count 张（不足则取全部）
+                val entities = pickRandomImages(count.coerceIn(1, MAX_RANDOM_PICK))
+                if (entities.isEmpty()) {
+                    Toast.makeText(app, app.getString(R.string.toast_random_pick_empty), Toast.LENGTH_LONG).show()
+                    onDone(false)
+                    return@launch
                 }
-            if (images.isEmpty()) {
+                // 实体 → 库内文件 → Uri
+                val images =
+                    entities.mapNotNull { entity ->
+                        val f = VaultManager.getFileFromEntity(app, entity)
+                        if (f.exists()) Uri.fromFile(f) else null
+                    }
+                if (images.isEmpty()) {
+                    Toast.makeText(app, app.getString(R.string.toast_random_pick_empty), Toast.LENGTH_LONG).show()
+                    onDone(false)
+                    return@launch
+                }
+                VaultManager.updateProgress(0.1f, app.getString(R.string.status_encrypting), taskId = VaultManager.TASK_ENCRYPT)
+                val timeStamp = VaultNaming.readableTimestamp()
+                // 需求：图片数量少，不需要分卷 —— 直接生成单个 .pjm 容器
+                val result =
+                    VaultManager.packUrisSingle(
+                        context = app,
+                        uris = images,
+                        category = VaultManager.CAT_PJM,
+                        baseName = "Random_$timeStamp",
+                        fileDao = fileDao,
+                        onProgress = { p ->
+                            VaultManager.updateProgress(
+                                0.1f + 0.85f * p,
+                                app.getString(R.string.status_encrypting),
+                                taskId = VaultManager.TASK_ENCRYPT,
+                            )
+                        },
+                    )
+                if (result.isSuccess) {
+                    VaultManager.updateProgress(
+                        1f,
+                        app.getString(R.string.toast_random_pick_done, images.size),
+                        taskId = VaultManager.TASK_ENCRYPT,
+                    )
+                    Toast.makeText(app, app.getString(R.string.toast_random_pick_done, images.size), Toast.LENGTH_LONG).show()
+                    onDone(true)
+                } else {
+                    VaultManager.updateProgress(
+                        0f,
+                        app.getString(R.string.error_export_failed_simple),
+                        taskId = VaultManager.TASK_ENCRYPT,
+                        isError = true,
+                    )
+                    onDone(false)
+                }
+                delay(1500)
+            } finally {
+                // 核心修复：取消/异常路径同样要释放占位，否则 TASK_ENCRYPT 永久卡死
                 VaultManager.clearProgress(VaultManager.TASK_ENCRYPT)
-                Toast.makeText(app, app.getString(R.string.toast_random_pick_empty), Toast.LENGTH_LONG).show()
-                onDone(false)
                 VaultManager.endOperation(VaultManager.TASK_ENCRYPT)
-                return@launch
             }
-            VaultManager.updateProgress(0.1f, app.getString(R.string.status_encrypting), taskId = VaultManager.TASK_ENCRYPT)
-            val timeStamp = VaultNaming.readableTimestamp()
-            // 需求：图片数量少，不需要分卷 —— 直接生成单个 .pjm 容器
-            val result =
-                VaultManager.packUrisSingle(
-                    context = app,
-                    uris = images,
-                    category = VaultManager.CAT_PJM,
-                    baseName = "Random_$timeStamp",
-                    fileDao = fileDao,
-                    onProgress = { p ->
-                        VaultManager.updateProgress(
-                            0.1f + 0.85f * p,
-                            app.getString(R.string.status_encrypting),
-                            taskId = VaultManager.TASK_ENCRYPT,
-                        )
-                    },
-                )
-            if (result.isSuccess) {
-                VaultManager.updateProgress(
-                    1f,
-                    app.getString(R.string.toast_random_pick_done, images.size),
-                    taskId = VaultManager.TASK_ENCRYPT,
-                )
-                Toast.makeText(app, app.getString(R.string.toast_random_pick_done, images.size), Toast.LENGTH_LONG).show()
-                onDone(true)
-            } else {
-                VaultManager.updateProgress(
-                    0f,
-                    app.getString(R.string.error_export_failed_simple),
-                    taskId = VaultManager.TASK_ENCRYPT,
-                    isError = true,
-                )
-                onDone(false)
-            }
-            delay(1500)
-            VaultManager.clearProgress(VaultManager.TASK_ENCRYPT)
-            VaultManager.endOperation(VaultManager.TASK_ENCRYPT)
         }
     }
 
@@ -136,9 +137,8 @@ class RandomPickController(
     ) {
         scope.launch {
             val entities =
-                runCatching {
-                    fileDao.getRandomFilesByCategory(VaultManager.CAT_IMAGES, count.coerceIn(1, MAX_RANDOM_PICK))
-                }.getOrDefault(emptyList())
+                runCatching { pickRandomImages(count.coerceIn(1, MAX_RANDOM_PICK)) }
+                    .getOrDefault(emptyList())
             if (entities.isEmpty()) {
                 Toast.makeText(app, app.getString(R.string.toast_random_pick_empty), Toast.LENGTH_LONG).show()
                 onPicked(RandomPickResult(emptyList(), 0))
@@ -155,6 +155,34 @@ class RandomPickController(
             }
             onPicked(RandomPickResult(files.map { it.absolutePath }, entities.size - files.size))
         }
+    }
+
+    /**
+     * 按记录数生成不重复的随机 offset 集合，再逐条取行。
+     *
+     * 旧路径走 `ORDER BY RANDOM()` 全表排序；这里走 `COUNT + OFFSET`，
+     * 4 万行时从「数秒 + 临时表」降到 O(k log n)。
+     * 若 offset 因并发删改落空（返回 null），跳过该条，返回实际取到的数量。
+     */
+    private suspend fun pickRandomImages(count: Int): List<com.dhhxfggg.pjm.data.model.FileEntity> {
+        val total = fileDao.getCountByCategory(VaultManager.CAT_IMAGES)
+        if (total <= 0) return emptyList()
+        val wanted = count.coerceAtMost(total)
+        // 稀疏 Fisher–Yates：只维护 wanted 个选中 offset，空间 O(wanted) 而非 O(total)。
+        // 4 万行库里抽 50 张时不会物化 4 万个 Int，也不会像"随机抽不重复"那样
+        // 在 wanted≈total 时退化成赠券收集问题（自旋几十次才凑齐）。
+        // picked 只在被交换到的槽位上记录覆盖值，其余槽位隐式等于自身下标。
+        // 结果取 0..wanted-1 槽位的值，即一次均匀随机排列的前 N 个。
+        val picked = HashMap<Int, Int>(wanted * 2)
+        for (j in 0 until wanted) {
+            val i = j + Random.nextInt(total - j)
+            val a = picked[j] ?: j
+            val b = picked[i] ?: i
+            picked[j] = b
+            picked[i] = a
+        }
+        val offsets = (0 until wanted).map { j -> picked[j] ?: j }
+        return offsets.mapNotNull { offset -> fileDao.getFileByOffset(VaultManager.CAT_IMAGES, offset) }
     }
 
     companion object {

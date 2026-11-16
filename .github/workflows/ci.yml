@@ -11,6 +11,8 @@ name: CI
 on:
   push:
     branches: [main]
+    # 版本 tag 也要跑：release 产物（APK）依赖它上传，之前打 tag 完全没有触发
+    tags: ["v*", "V*"]
   pull_request:
     branches: [main]
 
@@ -22,7 +24,7 @@ jobs:
   build:
     name: Build & Test
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
 
     env:
       ANDROID_HOME: /usr/local/lib/android/sdk
@@ -74,14 +76,51 @@ jobs:
       - name: Compile instrumented tests
         run: ./gradlew -Dgradle.user.home=$HOME/.gradle :app:assembleDebugAndroidTest --stacktrace
 
+      # 核心修复：此前只有 assembleDebugAndroidTest（编译），仪器化测试从未真正执行过。
+      # 已知限制（本步骤暂时非阻塞，见下）：
+      #  - app/build.gradle.kts 的 abiFilters 只有 armeabi-v7a / arm64-v8a，
+      #    x86_64 模拟器上原生库不可用；当前两个用例（ExampleInstrumentedTest /
+      #    DatabaseMigrationTest）都不触达 JNI，因此可以跑通，但无法覆盖加密等原生路径；
+      #  - 先用 continue-on-error 避免模拟器/ABI 环境问题把主 CI 拖红；
+      #    等 debug 构建补上 x86_64 ABI 后，应去掉 continue-on-error 变成硬门禁。
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Instrumented tests (emulator)
+        if: github.event_name != 'pull_request'
+        continue-on-error: true
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect
+          script: ./gradlew -Dgradle.user.home=$HOME/.gradle :app:connectedDebugAndroidTest --stacktrace
+
       - name: Unit tests
         run: ./gradlew -Dgradle.user.home=$HOME/.gradle :app:testDebugUnitTest --stacktrace
+
+      # 核心修复：ktlint 只查 Kotlin 格式，Android lint（NewApi/导出组件/权限）完全没跑。
+      - name: Android lint (debug)
+        run: ./gradlew -Dgradle.user.home=$HOME/.gradle :app:lintDebug --stacktrace
 
       - name: ktlint check
         run: ./gradlew -Dgradle.user.home=$HOME/.gradle ktlintCheck --stacktrace
 
       - name: Assemble release
         run: ./gradlew -Dgradle.user.home=$HOME/.gradle :app:assembleRelease --stacktrace
+
+      - name: Upload lint report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: lint-report
+          path: app/build/reports/lint-results-debug.*
+          retention-days: 7
 
       - name: Upload debug test report
         if: always()
@@ -91,8 +130,17 @@ jobs:
           path: app/build/reports/tests/testDebugUnitTest/
           retention-days: 7
 
-      - name: Upload release APK
+      - name: Upload instrumented test report
         if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: instrumented-test-report
+          path: app/build/reports/androidTests/connected/
+          retention-days: 7
+
+      # P2：release APK 只在 assembleRelease 成功后上传（旧写法 always() 会在构建失败时上传陈旧产物）；报告类上传保留 always() 供失败诊断。
+      - name: Upload release APK
+        if: success()
         uses: actions/upload-artifact@v6
         with:
           name: release-apk

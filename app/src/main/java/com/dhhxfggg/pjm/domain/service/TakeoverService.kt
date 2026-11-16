@@ -62,6 +62,12 @@ class TakeoverService : Service() {
     private var observer: ContentObserver? = null
     private var scanJob: Job? = null
 
+    /** 停服要回到主线程串行执行（与 onStartCommand 的 startForeground 互斥） */
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    @Volatile
+    private var lastStartId = 0
+
     /** ContentObserver 会为一件事回调很多次（连拍/多选/相册刷新），用 CONFLATED 合并成一次扫描 */
     private val scanSignal = Channel<Unit>(Channel.CONFLATED)
 
@@ -91,6 +97,7 @@ class TakeoverService : Service() {
         flags: Int,
         startId: Int,
     ): Int {
+        lastStartId = startId
         TakeoverNotifications.ensureChannels(this)
         PjmLogger.i(
             TAG,
@@ -129,7 +136,13 @@ class TakeoverService : Service() {
     }
 
     private fun startWatching() {
-        val collection = MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL)
+        // API 29 才引入 VOLUME_EXTERNAL 卷名常量：minSdk 24 上退回旧的 "external" 字面量
+        val collection =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL)
+            } else {
+                MediaStore.Files.getContentUri("external")
+            }
         val watcher =
             object : ContentObserver(Handler(Looper.getMainLooper())) {
                 override fun onChange(selfChange: Boolean) {
@@ -201,7 +214,7 @@ class TakeoverService : Service() {
         try {
             if (!TakeoverPrefs.isEnabled(this)) {
                 PjmLogger.i(TAG, "接管总开关已关闭，停止服务")
-                stopSelf()
+                stopSelfFromWorker()
                 return 0
             }
             val managed = managedAppDao.getAll()
@@ -233,7 +246,7 @@ class TakeoverService : Service() {
             }
             if (managed.isEmpty()) {
                 PjmLogger.i(TAG, "没有需要接管的应用，停止服务")
-                stopSelf()
+                stopSelfFromWorker()
                 return 0
             }
             updateServiceNotification(managed.size)
@@ -243,6 +256,18 @@ class TakeoverService : Service() {
             PjmLogger.e(TAG, "接管扫描失败: " + e.javaClass.simpleName + ": " + e.message, e as? Exception)
         }
         return 0
+    }
+
+    /**
+     * 从后台协程里停服：投递到主线程并带上 startId。
+     *
+     * 旧实现在 IO 协程里直接 `stopSelf()`：若此刻主线程正在执行新的 onStartCommand
+     * （`startForeground` 还没跑完），服务会被提前停掉 —— 通知消失、观察者注销，
+     * 而新的一次启动请求排队后已无人处理。`stopSelf(startId)` 只在没有更新的启动请求时才生效。
+     */
+    private fun stopSelfFromWorker() {
+        val startId = lastStartId
+        mainHandler.post { stopSelf(startId) }
     }
 
     /** 屏幕是否亮着：熄屏时跳过目录深扫，避免在没人用手机时白扫一遍存储 */

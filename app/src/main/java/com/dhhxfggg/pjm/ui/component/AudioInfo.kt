@@ -26,7 +26,22 @@ private fun readAudioInfo(file: File): AudioInfo? {
         retriever.setDataSource(file.absolutePath)
         val artwork =
             retriever.embeddedPicture?.let { bytes ->
-                runCatching { BitmapFactory.decodeByteArray(bytes, 0, bytes.size) }.getOrNull()
+                runCatching {
+                    // 核心修复：内嵌封面常是 3000×3000 以上（ARGB_8888 约 36MB），原来直接全尺寸解码。
+                    // 先读边界算采样、按 ~1024 边长解码，避免大分配 + GC 抖动（OOM 被 runCatching
+                    // 兜住时用户看到的就是"没有封面"）。
+                    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+                    val longest = maxOf(bounds.outWidth, bounds.outHeight)
+                    var sample = 1
+                    while (longest > 0 && longest / (sample * 2) >= 1024) sample *= 2
+                    BitmapFactory.decodeByteArray(
+                        bytes,
+                        0,
+                        bytes.size,
+                        BitmapFactory.Options().apply { inSampleSize = sample },
+                    )
+                }.getOrNull()
             }
         AudioInfo(
             title = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE),

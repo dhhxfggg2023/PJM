@@ -32,8 +32,17 @@
 -dontwarn org.objectweb.asm.**
 
 # [PJM Core Utils]
--keep class com.dhhxfggg.pjm.domain.util.** { *; }
--keepclassmembers class com.dhhxfggg.pjm.domain.util.** { *; }
+# 核心修复：旧规则把整个核心包（CryptoUtils/VaultManager/IngestionEngine…）全量 keep，
+# 与 isMinifyEnabled=true 直接矛盾：应用自身最大的一块既不混淆也不裁剪，
+# 固定 XOR 密钥的 CryptoUtils 类名/成员名还被完整保留，主动降低了逆向成本。
+# 只有 JNI 入口（native 方法名 + 调用它的类）必须保留；其余交给 R8 正常处理。
+# JNI 通过固定符号 Java_<包名>_<类名>_<方法名> 查找函数：类名与方法名都不能混淆。
+# 只钉住这一个入口，CryptoUtils 其余成员与整个 domain.util 包都交回 R8 处理。
+-keepnames class com.dhhxfggg.pjm.domain.util.CryptoUtils
+-keepclassmembers class com.dhhxfggg.pjm.domain.util.CryptoUtils {
+    native <methods>;
+    void transformBytesNative(byte[], int, int, byte[], long, int);
+}
 
 # [PJM Shizuku/特权服务] 关键：FileServerMain 由 app_process 反射启动，
 # 类名/入口绝不能混淆（否则 release 版特权服务无法启动）

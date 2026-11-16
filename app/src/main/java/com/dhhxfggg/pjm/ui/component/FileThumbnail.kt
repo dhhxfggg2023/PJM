@@ -13,6 +13,7 @@ import coil3.request.ImageRequest
 import coil3.request.crossfade
 import coil3.video.VideoFrameDecoder
 import com.dhhxfggg.pjm.data.model.FileEntity
+import com.dhhxfggg.pjm.domain.util.CacheKeys
 import com.dhhxfggg.pjm.domain.util.FileUtils
 import com.dhhxfggg.pjm.domain.util.ThumbnailCache
 import com.dhhxfggg.pjm.domain.util.VaultManager
@@ -75,20 +76,20 @@ internal fun FileThumbnail(
                     null
                 }
         }
-    val fingerprint =
-        remember(fileEntity.relativePath) {
-            FileUtils.getFileFingerprint(fileEntity)
+    val cacheKey =
+        remember(fileEntity.relativePath, fileEntity.size, fileEntity.lastModified) {
+            CacheKeys.of(fileEntity)
         }
 
     // 请求只构建一次：每次重组都 new 一个 Builder 会反复分配对象，也让 Coil 更容易重新发起加载
     val thumbPath = diskThumb?.absolutePath
     val request =
-        remember(file.absolutePath, size, crossfade, thumbPath, fingerprint) {
+        remember(file.absolutePath, size, crossfade, thumbPath, cacheKey) {
             ImageRequest
                 .Builder(context)
                 .size(size)
                 // 同一张图在不同卡片尺寸下复用内存缓存：来回滚动不用反复解码
-                .memoryCacheKey(fingerprint)
+                .memoryCacheKey(cacheKey)
                 .crossfade(crossfade)
                 // 保险库里的文件本来就在本地，Coil 再把它整份复制进磁盘缓存是纯双倍 IO：
                 // 滚动时每个新缩略图都要"读整个 JPEG + 写整个 JPEG"，缓存还会不停淘汰重写。
@@ -101,7 +102,7 @@ internal fun FileThumbnail(
                         data(thumbPath)
                     } else {
                         data(file.absolutePath)
-                        diskCacheKey(fingerprint)
+                        diskCacheKey(cacheKey)
                         if (FileUtils.isVideoFile(fileEntity.name)) {
                             decoderFactory(VideoFrameDecoder.Factory())
                         }

@@ -58,41 +58,49 @@ class BiliSettingsController(
                 Toast.makeText(app, app.getString(R.string.toast_operation_in_progress), Toast.LENGTH_SHORT).show()
                 return@launch
             }
-            _isScanningBili.value = true
-            val statusSearching = app.getString(R.string.status_searching_bili_cache)
-            // 核心修复：扫描遍历是【不确定时长】操作，用无限循环进度条（isIndeterminate），
-            VaultManager.updateProgress(0f, statusSearching, taskId = VaultManager.TASK_BILI_SCAN, isActive = true, isIndeterminate = true)
+            try {
+                _isScanningBili.value = true
+                val statusSearching = app.getString(R.string.status_searching_bili_cache)
+                // 核心修复：扫描遍历是【不确定时长】操作，用无限循环进度条（isIndeterminate），
+                VaultManager.updateProgress(0f, statusSearching, taskId = VaultManager.TASK_BILI_SCAN, isActive = true, isIndeterminate = true)
 
-            val items =
-                try {
-                    BiliBridge.scan(app, rootUri) { status ->
-                        VaultManager.updateProgress(
-                            0f,
-                            status,
-                            taskId = VaultManager.TASK_BILI_SCAN,
-                            isActive = true,
-                            isIndeterminate = true,
-                        )
+                val items =
+                    try {
+                        BiliBridge.scan(app, rootUri) { status ->
+                            VaultManager.updateProgress(
+                                0f,
+                                status,
+                                taskId = VaultManager.TASK_BILI_SCAN,
+                                isActive = true,
+                                isIndeterminate = true,
+                            )
+                        }
+                    } catch (e: Exception) {
+                        PjmLogger.e("BiliController", "Bili scan failed", e)
+                        emptyList()
                     }
-                } catch (e: Exception) {
-                    PjmLogger.e("BiliController", "Bili scan failed", e)
-                    emptyList()
+
+                if (items.isEmpty()) {
+                    Toast.makeText(app, app.getString(R.string.toast_bili_no_cache_found), Toast.LENGTH_LONG).show()
                 }
 
-            if (items.isEmpty()) {
-                Toast.makeText(app, app.getString(R.string.toast_bili_no_cache_found), Toast.LENGTH_LONG).show()
+                _biliItems.value = if (items.isNotEmpty()) items else null
+                _isScanningBili.value = false
+                VaultManager.updateProgress(
+                    1f,
+                    if (items.isNotEmpty()) app.getString(R.string.status_all_tasks_complete) else statusSearching,
+                    taskId = VaultManager.TASK_BILI_SCAN,
+                )
+                // 保留原有完成态延迟（让 100% 在 UI 上可见），释放统一交给 finally
+                delay(800)
+            } finally {
+                // 核心修复：协程取消/异常时也必须释放占位，否则 TASK_BILI_SCAN 永久卡死
+                // 扫描标志同样在 finally 复位：旧实现只在成功路径置 false，
+                // BiliBridge.scan 抛异常时 "正在扫描" 会一直显示，按钮再也点不动。
+                _isScanningBili.value = false
+                VaultManager.clearProgress(VaultManager.TASK_BILI_SCAN)
+                VaultManager.endOperation(VaultManager.TASK_BILI_SCAN)
             }
-
-            _biliItems.value = if (items.isNotEmpty()) items else null
-            _isScanningBili.value = false
-            VaultManager.updateProgress(
-                1f,
-                if (items.isNotEmpty()) app.getString(R.string.status_all_tasks_complete) else statusSearching,
-                taskId = VaultManager.TASK_BILI_SCAN,
-            )
-            delay(800)
-            VaultManager.clearProgress(VaultManager.TASK_BILI_SCAN)
-            VaultManager.endOperation(VaultManager.TASK_BILI_SCAN)
         }
     }
 
@@ -130,8 +138,11 @@ class BiliSettingsController(
 
                 _biliMergedVideos.value = if (items.isNotEmpty()) items else null
                 _isScanningBiliMerged.value = false
-                VaultManager.clearProgress(VaultManager.TASK_BILI_SCAN_MERGED)
             } finally {
+                // 缺口修复：原 finally 只 endOperation，取消/异常时进度条目未清；两处都补齐。
+                // 扫描标志同 TASK_BILI_SCAN：只在成功路径复位的话，异常后按钮会永久禁用。
+                _isScanningBiliMerged.value = false
+                VaultManager.clearProgress(VaultManager.TASK_BILI_SCAN_MERGED)
                 VaultManager.endOperation(VaultManager.TASK_BILI_SCAN_MERGED)
             }
         }
@@ -149,71 +160,74 @@ class BiliSettingsController(
                 _biliMergedVideos.value = items
                 return@launch
             }
-            withContext(VaultManager.PjmDispatchers.IO) {
-                val total = items.size
-                val mergedAutoDelete = settingsProvider().biliMergedAutoDelete
+            try {
+                withContext(VaultManager.PjmDispatchers.IO) {
+                    val total = items.size
+                    val mergedAutoDelete = settingsProvider().biliMergedAutoDelete
 
-                // 核心修复：按父文件夹分组
-                val folderKey: (BiliBridge.MergedVideoItem) -> String = { item ->
-                    item.shizukuPath?.substringBeforeLast('/')
-                        ?: item.parentFolder?.let { if (it.scheme == "file") it.path ?: "" else it.toString() }
-                        ?: ""
-                }
-                val itemsByFolder = items.groupBy(folderKey)
-                val importedOk = mutableSetOf<BiliBridge.MergedVideoItem>()
+                    // 核心修复：按父文件夹分组
+                    val folderKey: (BiliBridge.MergedVideoItem) -> String = { item ->
+                        item.shizukuPath?.substringBeforeLast('/')
+                            ?: item.parentFolder?.let { if (it.scheme == "file") it.path ?: "" else it.toString() }
+                            ?: ""
+                    }
+                    val itemsByFolder = items.groupBy(folderKey)
+                    val importedOk = mutableSetOf<BiliBridge.MergedVideoItem>()
 
-                items.forEachIndexed { index, item ->
-                    val progress = (index + 1).toFloat() / total
-                    VaultManager.updateProgress(
-                        progress,
-                        app.getString(R.string.status_processing_bili_batch, index + 1, total, item.name),
-                        taskId = VaultManager.TASK_BILI_IMPORT_MERGED,
-                    )
+                    items.forEachIndexed { index, item ->
+                        val progress = (index + 1).toFloat() / total
+                        VaultManager.updateProgress(
+                            progress,
+                            app.getString(R.string.status_processing_bili_batch, index + 1, total, item.name),
+                            taskId = VaultManager.TASK_BILI_IMPORT_MERGED,
+                        )
 
-                    val input =
-                        try {
-                            app.contentResolver.openInputStream(item.uri)
-                        } catch (e: Exception) {
-                            null
-                        }
-                    if (input != null) {
-                        VaultManager
-                            .digestFileToEntity(
-                                context = app,
-                                fileName = item.name,
-                                inputStream = input,
-                                expectedSize = FileUtils.getFileSize(app, item.uri),
-                                overrideCategory = VaultManager.CAT_BILI_VIDEOS,
-                            ).onSuccess { entity ->
-                                fileDao.upsertLocked(entity)
-                                ThumbnailCache.generateVideoThumbnail(app, entity)
-                                importedOk.add(item)
+                        val input =
+                            try {
+                                app.contentResolver.openInputStream(item.uri)
+                            } catch (e: Exception) {
+                                null
                             }
+                        if (input != null) {
+                            VaultManager
+                                .digestFileToEntity(
+                                    context = app,
+                                    fileName = item.name,
+                                    inputStream = input,
+                                    expectedSize = FileUtils.getFileSize(app, item.uri),
+                                    overrideCategory = VaultManager.CAT_BILI_VIDEOS,
+                                ).onSuccess { entity ->
+                                    fileDao.upsertLocked(entity)
+                                    ThumbnailCache.generateVideoThumbnail(app, entity)
+                                    importedOk.add(item)
+                                }
+                        }
                     }
-                }
 
-                if (mergedAutoDelete) {
-                    itemsByFolder.forEach { (key, folderItems) ->
-                        if (key.isNotEmpty() && folderItems.all { it in importedOk }) {
-                            deleteMergedSourceFolder(app, folderItems.first())
-                        } else {
-                            folderItems.filter { it in importedOk }.forEach { deleteMergedSourceFile(app, it) }
+                    if (mergedAutoDelete) {
+                        itemsByFolder.forEach { (key, folderItems) ->
+                            if (key.isNotEmpty() && folderItems.all { it in importedOk }) {
+                                deleteMergedSourceFolder(app, folderItems.first())
+                            } else {
+                                folderItems.filter { it in importedOk }.forEach { deleteMergedSourceFile(app, it) }
+                            }
                         }
                     }
                 }
+                // 核心修复：cleanupEmptyBiliDirs 是 suspend 但内部【没有】切线程，
+                // 它会做 Shizuku IPC + 递归遍历 Android/data/<pkg>/download。
+                // 原来这一行写在 withContext(IO) 块之外 → 直接跑在主线程，批量导入完成后卡 UI 甚至 ANR。
+                withContext(VaultManager.PjmDispatchers.IO) { BiliBridge.cleanupEmptyBiliDirs(app) }
+                VaultManager.updateProgress(
+                    1f,
+                    app.getString(R.string.status_all_tasks_complete),
+                    taskId = VaultManager.TASK_BILI_IMPORT_MERGED,
+                )
+                delay(1000.milliseconds)
+            } finally {
+                VaultManager.clearProgress(VaultManager.TASK_BILI_IMPORT_MERGED)
+                VaultManager.endOperation(VaultManager.TASK_BILI_IMPORT_MERGED)
             }
-            // 核心修复：cleanupEmptyBiliDirs 是 suspend 但内部【没有】切线程，
-            // 它会做 Shizuku IPC + 递归遍历 Android/data/<pkg>/download。
-            // 原来这一行写在 withContext(IO) 块之外 → 直接跑在主线程，批量导入完成后卡 UI 甚至 ANR。
-            withContext(VaultManager.PjmDispatchers.IO) { BiliBridge.cleanupEmptyBiliDirs(app) }
-            VaultManager.updateProgress(
-                1f,
-                app.getString(R.string.status_all_tasks_complete),
-                taskId = VaultManager.TASK_BILI_IMPORT_MERGED,
-            )
-            delay(1000.milliseconds)
-            VaultManager.clearProgress(VaultManager.TASK_BILI_IMPORT_MERGED)
-            VaultManager.endOperation(VaultManager.TASK_BILI_IMPORT_MERGED)
             VaultManager.triggerRefresh()
         }
     }
@@ -313,83 +327,86 @@ class BiliSettingsController(
                 _biliItems.value = items
                 return@launch
             }
-            withContext(VaultManager.PjmDispatchers.IO) {
-                val total = items.size
-                val biliAutoDelete = settingsProvider().biliAutoDelete
+            try {
+                withContext(VaultManager.PjmDispatchers.IO) {
+                    val total = items.size
+                    val biliAutoDelete = settingsProvider().biliAutoDelete
 
-                items.forEachIndexed { index, item ->
-                    val progress = (index + 1).toFloat() / total
-                    VaultManager.updateProgress(
-                        progress,
-                        app.getString(R.string.status_processing_bili_batch, index + 1, total, item.title),
-                        taskId = VaultManager.TASK_BILI_IMPORT,
-                    )
+                    items.forEachIndexed { index, item ->
+                        val progress = (index + 1).toFloat() / total
+                        VaultManager.updateProgress(
+                            progress,
+                            app.getString(R.string.status_processing_bili_batch, index + 1, total, item.title),
+                            taskId = VaultManager.TASK_BILI_IMPORT,
+                        )
 
-                    val tempMp4 = File(app.cacheDir, "bili_merge_${System.nanoTime()}.mp4")
+                        val tempMp4 = File(app.cacheDir, "bili_merge_${System.nanoTime()}.mp4")
 
-                    BiliBridge
-                        .merge(app, item, tempMp4)
-                        .onSuccess {
-                            if (tempMp4.exists() && tempMp4.length() > 0) {
-                                VaultManager
-                                    .digestFileToEntity(
-                                        context = app,
-                                        fileName = "${item.title}.mp4",
-                                        inputStream = tempMp4.inputStream(),
-                                        expectedSize = tempMp4.length(),
-                                        overrideCategory = VaultManager.CAT_BILI_VIDEOS,
-                                    ).onSuccess { entity ->
-                                        fileDao.upsertLocked(entity)
-                                        ThumbnailCache.generateVideoThumbnail(app, entity)
+                        BiliBridge
+                            .merge(app, item, tempMp4)
+                            .onSuccess {
+                                if (tempMp4.exists() && tempMp4.length() > 0) {
+                                    VaultManager
+                                        .digestFileToEntity(
+                                            context = app,
+                                            fileName = "${item.title}.mp4",
+                                            inputStream = tempMp4.inputStream(),
+                                            expectedSize = tempMp4.length(),
+                                            overrideCategory = VaultManager.CAT_BILI_VIDEOS,
+                                        ).onSuccess { entity ->
+                                            fileDao.upsertLocked(entity)
+                                            ThumbnailCache.generateVideoThumbnail(app, entity)
 
-                                        if (biliAutoDelete) {
-                                            try {
-                                                // 核心修复（数据安全）：只删除本条目对应的两个 m4s 源文件，
-                                                // 绝不递归删除父目录 —— 缓存目录里可能还放着用户没勾选的其他条目。
-                                                // 真正的目录清理由 cleanupEmptyBiliDirs 负责（只删整棵树无音视频的目录）。
-                                                val shizukuSources = listOfNotNull(item.shizukuVideoPath, item.shizukuAudioPath)
-                                                if (shizukuSources.isNotEmpty()) {
-                                                    shizukuSources.forEach { p ->
-                                                        runCatching { ShizukuBridge.deletePath(app, p) }
-                                                            .onFailure { PjmLogger.w("BiliController", "Delete failed: " + p) }
-                                                    }
-                                                    item.shizukuParentPath?.let { cleanupEmptyBiliParents(app, it) }
-                                                } else if (item.parentFolder.scheme == "file") {
-                                                    listOf(item.videoM4s, item.audioM4s).forEach { u ->
-                                                        runCatching { u.path?.let { File(it).delete() } }
-                                                    }
-                                                    val folderPath = item.parentFolder.path ?: ""
-                                                    cleanupEmptyBiliParents(app, folderPath)
-                                                } else {
-                                                    listOf(item.videoM4s, item.audioM4s).forEach { u ->
-                                                        runCatching {
-                                                            if (DocumentsContract.isDocumentUri(app, u)) {
-                                                                DocumentsContract.deleteDocument(app.contentResolver, u)
-                                                            } else {
-                                                                app.contentResolver.delete(u, null, null)
+                                            if (biliAutoDelete) {
+                                                try {
+                                                    // 核心修复（数据安全）：只删除本条目对应的两个 m4s 源文件，
+                                                    // 绝不递归删除父目录 —— 缓存目录里可能还放着用户没勾选的其他条目。
+                                                    // 真正的目录清理由 cleanupEmptyBiliDirs 负责（只删整棵树无音视频的目录）。
+                                                    val shizukuSources = listOfNotNull(item.shizukuVideoPath, item.shizukuAudioPath)
+                                                    if (shizukuSources.isNotEmpty()) {
+                                                        shizukuSources.forEach { p ->
+                                                            runCatching { ShizukuBridge.deletePath(app, p) }
+                                                                .onFailure { PjmLogger.w("BiliController", "Delete failed: " + p) }
+                                                        }
+                                                        item.shizukuParentPath?.let { cleanupEmptyBiliParents(app, it) }
+                                                    } else if (item.parentFolder.scheme == "file") {
+                                                        listOf(item.videoM4s, item.audioM4s).forEach { u ->
+                                                            runCatching { u.path?.let { File(it).delete() } }
+                                                        }
+                                                        val folderPath = item.parentFolder.path ?: ""
+                                                        cleanupEmptyBiliParents(app, folderPath)
+                                                    } else {
+                                                        listOf(item.videoM4s, item.audioM4s).forEach { u ->
+                                                            runCatching {
+                                                                if (DocumentsContract.isDocumentUri(app, u)) {
+                                                                    DocumentsContract.deleteDocument(app.contentResolver, u)
+                                                                } else {
+                                                                    app.contentResolver.delete(u, null, null)
+                                                                }
                                                             }
                                                         }
                                                     }
+                                                } catch (e: Exception) {
+                                                    PjmLogger.e("BiliController", "Failed to clean Bili source files", e)
                                                 }
-                                            } catch (e: Exception) {
-                                                PjmLogger.e("BiliController", "Failed to clean Bili source files", e)
                                             }
                                         }
-                                    }
+                                }
+                                tempMp4.delete()
+                            }.onFailure { fail ->
+                                PjmLogger.e("BiliController", "Merge fail: ${fail.message}")
+                                tempMp4.delete()
                             }
-                            tempMp4.delete()
-                        }.onFailure { fail ->
-                            PjmLogger.e("BiliController", "Merge fail: ${fail.message}")
-                            tempMp4.delete()
-                        }
+                    }
                 }
+                // 核心修复：同 TASK_BILI_IMPORT_MERGED —— 这行原本跑在主线程（Shizuku IPC + 递归遍历）。
+                withContext(VaultManager.PjmDispatchers.IO) { BiliBridge.cleanupEmptyBiliDirs(app) }
+                VaultManager.updateProgress(1f, app.getString(R.string.status_all_tasks_complete), taskId = VaultManager.TASK_BILI_IMPORT)
+                delay(1000.milliseconds)
+            } finally {
+                VaultManager.clearProgress(VaultManager.TASK_BILI_IMPORT)
+                VaultManager.endOperation(VaultManager.TASK_BILI_IMPORT)
             }
-            // 核心修复：同 TASK_BILI_IMPORT_MERGED —— 这行原本跑在主线程（Shizuku IPC + 递归遍历）。
-            withContext(VaultManager.PjmDispatchers.IO) { BiliBridge.cleanupEmptyBiliDirs(app) }
-            VaultManager.updateProgress(1f, app.getString(R.string.status_all_tasks_complete), taskId = VaultManager.TASK_BILI_IMPORT)
-            delay(1000.milliseconds)
-            VaultManager.clearProgress(VaultManager.TASK_BILI_IMPORT)
-            VaultManager.endOperation(VaultManager.TASK_BILI_IMPORT)
             VaultManager.triggerRefresh()
         }
     }

@@ -76,7 +76,12 @@ fun PlayerProgressBar(
                             dragging = false
                             onSeek(dragFraction)
                         },
-                        onDragCancel = { dragging = false },
+                        // 核心修复：拖动被系统取消时如果不回调 onSeek，外层 scrubbing 状态永远为 true，
+                        // 进度条与时间文本会卡在拖动位置直到再点一下。这里回到真实播放位置。
+                        onDragCancel = {
+                            dragging = false
+                            onSeek(progress.coerceIn(0f, 1f))
+                        },
                     )
                 }.pointerInput(widthPx) {
                     if (widthPx <= 0) return@pointerInput

@@ -62,7 +62,10 @@ class PcLinkClient(
                 }
             }
             val disk = obj.optJSONObject("disk")
-            val taskObj = obj.optJSONObject("task")
+            // 核心修复：PC 端 PJM-Link 在 /api/pc/state 里把拉取进度放在 `push` 键下，
+            // 手机端只读 `task` —— 于是「电脑端拉取」的进度永远是 null、界面永远不显示。
+            // 两个键都认（新 PC 端用 push，老响应用 task），方法签名与返回类型不变。
+            val taskObj = obj.optJSONObject("task") ?: obj.optJSONObject("push")
             val task =
                 taskObj?.let {
                     PcTask(

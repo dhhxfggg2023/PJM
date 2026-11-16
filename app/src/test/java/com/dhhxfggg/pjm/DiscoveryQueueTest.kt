@@ -1,6 +1,7 @@
 package com.dhhxfggg.pjm
 
 import com.dhhxfggg.pjm.ui.viewmodel.DiscoveryQueue
+import com.dhhxfggg.pjm.ui.viewmodel.computeWindow
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -49,14 +50,36 @@ class DiscoveryQueueTest {
         var paths: List<String>,
         initialHistory: Collection<String> = emptyList(),
     ) {
-        /** 就是 `view_history` 表：**只记录真正上屏过的**（持久化） */
-        val persistedHistory = HashSet<String>(initialHistory)
+        /** 兼容既有测试用例：单分类时统一用 ALL 这个键 */
+        private companion object {
+            const val ALL = "images"
+        }
+
+        /** 模拟每个分类各自一份持久化浏览历史（真实 DAO 按 category 分列） */
+        val histories = HashMap<String, HashSet<String>>()
+
+        /** 记录每个 DAO 回调实际收到的分类，供分类隔离回归测试断言 */
+        val observedCategories = mutableListOf<String>()
+
+        init {
+            histories[ALL] = HashSet(initialHistory)
+        }
+
+        /** 单分类视图，供既有测试用例直接读写 */
+        val persistedHistory: MutableSet<String>
+            get() = histories.getOrPut(ALL) { HashSet() }
+
+        /** 暴露底层队列，供分类隔离回归测试直接用显式 category 调用 */
+        fun queueForTest(): DiscoveryQueue = queue
 
         private val queue =
             DiscoveryQueue(
-                unviewedPaths = { paths.filter { it !in persistedHistory } },
-                hasAnyPaths = { paths.isNotEmpty() },
-                onRoundRestart = { persistedHistory.clear() },
+                unviewedPaths = { category ->
+                    observedCategories += category
+                    paths.filter { it !in histories.getOrPut(category) { HashSet() } }
+                },
+                hasAnyPaths = { _ -> paths.isNotEmpty() },
+                onRoundRestart = { category -> histories[category]?.clear() },
             ).also { it.seedServed(persistedHistory) }
 
         /**
@@ -71,10 +94,10 @@ class DiscoveryQueueTest {
             settleAll: Boolean = true,
         ): Pair<Int, List<String>> {
             val epochBefore = queue.roundRestarts
-            var out = queue.nextBatch(limit)
-            if (out.isEmpty() && queue.isRoundComplete()) {
-                val restarted = queue.restartNextRound()
-                if (restarted) out = queue.nextBatch(limit)
+            var out = queue.nextBatch(limit, ALL)
+            if (out.isEmpty() && queue.isRoundComplete(ALL)) {
+                val restarted = queue.restartNextRound(ALL)
+                if (restarted) out = queue.nextBatch(limit, ALL)
                 if (restarted) {
                     settleServed(out, settleAll)
                     return queue.roundRestarts to out
@@ -107,7 +130,7 @@ class DiscoveryQueueTest {
 
         suspend fun pendingCount(): Int = queue.pendingCount
 
-        suspend fun isRoundComplete(): Boolean = queue.isRoundComplete()
+        suspend fun isRoundComplete(): Boolean = queue.isRoundComplete(ALL)
 
         /** 对应 ViewModel 构造时的"未看过优先"预排 */
         fun seedUnviewed(paths: Collection<String>) {
@@ -361,6 +384,87 @@ class DiscoveryQueueTest {
             assertFalse("只送出 3/8，不应判定本轮走完", h.isRoundComplete())
             assertEquals("浏览历史应原样保留", first.toSet(), h.persistedHistory)
         }
+
+    /**
+     * 回归测试：DAO 回调的分类必须由调用方固化传入，不能读"当前模式"。
+     *
+     * 旧实现的 unviewedPaths/hasAnyPaths/onRoundRestart 都从闭包读可变模式；
+     * 切分类时在途的旧协程继续跑到 onRoundRestart，就会清掉**新**分类的浏览历史。
+     * 这里直接以两个不同 category 调用队列，断言回调收到的始终是传入的分类。
+     */
+    @Test
+    fun daoCallbacksAlwaysUseTheCategoryPassedByCaller() =
+        runBlockingTest {
+            val h = Harness(vault(4))
+            val all = h.persistedHistory
+            all.addAll(listOf("images/img_1.jpg", "images/img_2.jpg"))
+
+            // 模拟"旧分类的一轮"：显式传 images
+            val out = h.queueForTest().nextBatch(10, "images")
+            assertEquals("images 分类应取到 2 条未看过", 2, out.size)
+
+            // 模拟切到 videos 分类后仍在途的旧批次重开一轮：
+            // 只要回调读的是"当前模式"而非传入的 images，videos 的历史就会被误清。
+            h.histories["videos"] = HashSet(listOf("videos/v_1.mp4"))
+            h.queueForTest().restartNextRound("images")
+
+            assertEquals(
+                "重开 images 一轮不得清掉 videos 分类的浏览历史",
+                setOf("videos/v_1.mp4"),
+                h.histories["videos"],
+            )
+            assertTrue(
+                "所有 DAO 回调里出现的分类都必须是调用方显式传入的值",
+                h.observedCategories.all { it == "images" },
+            )
+        }
+
+    // ---------- 浏览队列窗口裁剪（computeWindow，纯函数） ----------
+
+    /**
+     * 窗口裁剪的规则：「当前页 - 窗口起点」不超过 300 条时原地不动（不是每翻一页都搬运列表），
+     * 超过才裁一次，把当前页前方保留的条数收敛到 keep（100）—— 长会话里 UI 列表因此有上界。
+     */
+    @Test
+    fun computeWindowOnlyTrimsAfterThresholdAndKeepsWindowBounded() {
+        // 相对页号 300：还没到阈值
+        assertEquals(0, computeWindow(total = 400, settled = 300, base = 0, keep = 100))
+        // 相对页号 301：裁掉 201 条，当前页前方恰好剩 100 条
+        assertEquals(201, computeWindow(total = 400, settled = 301, base = 0, keep = 100))
+        // 已经裁过一段（base=200）：仍用同一套相对判据
+        assertEquals(200, computeWindow(total = 1000, settled = 500, base = 200, keep = 100))
+        assertEquals(401, computeWindow(total = 1000, settled = 501, base = 200, keep = 100))
+    }
+
+    /**
+     * 裁完必须自洽：当前页相对新起点恰好剩 keep 条，且同一状态再算一次不会再裁（幂等）——
+     * 否则每次停稳都会继续裁，当前页自己会被裁掉。
+     */
+    @Test
+    fun computeWindowIsIdempotentAndNeverTrimsPastCurrentPage() {
+        val base = 200
+        val settled = 501
+        val trimmed = computeWindow(total = 1000, settled = settled, base = base, keep = 100)
+        assertEquals("当前页前方应恰好保留 keep 条", 100, settled - trimmed)
+        assertTrue("只允许向前抬起点", trimmed >= base)
+        assertTrue("当前页必须仍在窗口内", settled >= trimmed)
+
+        // 窗口内容同步变成 1000 - (401 - 200) = 799 条；同一状态下重算不得继续裁
+        val totalAfterTrim = 1000 - (trimmed - base)
+        assertEquals(799, totalAfterTrim)
+        assertEquals(trimmed, computeWindow(total = totalAfterTrim, settled = settled, base = trimmed, keep = 100))
+    }
+
+    /** 边界：空窗口/页号越界时不得返回非法起点（Screen 会拿它去 getOrNull 取页内容） */
+    @Test
+    fun computeWindowHandlesEmptyAndOutOfRangePages() {
+        assertEquals("空窗口不裁", 0, computeWindow(total = 0, settled = 0, base = 0, keep = 100))
+        assertEquals("空窗口保留已有起点", 250, computeWindow(total = 0, settled = 300, base = 250, keep = 100))
+        // 页号比窗口末尾还大（切分类/清表的瞬间）：按最后一页算，起点仍落在合法范围内
+        assertEquals(1399, computeWindow(total = 1500, settled = 1500, base = 0, keep = 100))
+        // 页号落在起点之前（不应该发生）：宁可原地不动，也不返回负下标
+        assertEquals(250, computeWindow(total = 500, settled = 100, base = 250, keep = 100))
+    }
 }
 
 /** kotlinx-coroutines-test 不在本项目依赖里，这里用 runBlocking 跑协程测试 */

@@ -504,9 +504,14 @@ object FileUtils {
         val uri = context.contentResolver.insert(collection, contentValues) ?: return false
 
         return try {
-            context.contentResolver.openOutputStream(uri)?.use { output ->
+            val output = context.contentResolver.openOutputStream(uri)
+            if (output == null) {
+                runCatching { context.contentResolver.delete(uri, null, null) }
+                return false
+            }
+            output.use { out ->
                 file.inputStream().use { input ->
-                    input.copyTo(output, VaultManager.ADAPTIVE_BUFFER_SIZE)
+                    input.copyTo(out, VaultManager.ADAPTIVE_BUFFER_SIZE)
                 }
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {

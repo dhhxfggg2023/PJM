@@ -47,8 +47,10 @@ fun SelectableFileCard(
     fileEntity: FileEntity,
     isSelected: Boolean,
     onClick: () -> Unit,
-    onLongPress: (() -> Unit)? = null,
+    // lint ModifierParameter：modifier 必须是第一个可选参数。
+    // 调用方（FileViewerScreen）全部用具名参数，调换顺序不影响它们。
     modifier: Modifier = Modifier,
+    onLongPress: (() -> Unit)? = null,
     imageOnly: Boolean = false,
     gridSpanCount: Int = 2,
 ) {

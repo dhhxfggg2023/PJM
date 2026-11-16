@@ -1,6 +1,7 @@
 package com.dhhxfggg.pjm.data.model
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 
 /**
@@ -20,7 +21,11 @@ import androidx.room.PrimaryKey
  * @property status    见 [TakeoverStatus]
  * @property createdAt 首次登记时间（失败记录的展示与清理都按它排序）
  */
-@Entity(tableName = "takeover_jobs")
+@Entity(
+    tableName = "takeover_jobs",
+    // 设置页按状态计数/清理（COUNT / IN），没有索引就是全表扫描
+    indices = [Index(value = ["status"])],
+)
 data class TakeoverJobEntity(
     @PrimaryKey val uri: String,
     val status: String,

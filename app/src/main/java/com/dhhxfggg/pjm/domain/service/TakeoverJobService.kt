@@ -9,6 +9,7 @@ import com.dhhxfggg.pjm.domain.util.PjmLogger
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
@@ -36,6 +37,9 @@ class TakeoverJobService : JobService() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    /** 当前这一轮的扫描（onStopJob 要能取消它） */
+    private var scanJob: Job? = null
+
     override fun onStartJob(params: JobParameters?): Boolean {
         if (!TakeoverPrefs.isEnabled(this)) {
             PjmLogger.i(TAG, "接管总开关已关闭，跳过定时扫描")
@@ -44,27 +48,38 @@ class TakeoverJobService : JobService() {
         }
         PjmLogger.i(TAG, "定时任务触发，直接执行一轮接管扫描")
         TakeoverNotifications.ensureChannels(this)
-        scope.launch {
-            try {
-                TakeoverScanEngine.scanOnce(
-                    context = this@TakeoverJobService,
-                    managedAppDao = managedAppDao,
-                    takeoverJobDao = takeoverJobDao,
-                    fileDao = fileDao,
-                    doSweep = true,
-                )
-            } catch (e: Throwable) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                PjmLogger.e(TAG, "兜底扫描失败", e as? Exception)
-            } finally {
-                jobFinished(params, false)
+        scanJob =
+            scope.launch {
+                try {
+                    TakeoverScanEngine.scanOnce(
+                        context = this@TakeoverJobService,
+                        managedAppDao = managedAppDao,
+                        takeoverJobDao = takeoverJobDao,
+                        fileDao = fileDao,
+                        doSweep = true,
+                    )
+                } catch (e: Throwable) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    PjmLogger.e(TAG, "兜底扫描失败", e as? Exception)
+                } finally {
+                    jobFinished(params, false)
+                }
             }
-        }
         // 返回 true：工作仍在继续，完成后再调 jobFinished
         return true
     }
 
-    override fun onStopJob(params: JobParameters?): Boolean = true
+    /**
+     * 返回 true 表示希望系统重排下一轮；同时必须真的取消在跑的扫描 ——
+     * 旧实现只 return true，当前轮继续在后台跑，系统下一轮唤醒时两轮并发扫同一批文件
+     * （重复入库 / 争抢删原文件）。
+     */
+    override fun onStopJob(params: JobParameters?): Boolean {
+        PjmLogger.i(TAG, "系统要求停止定时扫描，取消当前轮次")
+        scanJob?.cancel()
+        scanJob = null
+        return true
+    }
 
     override fun onDestroy() {
         scope.cancel()

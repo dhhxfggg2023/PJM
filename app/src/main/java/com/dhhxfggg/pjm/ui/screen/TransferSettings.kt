@@ -13,7 +13,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
@@ -25,6 +24,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.MonitorSmartphone
 import com.dhhxfggg.pjm.R
@@ -35,7 +35,7 @@ import com.dhhxfggg.pjm.ui.viewmodel.TransferViewModel
 
 @Composable
 internal fun TransferSettings(transferViewModel: TransferViewModel = hiltViewModel()) {
-    val state by transferViewModel.state.collectAsState()
+    val state by transferViewModel.state.collectAsStateWithLifecycle()
     var mode by remember { mutableIntStateOf(0) } // 0 = 发到电脑，1 = 从电脑取回
     Column(
         modifier =

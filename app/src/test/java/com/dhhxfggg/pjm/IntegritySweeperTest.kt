@@ -199,4 +199,62 @@ class IntegritySweeperTest {
             assertEquals(0, report.checked)
             assertEquals(0, report.corrupted)
         }
+
+    /**
+     * 回归测试：读失败（IO 异常）不得被当成「内容损坏」。
+     *
+     * calculateHash 在打开/读取失败时返回 null；旧写法 `null != 已存哈希` 恒为 true，
+     * 一次瞬时 IO 错误（或文件被占用）就会把健康文件累计进 total_bad。
+     * 用「目录冒充文件」构造 exists()==true 但 inputStream() 抛异常的场景。
+     */
+    @Test
+    fun sweep_readFailureIsSkippedNotCorrupted() =
+        runBlocking {
+            val dir = VaultManager.getCategoryDir(context, "images").apply { mkdirs() }
+            val blocked = File(dir, "blocked.jpg").apply { mkdirs() }
+            val entity =
+                FileEntity(
+                    relativePath = "images/blocked.jpg",
+                    name = "blocked.jpg",
+                    size = 1L,
+                    category = "images",
+                    lastModified = blocked.lastModified(),
+                    isImage = true,
+                    extension = "jpg",
+                    contentHash = "0123456789abcdef0123456789abcdef",
+                )
+            fileDao.upsertAll(listOf(entity))
+
+            val report = IntegritySweeper.sweep(context, fileDao)
+
+            assertEquals("读失败应跳过，不能算损坏", 0, report.corrupted)
+            assertEquals("读失败应计入 skipped", 1, report.skipped)
+            assertEquals("读失败不应计入累计问题数", 0L, report.totalBad)
+            assertTrue("不应出现「已损坏」问题", report.problems.none { it.contains("损坏") })
+        }
+
+    /** 同一规则也适用于手动「检查完整性」（VaultScanner.checkIntegrity）。 */
+    @Test
+    fun manualIntegrityCheck_readFailureIsNotCorrupted() =
+        runBlocking {
+            val dir = VaultManager.getCategoryDir(context, "images").apply { mkdirs() }
+            val blocked = File(dir, "blocked.jpg").apply { mkdirs() }
+            val entity =
+                FileEntity(
+                    relativePath = "images/blocked.jpg",
+                    name = "blocked.jpg",
+                    size = 1L,
+                    category = "images",
+                    lastModified = blocked.lastModified(),
+                    isImage = true,
+                    extension = "jpg",
+                    contentHash = "0123456789abcdef0123456789abcdef",
+                )
+            fileDao.upsertAll(listOf(entity))
+
+            val result = VaultScanner.checkIntegrity(context, fileDao) {}
+
+            assertTrue("手动检查不得把读失败判为损坏", result["corrupted"].isNullOrEmpty())
+            assertTrue("文件存在，不应判为丢失", result["missing"].isNullOrEmpty())
+        }
 }

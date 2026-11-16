@@ -12,6 +12,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
@@ -196,6 +197,18 @@ fun VideoControlBar(
     /** 快退/快进按钮一次跳多少毫秒；传 0 就不显示这两个按钮 */
     seekStepMs: Long = 10_000L,
 ) {
+    // 控制条会在拖动的过程中被收起（播放中 2.6s 自动隐藏），那时手势层直接从组合里消失，
+    // onDragEnd / onDragCancel 都不会再回调 —— 共享状态里的 scrubbing 就会永远停在 true：
+    // 轮询不再更新位置、拖动提示一直挂着。离开组合时把最后拖到的位置提交掉，让状态复位。
+    DisposableEffect(progress, player) {
+        onDispose {
+            if (progress.scrubbing) {
+                val target = progress.shownPositionMs
+                runCatching { player?.seekTo(target) }
+                progress.endScrub(target)
+            }
+        }
+    }
     Column(
         modifier =
             modifier

@@ -232,6 +232,10 @@ object ShizukuBridge {
     /**
      * 列出目录内容（shell 身份）。
      * 优先内置服务，其次 Shizuku。
+     *
+     * 协议：AIDL 返回的每一项是 `类型<NUL>文件名<NUL>字节数`（类型为 `D`/`F`）。
+     * 分隔符用 NUL 而不是 `|`：`|` 是合法文件名字符，用它切分会在文件名含 `|` 时
+     * 静默解析错（路径被截断、大小变 0），且不会报错。
      */
     suspend fun listFiles(
         context: Context,
@@ -246,7 +250,7 @@ object ShizukuBridge {
             withService { svc ->
                 svc.listFiles(path)?.mapNotNull { line ->
                     try {
-                        val parts = line.split("|")
+                        val parts = line.split('\u0000')
                         if (parts.size >= 2) {
                             FileInfo(parts[1], parts.getOrNull(2)?.toLongOrNull() ?: 0L, parts[0] == "D")
                         } else {
@@ -303,7 +307,7 @@ object ShizukuBridge {
         withService { svc ->
             svc.listFiles(path)?.mapNotNull { line ->
                 try {
-                    val parts = line.split("|")
+                    val parts = line.split('\u0000')
                     if (parts.size >= 2) {
                         FileInfo(parts[1], parts.getOrNull(2)?.toLongOrNull() ?: 0L, parts[0] == "D")
                     } else {

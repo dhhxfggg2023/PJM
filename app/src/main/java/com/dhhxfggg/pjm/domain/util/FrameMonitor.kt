@@ -70,5 +70,12 @@ object FrameMonitor {
 
     fun stop() {
         started = false
+        // doFrame 里 `if (!started) return` 已经能停链，但主动移除回调可以
+        // 立刻撤销已排队的这一帧，避免停掉后仍多跑一次（也避免重复 post 的残留）。
+        Choreographer.getInstance().removeFrameCallback(callback)
+        lastFrameNanos = 0L
+        windowStartMs = 0L
+        slowFrameCount = 0
+        worstFrameMs = 0L
     }
 }

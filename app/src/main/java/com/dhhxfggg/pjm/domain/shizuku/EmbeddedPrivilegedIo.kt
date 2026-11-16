@@ -77,7 +77,13 @@ object EmbeddedPrivilegedIo {
                 val tmpReq = File(dir, "$TMP_PREFIX$seq")
                 val body = AUTH_TOKEN + "\n" + args.joinToString("\t") + "\n"
                 tmpReq.writeText(body)
-                if (tmpReq.renameTo(reqFile)) tmpReq.delete() else reqFile.writeText(body)
+                // 核心修复：rename 失败时不再退回"直接写 reqFile" —— 直写期间服务端随时可能
+                // 读到半截请求（最坏情况是按残缺参数删/拷文件）。改为重写 tmp 再 rename，
+                // 仍失败就放弃本次请求。
+                if (!publishRequest(tmpReq, reqFile, body)) {
+                    PjmLogger.w(TAG, "请求文件发布失败，放弃: " + args.firstOrNull())
+                    return@withContext null
+                }
 
                 // 等待响应
                 val deadline = System.currentTimeMillis() + timeoutMs
@@ -89,7 +95,13 @@ object EmbeddedPrivilegedIo {
                     }
                     Thread.sleep(POLL_INTERVAL)
                 }
-                null // 超时
+                // 核心修复：超时也必须有清理。旧实现只在异常分支删请求文件，
+                // 超时后残留的 req_* 仍会被服务端处理（响应无人读取），
+                // 既白占 IO 队列，也让目录里的请求文件越积越多。
+                deleteQuietly(reqFile)
+                deleteQuietly(respFile)
+                PjmLogger.w(TAG, "请求超时（" + timeoutMs + "ms），已清理请求文件: " + args.firstOrNull())
+                null
             } catch (e: Exception) {
                 PjmLogger.e(TAG, "exec failed: ${args.firstOrNull()}", e)
                 try {
@@ -100,6 +112,29 @@ object EmbeddedPrivilegedIo {
                 null
             }
         }
+
+    /**
+     * 把已写好的临时请求文件原子地发布成 `req_*.txt`。
+     *
+     * rename 失败时**不**退回直接写 reqFile：直写过程中服务端可能读到半截请求。
+     * 这里重写一次 tmp 再 rename（典型失败原因是并发清理/目录项状态异常），
+     * 两次都失败就返回 false，由调用方放弃并清理。
+     */
+    private fun publishRequest(
+        tmpReq: File,
+        reqFile: File,
+        body: String,
+    ): Boolean {
+        if (tmpReq.renameTo(reqFile)) return true
+        tmpReq.writeText(body)
+        if (tmpReq.renameTo(reqFile)) return true
+        deleteQuietly(tmpReq)
+        return false
+    }
+
+    private fun deleteQuietly(file: File) {
+        runCatching { file.delete() }
+    }
 
     /**
      * 检测内置特权服务是否在线。

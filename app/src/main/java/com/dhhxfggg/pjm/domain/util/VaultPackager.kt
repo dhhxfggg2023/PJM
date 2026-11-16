@@ -32,51 +32,70 @@ object VaultPackager {
             runCatching {
                 val settings = SettingsManager.getSettingsFlow(context).first()
                 val volumeSize = settings.exportSplitSize.toLong() * 1024 * 1024
-                val infos = uris.map { Triple(it, FileUtils.getFileName(context, it), FileUtils.getFileSize(context, it)) }
-                val totalSize = infos.sumOf { it.third }.coerceAtLeast(1L)
+                // 只需要 (uri, size)：显示名由容器内部按 uri 自己解析，这里再查一次纯属多余
+                // （.second 从未被使用，却为每个 uri 多跑一次 DISPLAY_NAME 查询）。
+                val infos = uris.map { it to FileUtils.getFileSize(context, it) }
+                val totalSize = infos.sumOf { it.second }.coerceAtLeast(1L)
 
                 // 贪心分组：按文件边界累加，尽量接近分卷大小但不超；单文件超限则单独一卷
-                val groups = mutableListOf<MutableList<Triple<Uri, String, Long>>>()
-                var current = mutableListOf<Triple<Uri, String, Long>>()
+                val groups = mutableListOf<MutableList<Pair<Uri, Long>>>()
+                var current = mutableListOf<Pair<Uri, Long>>()
                 var currentSize = 0L
                 for (info in infos) {
-                    if (current.isNotEmpty() && currentSize + info.third > volumeSize) {
+                    if (current.isNotEmpty() && currentSize + info.second > volumeSize) {
                         groups.add(current)
                         current = mutableListOf()
                         currentSize = 0L
                     }
                     current.add(info)
-                    currentSize += info.third
+                    currentSize += info.second
                 }
                 if (current.isNotEmpty()) groups.add(current)
 
                 var processed = 0L
-                groups.forEachIndexed { idx, group ->
-                    // 每个分卷 = 独立完整的 PJM 容器（magic + 完整 ZIP，XOR 从 0 开始），可单独解密，互不依赖
-                    val volumeFile = File(VaultPaths.getCategoryDir(context, category), "$baseName.pjm.${idx + 1}")
-                    val groupSize = group.sumOf { it.third }.coerceAtLeast(1L)
-                    CryptoUtils.encryptUris(
-                        context = context,
-                        inputUris = group.map { it.first },
-                        outputPath = volumeFile.absolutePath,
-                        isCancelled = { VaultManager.isTaskCancelled(VaultManager.TASK_ENCRYPT) },
-                    ) { p ->
-                        onProgress(((processed + p * groupSize) / totalSize).coerceIn(0f, 1f))
+                // 已建（可能已入库）的分卷：中途失败必须回滚，不能留下「前几卷看着完整、
+                // 实际缺内容」的半套加密包 —— 那比彻底失败更危险。
+                val created = mutableListOf<Pair<File, String>>()
+                try {
+                    groups.forEachIndexed { idx, group ->
+                        // 每个分卷 = 独立完整的 PJM 容器（magic + 完整 ZIP，XOR 从 0 开始），可单独解密，互不依赖
+                        val volumeFile = File(VaultPaths.getCategoryDir(context, category), "$baseName.pjm.${idx + 1}")
+                        val relativePath = VaultPaths.getRelativePath(context, volumeFile)
+                        // 先登记再写：写入中途异常时也能把这个半截文件删掉
+                        created.add(volumeFile to relativePath)
+                        val groupSize = group.sumOf { it.second }.coerceAtLeast(1L)
+                        CryptoUtils.encryptUris(
+                            context = context,
+                            inputUris = group.map { it.first },
+                            outputPath = volumeFile.absolutePath,
+                            isCancelled = { VaultManager.isTaskCancelled(VaultManager.TASK_ENCRYPT) },
+                        ) { p ->
+                            onProgress(((processed + p * groupSize) / totalSize).coerceIn(0f, 1f))
+                        }
+                        // 立即入库，确保加密包在文件柜立即可见、可分享
+                        fileDao.upsertLocked(
+                            FileEntity(
+                                relativePath = relativePath,
+                                name = volumeFile.name,
+                                size = volumeFile.length(),
+                                category = category,
+                                lastModified = System.currentTimeMillis(),
+                                isImage = false,
+                                extension = "pjm",
+                                contentHash = null,
+                            ),
+                        )
+                        processed += groupSize
                     }
-                    // 立即入库，确保加密包在文件柜立即可见、可分享
-                    fileDao.upsertLocked(
-                        FileEntity(
-                            relativePath = VaultPaths.getRelativePath(context, volumeFile),
-                            name = volumeFile.name,
-                            size = volumeFile.length(),
-                            category = category,
-                            lastModified = System.currentTimeMillis(),
-                            isImage = false,
-                            extension = "pjm",
-                            contentHash = null,
-                        ),
-                    )
-                    processed += groupSize
+                } catch (t: Throwable) {
+                    if (created.isNotEmpty()) {
+                        created.forEach { (file, relativePath) ->
+                            runCatching { VaultManager.shredFile(file) }
+                            runCatching { fileDao.deleteByRelativePath(relativePath) }
+                        }
+                        PjmLogger.w(TAG, "分卷导出失败，已回滚 ${created.size} 个已生成分卷")
+                    }
+                    throw t
                 }
                 VaultManager.triggerRefresh()
                 groups.size

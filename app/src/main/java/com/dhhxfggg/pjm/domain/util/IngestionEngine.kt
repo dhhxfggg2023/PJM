@@ -104,6 +104,10 @@ object IngestionEngine {
                                 // 需求变更：导入时【不再自动过滤】库中已存在的重复文件，
                                 // 所有文件一律正常入库（UUID 文件名，互不冲突）。
                                 // 去重仅由用户点击"清除重复内容"按钮时手动触发。
+                                // 核心修复：每个 URI 的产物先收进【本 URI 独占】的局部列表。
+                                // 只有确认至少成功落盘一个实体，才并入全局 collectedEntities，并允许删除源文件。
+                                // 旧实现无条件 add(uri)：流打不开 / 写盘失败时源文件被删而库里没有副本 —— 数据永久丢失。
+                                val uriEntities = mutableListOf<FileEntity>()
                                 try {
                                     if (isPjm) {
                                         // 新版格式：每个 .pjm.N 分卷都是独立完整的 PJM 容器（magic + 完整 ZIP，XOR 从 0 开始），
@@ -117,9 +121,10 @@ object IngestionEngine {
                                                 context,
                                                 name,
                                                 progressInput,
-                                                collectedEntities,
+                                                uriEntities,
                                                 fileDao,
                                                 onStatus,
+                                                failedCount,
                                                 0,
                                                 strictPjm = true,
                                             )
@@ -128,11 +133,8 @@ object IngestionEngine {
                                         onStatus(context.getString(R.string.status_ingesting_file, name))
                                         var handled = false
                                         if (FileUtils.isArchiveFile(name) && isAutoExtractEnabled) {
-                                            // 核心修复：本次压缩包解出的条目先收集到【局部列表】，
-                                            // 只有整体成功才并入 collectedEntities。
-                                            // 旧实现直接把半成品写进 collectedEntities：解压中途失败时
-                                            // 已解出的条目照样入库，且原始压缩包又被存了一份 —— 既重复又是残缺内容。
-                                            val localEntities = mutableListOf<FileEntity>()
+                                            // 解出的条目只写进 uriEntities，整体成功才在末尾统一并入全局列表。
+                                            // 解压中途失败时半成品会被下面的 shredEntities 回滚，不会污染数据库。
                                             try {
                                                 val outcome =
                                                     SevenZipUtils.extractArchive(
@@ -146,36 +148,40 @@ object IngestionEngine {
                                                             context,
                                                             entryName.substringAfterLast('/'),
                                                             inputStream,
-                                                            localEntities,
+                                                            uriEntities,
                                                             fileDao,
                                                             onStatus,
+                                                            failedCount,
                                                             1,
                                                         )
                                                     }
                                                 when (outcome) {
                                                     SevenZipUtils.ExtractOutcome.EXTRACTED -> {
-                                                        collectedEntities.addAll(localEntities)
                                                         handled = true
                                                     }
                                                     SevenZipUtils.ExtractOutcome.NOT_AN_ARCHIVE -> {
                                                         // 名字像压缩包但内容不是：丢弃局部产物，按普通文件入库
-                                                        shredEntities(context, localEntities)
+                                                        shredEntities(context, uriEntities)
+                                                        uriEntities.clear()
                                                     }
                                                     SevenZipUtils.ExtractOutcome.FAILED -> {
                                                         // 解压真失败：回滚半成品，把原始压缩包作为普通文件保住，
                                                         // 并计入失败数 —— 用户必须知道它没有被展开。
-                                                        shredEntities(context, localEntities)
+                                                        shredEntities(context, uriEntities)
+                                                        uriEntities.clear()
                                                         PjmLogger.e(TAG, "压缩包解压失败，已按原文件入库: $name")
                                                         onStatus(context.getString(R.string.status_archive_failed, name))
                                                         failedCount.incrementAndGet()
                                                     }
                                                 }
                                             } catch (e: SevenZipUtils.EncryptedArchiveException) {
-                                                shredEntities(context, localEntities)
+                                                shredEntities(context, uriEntities)
+                                                uriEntities.clear()
                                                 VaultManager.notifyResult(OperationResult.PasswordRequired(e.fileName, listOf(uri)))
                                                 return@withPermit
                                             } catch (e: Exception) {
-                                                shredEntities(context, localEntities)
+                                                shredEntities(context, uriEntities)
+                                                uriEntities.clear()
                                                 throw e
                                             }
                                         }
@@ -186,20 +192,27 @@ object IngestionEngine {
                                                     context,
                                                     name,
                                                     progressInput,
-                                                    collectedEntities,
+                                                    uriEntities,
                                                     fileDao,
                                                     onStatus,
+                                                    failedCount,
                                                     0,
                                                 )
                                             }
                                         }
-                                        deletableOriginals.add(uri)
+                                    }
+                                    if (uriEntities.isNotEmpty()) {
+                                        collectedEntities.addAll(uriEntities)
+                                        if (!isPjm) deletableOriginals.add(uri)
+                                    } else {
+                                        failedCount.incrementAndGet()
+                                        PjmLogger.w(TAG, "未产出任何实体，源 URI 不列入可删除: $name")
                                     }
                                 } catch (e: Exception) {
-                                    if (e !is CancellationException) {
-                                        PjmLogger.e(TAG, "Processing fail: $name", e)
-                                        failedCount.incrementAndGet()
-                                    }
+                                    shredEntities(context, uriEntities)
+                                    if (e is CancellationException) throw e
+                                    PjmLogger.e(TAG, "Processing fail: $name", e)
+                                    failedCount.incrementAndGet()
                                 }
                             }
                         }
@@ -223,6 +236,10 @@ object IngestionEngine {
                 throw e
             } catch (e: Exception) {
                 PjmLogger.e(TAG, "Storage fail, cleaning up...", e)
+                // 顶层失败必须回填失败计数：旧实现只打日志，finally 仍上报「全部完成」+
+                // 100%，界面显示成功而实际一个都没入库。被回滚的实体也算失败，
+                // 一路都没产出实体时至少记 1 次。成功路径不受影响。
+                failedCount.addAndGet(collectedEntities.size.coerceAtLeast(1))
                 shredEntities(context, collectedEntities)
             } finally {
                 passwordChars?.let { java.util.Arrays.fill(it, '0') }
@@ -263,10 +280,18 @@ object IngestionEngine {
         collectedEntities: MutableList<FileEntity>,
         fileDao: FileDao,
         onStatus: (String) -> Unit,
+        failedCount: AtomicInteger,
         depth: Int,
         strictPjm: Boolean = false,
     ) {
-        if (depth > MAX_RECURSION_DEPTH) return
+        if (depth > MAX_RECURSION_DEPTH) {
+            // 旧实现静默 return：嵌套过深的条目凭空消失，界面却仍显示「任务全部完成」。
+            // 这里计一次失败并给出可见状态；父容器其余条目继续处理（不整包中止）。
+            failedCount.incrementAndGet()
+            PjmLogger.w(TAG, "递归深度超过上限（$MAX_RECURSION_DEPTH），跳过条目: $name")
+            onStatus(context.getString(R.string.error_processing_failed, name))
+            return
+        }
         coroutineContext.ensureActive()
         val bis =
             if (inputStream is BufferedInputStream &&
@@ -288,23 +313,26 @@ object IngestionEngine {
                 } catch (_: Exception) {
                     null
                 }
+            // 非 markable 流不会进入上面的分支，也就没有读过字节，可直接按普通文件处理
+            var resetOk = !bis.markSupported()
             if (pjmStream != null) {
                 try {
-                    extractPjmStream(context, pjmStream, collectedEntities, fileDao, onStatus, depth + 1)
+                    extractPjmStream(context, pjmStream, collectedEntities, fileDao, onStatus, failedCount, depth + 1)
                     handled = true
                 } catch (e: Exception) {
                     if (strictPjm) throw IOException("PJM container corrupted: $name", e)
-                    try {
-                        bis.reset()
-                    } catch (_: Exception) {
-                    }
+                    // 核心修复：mark 只有 MARK_LIMIT 有效，而容器解包会读穿它 —— reset 必然抛异常。
+                    // 旧实现把异常吞掉后继续 digestFileToEntity，等于从流中段开始写成「完整文件」，
+                    // 产出的是能打开但内容损坏的垃圾。无法回退就按失败处理，绝不入库。
+                    resetOk = runCatching { bis.reset() }.isSuccess
+                    if (!resetOk) PjmLogger.w("IngestionEngine", "PJM 解包失败且无法回退流位置: $name", e)
                 }
             } else {
                 // 不是 PJM 容器（或长度不足）：回退到流的起点，按普通文件处理
-                try {
-                    bis.reset()
-                } catch (_: Exception) {
-                }
+                resetOk = runCatching { bis.reset() }.isSuccess
+            }
+            if (!handled && !resetOk) {
+                throw IOException("Corrupted stream (cannot reset after container detection): $name")
             }
         }
         if (!handled) {
@@ -319,6 +347,7 @@ object IngestionEngine {
         collectedEntities: MutableList<FileEntity>,
         fileDao: FileDao,
         onStatus: (String) -> Unit,
+        failedCount: AtomicInteger,
         depth: Int,
     ) {
         ZipArchiveInputStream(inputStream, "UTF-8", true, true).use { zais ->
@@ -333,7 +362,16 @@ object IngestionEngine {
                         object : FilterInputStream(zais) {
                             override fun close() {}
                         }
-                    processRecursiveStream(context, ze.name.substringAfterLast('/'), wrapper, collectedEntities, fileDao, onStatus, depth)
+                    processRecursiveStream(
+                        context,
+                        ze.name.substringAfterLast('/'),
+                        wrapper,
+                        collectedEntities,
+                        fileDao,
+                        onStatus,
+                        failedCount,
+                        depth,
+                    )
                 }
                 ze = zais.nextZipEntry
             }

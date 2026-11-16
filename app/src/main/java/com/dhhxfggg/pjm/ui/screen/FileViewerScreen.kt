@@ -25,6 +25,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -39,6 +41,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.composables.icons.lucide.ArrowLeft
 import com.composables.icons.lucide.CheckCheck
 import com.composables.icons.lucide.Download
@@ -102,6 +105,10 @@ fun FileViewerScreen(
     val scope = rememberCoroutineScope()
 
     val exportSuccessMsg = stringResource(R.string.status_export_success)
+    // Compose lint 禁止在组合作用域用 LocalContext.current 取资源（LocalContextGetResourceValueCall），
+    // 这里提前取好文案/模板：模板不带参数取回的是原始 "%1$d/%2$d" 字符串，运行时再格式化。
+    val exportFailedMsg = stringResource(R.string.error_export_failed_simple)
+    val exportPartialTemplate = stringResource(R.string.status_export_partial)
     val shareFilesMsg = stringResource(R.string.chooser_title_share_files)
 
     // 长按卡片重命名（只改库里的显示名）；库里不放「⋮」，那个入口只属于发现页
@@ -110,11 +117,11 @@ fun FileViewerScreen(
 
     val iconPack = rememberIconPack()
 
-    val settingsState by settingsViewModel.uiState.collectAsState()
+    val settingsState by settingsViewModel.uiState.collectAsStateWithLifecycle()
     val settings = settingsState.settings
 
-    val uiState by fileViewModel.uiState.collectAsState()
-    val flattenedItemsFlow by remember(category) { fileViewModel.getFlattenedFiles(category) }.collectAsState()
+    val uiState by fileViewModel.uiState.collectAsStateWithLifecycle()
+    val flattenedItemsFlow by remember(category) { fileViewModel.getFlattenedFiles(category) }.collectAsStateWithLifecycle()
     // null = 查询还没回来（显示加载圈）；empty = 真的没有文件（显示空状态）
     val filesStillLoading = flattenedItemsFlow == null
     val flattenedItems = flattenedItemsFlow ?: emptyList()
@@ -124,11 +131,24 @@ fun FileViewerScreen(
         fileViewModel.syncIfEmpty(category)
     }
 
-    val selectedFiles = remember { mutableStateListOf<FileEntity>() }
-
-    // O(1) 选中判定：用集合查询替代线性扫描，避免多选操作时对全列表反复遍历
-    val selectedPaths by remember {
-        derivedStateOf { selectedFiles.mapTo(HashSet()) { it.relativePath } }
+    // 选区只存路径集合：拖选时一次赋值（原来每帧先 clear 再 addAll，还要重建一整份 HashSet）
+    val selectionSaver =
+        remember {
+            listSaver<Set<String>, String>(
+                save = { it.toList() },
+                restore = { it.toSet() },
+            )
+        }
+    var selected by rememberSaveable(stateSaver = selectionSaver) { mutableStateOf(emptySet<String>()) }
+    // 真正需要实体时（分享/导出/删除/重命名）再按当前列表解析；卡片判定直接用 selected.contains（O(1)）
+    val selectedFiles: List<FileEntity> by remember(flattenedItems) {
+        derivedStateOf {
+            if (selected.isEmpty()) {
+                emptyList<FileEntity>()
+            } else {
+                flattenedItems.mapNotNull { (it as? FileListItem.FileItem)?.entity }.filter { it.relativePath in selected }
+            }
+        }
     }
 
     var fileForDetails by remember { mutableStateOf<FileEntity?>(null) }
@@ -140,24 +160,21 @@ fun FileViewerScreen(
     // 而不是「手指碰巧路过的那些」：快速滑动时指针事件会跳行，逐项 add 必漏。
     val applySelectionRange =
         remember(itemsState) {
-            { anchor: Int, current: Int, base: List<FileEntity> ->
+            { anchor: Int, current: Int, base: Set<String> ->
                 if (anchor < 0 || current < 0) {
                     Unit
                 } else {
                     val items = itemsState.value
                     val lo = minOf(anchor, current).coerceAtLeast(0)
                     val hi = maxOf(anchor, current).coerceAtMost(items.lastIndex)
-                    val range = ArrayList<FileEntity>(hi - lo + 1)
+                    // 拖拽前已勾选的保持勾选；区间内的补进来；区间外的旧勾选不动。
+                    // 组装好新集合后一次赋值（拖选每帧都会走到这里）
+                    val next = HashSet<String>(hi - lo + 1 + base.size)
+                    next.addAll(base)
                     for (i in lo..hi) {
-                        (items.getOrNull(i) as? FileListItem.FileItem)?.let { range.add(it.entity) }
+                        (items.getOrNull(i) as? FileListItem.FileItem)?.let { next.add(it.entity.relativePath) }
                     }
-                    // 拖拽前已勾选的保持勾选；区间内的补进来；区间外的旧勾选不动
-                    val basePaths = base.mapTo(HashSet()) { it.relativePath }
-                    selectedFiles.clear()
-                    selectedFiles.addAll(base)
-                    range.forEach { entity ->
-                        if (entity.relativePath !in basePaths) selectedFiles.add(entity)
-                    }
+                    selected = next
                 }
             }
         }
@@ -172,13 +189,13 @@ fun FileViewerScreen(
                 if (pending != null && pending.first == file.relativePath && System.currentTimeMillis() <= pending.second) {
                     // 长按已经把它选中了，这次点击什么都不做
                 } else {
-                    val index = selectedFiles.indexOfFirst { it.relativePath == file.relativePath }
-                    if (index != -1) {
-                        selectedFiles.removeAt(index)
-                    } else {
-                        selectedFiles.add(file)
-                    }
-                    if (selectedFiles.isEmpty()) {
+                    selected =
+                        if (file.relativePath in selected) {
+                            selected - file.relativePath
+                        } else {
+                            selected + file.relativePath
+                        }
+                    if (selected.isEmpty()) {
                         fileViewModel.setBatchMode(false)
                     }
                 }
@@ -207,7 +224,7 @@ fun FileViewerScreen(
                         )
                         if (uiState.isBatchMode) {
                             Text(
-                                text = stringResource(R.string.label_selected_count, selectedFiles.size),
+                                text = stringResource(R.string.label_selected_count, selected.size),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.primary,
                             )
@@ -219,13 +236,16 @@ fun FileViewerScreen(
                         onClick = {
                             if (uiState.isBatchMode) {
                                 fileViewModel.setBatchMode(false)
-                                selectedFiles.clear()
+                                selected = emptySet()
                             } else {
                                 onBack()
                             }
                         },
                     ) {
-                        Icon(if (uiState.isBatchMode) Lucide.X else Lucide.ArrowLeft, null)
+                        Icon(
+                            if (uiState.isBatchMode) Lucide.X else Lucide.ArrowLeft,
+                            stringResource(if (uiState.isBatchMode) R.string.action_close else R.string.action_back),
+                        )
                     }
                 },
                 actions = {
@@ -238,24 +258,23 @@ fun FileViewerScreen(
                                     .map { it.entity }
                                     .toList()
                             }
-                        val isAllSelected = (selectedFiles.size == allFilteredFiles.size) && allFilteredFiles.isNotEmpty()
+                        val isAllSelected = (selected.size == allFilteredFiles.size) && allFilteredFiles.isNotEmpty()
                         PjmIconButton(
                             icon = if (isAllSelected) Lucide.Square else Lucide.CheckCheck,
                             contentDescription = stringResource(R.string.action_select_all),
                             onClick = {
                                 if (isAllSelected) {
-                                    selectedFiles.clear()
+                                    selected = emptySet()
                                     fileViewModel.setBatchMode(false)
                                 } else {
-                                    selectedFiles.clear()
-                                    selectedFiles.addAll(allFilteredFiles)
+                                    selected = allFilteredFiles.mapTo(HashSet()) { it.relativePath }
                                 }
                             },
                         )
                         Spacer(Modifier.width(6.dp))
 
                         // 重命名只对「单选 + 非图片」出现：图片显示名固定是入库时间，改了也没意义
-                        if (selectedFiles.size == 1 && !selectedFiles[0].isImage) {
+                        if (selected.size == 1 && !selectedFiles[0].isImage) {
                             PjmIconButton(
                                 icon = Lucide.Pencil,
                                 contentDescription = stringResource(R.string.action_rename),
@@ -304,9 +323,19 @@ fun FileViewerScreen(
                                             }
                                         }
                                         withContext(Dispatchers.Main) {
-                                            Toast.makeText(context, exportSuccessMsg, Toast.LENGTH_SHORT).show()
-                                            selectedFiles.clear()
-                                            fileViewModel.setBatchMode(false)
+                                            // 核心修复：旧实现统计了成功数却从未使用 —— 全部失败也提示"成功导出"。
+                                            val message =
+                                                when {
+                                                    count == 0 -> exportFailedMsg
+                                                    count < selectedFiles.size ->
+                                                        String.format(java.util.Locale.US, exportPartialTemplate, count, selectedFiles.size)
+                                                    else -> exportSuccessMsg
+                                                }
+                                            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                                            if (count > 0) {
+                                                selected = emptySet()
+                                                fileViewModel.setBatchMode(false)
+                                            }
                                         }
                                     }
                                 },
@@ -323,7 +352,14 @@ fun FileViewerScreen(
                     } else {
                         PjmIconButton(
                             icon = if (settings.fileViewMode == "grid") Lucide.LayoutList else Lucide.LayoutGrid,
-                            contentDescription = null,
+                            contentDescription =
+                                stringResource(
+                                    if (settings.fileViewMode == "grid") {
+                                        R.string.cd_switch_to_list
+                                    } else {
+                                        R.string.cd_switch_to_grid
+                                    },
+                                ),
                             onClick = { settingsViewModel.toggleViewMode() },
                         )
                         // 多选统一由「长按」进入；这里不再放一个重复的按钮。
@@ -363,13 +399,13 @@ fun FileViewerScreen(
                                 .fillMaxSize()
                                 .pointerInput(Unit) {
                                     var dragAnchor = -1
-                                    var dragBase = emptyList<FileEntity>()
+                                    var dragBase = emptySet<String>()
                                     detectDragGesturesAfterLongPress(
                                         onDragStart = { offset ->
                                             val anchor = gridIndexAt(gridState, offset) ?: -1
                                             if (anchor >= 0) {
                                                 dragAnchor = anchor
-                                                dragBase = selectedFiles.toList()
+                                                dragBase = selected
                                                 fileViewModel.setBatchMode(true)
                                                 applySelectionRange(anchor, anchor, dragBase)
                                                 // 长按后原地松手：combinedClickable 还会补一次 click，
@@ -409,7 +445,7 @@ fun FileViewerScreen(
                             when (item) {
                                 is FileListItem.Header -> DateHeader(item.date)
                                 is FileListItem.FileItem -> {
-                                    val isSelected = item.entity.relativePath in selectedPaths
+                                    val isSelected = item.entity.relativePath in selected
                                     if (uiState.isBatchMode) {
                                         SelectableFileCard(
                                             fileEntity = item.entity,
@@ -430,7 +466,7 @@ fun FileViewerScreen(
                                                 } else if (isViewerSupported(item.entity)) {
                                                     onNavigateToMediaDetail(item.entity.relativePath)
                                                 } else {
-                                                    openFile(context, item.entity)
+                                                    scope.launch { openFile(context, item.entity) }
                                                 }
                                             },
                                             isSelected = false,
@@ -439,8 +475,8 @@ fun FileViewerScreen(
                                             onLongClick = {
                                                 if (!uiState.isBatchMode) {
                                                     fileViewModel.setBatchMode(true)
-                                                    if (selectedFiles.none { it.relativePath == item.entity.relativePath }) {
-                                                        selectedFiles.add(item.entity)
+                                                    if (item.entity.relativePath !in selected) {
+                                                        selected = selected + item.entity.relativePath
                                                     }
                                                 }
                                             },
@@ -487,13 +523,13 @@ fun FileViewerScreen(
                                 .fillMaxSize()
                                 .pointerInput(Unit) {
                                     var dragAnchor = -1
-                                    var dragBase = emptyList<FileEntity>()
+                                    var dragBase = emptySet<String>()
                                     detectDragGesturesAfterLongPress(
                                         onDragStart = { offset ->
                                             val anchor = listIndexAt(listState, offset) ?: -1
                                             if (anchor >= 0) {
                                                 dragAnchor = anchor
-                                                dragBase = selectedFiles.toList()
+                                                dragBase = selected
                                                 fileViewModel.setBatchMode(true)
                                                 applySelectionRange(anchor, anchor, dragBase)
                                                 // 长按后原地松手：combinedClickable 还会补一次 click，
@@ -527,7 +563,7 @@ fun FileViewerScreen(
                             when (item) {
                                 is FileListItem.Header -> DateHeader(item.date)
                                 is FileListItem.FileItem -> {
-                                    val isSelected = item.entity.relativePath in selectedPaths
+                                    val isSelected = item.entity.relativePath in selected
                                     FileCard(
                                         fileEntity = item.entity,
                                         isSelected = isSelected,
@@ -535,8 +571,8 @@ fun FileViewerScreen(
                                         onLongClick = {
                                             if (!uiState.isBatchMode) {
                                                 fileViewModel.setBatchMode(true)
-                                                if (selectedFiles.none { it.relativePath == item.entity.relativePath }) {
-                                                    selectedFiles.add(item.entity)
+                                                if (item.entity.relativePath !in selected) {
+                                                    selected = selected + item.entity.relativePath
                                                 }
                                             }
                                         },
@@ -548,7 +584,7 @@ fun FileViewerScreen(
                                             } else if (isViewerSupported(item.entity)) {
                                                 onNavigateToMediaDetail(item.entity.relativePath)
                                             } else {
-                                                openFile(context, item.entity)
+                                                scope.launch { openFile(context, item.entity) }
                                             }
                                         },
                                     )
@@ -601,7 +637,7 @@ fun FileViewerScreen(
                         if (isViewerSupported(entity)) {
                             onNavigateToMediaDetail(entity.relativePath)
                         } else {
-                            openFile(context, entity)
+                            scope.launch { openFile(context, entity) }
                         }
                         fileForDetails = null
                     }) { Text(stringResource(R.string.action_open)) }
@@ -641,7 +677,7 @@ fun FileViewerScreen(
                 fileViewModel.renameDisplayName(entity, newName)
                 renameTarget = null
                 // 改完名就退出多选，省得再按一次返回
-                selectedFiles.clear()
+                selected = emptySet()
                 fileViewModel.setBatchMode(false)
             },
         )
@@ -662,7 +698,7 @@ fun FileViewerScreen(
 
     // 多选状态下，系统返回（手势/按键）先退出多选，而不是直接退出页面
     BackHandler(enabled = uiState.isBatchMode) {
-        selectedFiles.clear()
+        selected = emptySet()
         fileViewModel.setBatchMode(false)
     }
 
@@ -674,11 +710,12 @@ fun FileViewerScreen(
             candidates = candidates,
             message = stringResource(R.string.msg_delete_select_hint),
             onDismiss = { showBatchDeleteConfirmDialog = false },
-            onConfirm = { selected ->
+            // 参数改名为 checked：外层有同名 state（selected 选区），避免遮蔽后误写
+            onConfirm = { checked ->
                 showBatchDeleteConfirmDialog = false
                 fileViewModel.setBatchMode(false)
-                selectedFiles.clear()
-                MainApplication.applicationScope.launch { fileViewModel.deleteFiles(selected) }
+                selected = emptySet()
+                MainApplication.applicationScope.launch { fileViewModel.deleteFiles(checked) }
             },
         )
     }
@@ -758,6 +795,13 @@ private fun BoxScope.QuickScrollScrubber(
         animationSpec = tween(160),
         label = "quickScrollAlpha",
     )
+    // 组合期不在 lambda 里直读 layoutInfo：滚动时它每帧都变，会把滑轨每帧重组。
+    // 用 derivedStateOf 按「算出来的比例」去重，只有比例真的变了才重组；
+    // scrollFraction 由调用方每帧重建 lambda，所以用 rememberUpdatedState 保持最新。
+    val currentScrollFraction = rememberUpdatedState(scrollFraction)
+    val liveFraction by remember {
+        derivedStateOf { currentScrollFraction.value().coerceIn(0f, 1f) }
+    }
     val thumbHeight = 48.dp
     // 隐藏时彻底不挂手势，触摸直接落到下面的列表上
     val gestureModifier =
@@ -798,7 +842,7 @@ private fun BoxScope.QuickScrollScrubber(
                 .alpha(alpha)
                 .then(gestureModifier),
     ) {
-        val fraction = (if (dragging) dragFraction else scrollFraction()).coerceIn(0f, 1f)
+        val fraction = if (dragging) dragFraction else liveFraction
         Box(
             Modifier
                 .fillMaxHeight()
@@ -855,12 +899,15 @@ private fun BoxScope.QuickScrollScrubber(
  * Opens a file using a system-provided viewer app.
  * 先用规范化显示名生成可分享文件（硬链接零拷贝/小文件复制），外部 App 看到规范名，磁盘原件不动。
  */
-private fun openFile(
+private suspend fun openFile(
     context: Context,
     fileEntity: FileEntity,
 ) {
-    val file = FileUtils.obtainNamedShareFile(context, fileEntity)
-    FileUtils.openFileWithSystemApp(context, file)
+    // 核心修复：obtainNamedShareFile 内含遍历 cacheDir + 最多 256MB 的复制兜底，
+    // 旧实现在 Compose onClick（主线程）直接调用，大文件会 ANR。
+    val file =
+        withContext(Dispatchers.IO) { FileUtils.obtainNamedShareFile(context, fileEntity) }
+    withContext(Dispatchers.Main) { FileUtils.openFileWithSystemApp(context, file) }
 }
 
 /**

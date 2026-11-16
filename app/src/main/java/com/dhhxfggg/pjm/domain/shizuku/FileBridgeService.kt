@@ -10,21 +10,23 @@ import java.io.FileOutputStream
  * Shizuku UserService 文件桥接实现。
  *
  * 本类在 Shizuku 启动的独立进程（shell UID 2000 / root UID 0）中运行，
- * 因此其中所有 java.io.File 操作都拥有 ADB shell 权限，可自由访问
- * /storage/emulated/0/Android/data/<pkg> 等受保护目录 —— 这是普通应用进程做不到的。
+ * 因此其中所有 java.io.File 操作都拥有 ADB shell 权限。
  *
- * 注意：UserService 进程不是普通应用进程，ContentResolver / registerReceiver
- * 等 Context 能力不可用，这里只做纯文件 I/O。
+ * 安全边界（核心修复）：旧实现只有 deletePath 做了极弱的校验（绝对路径 + 两级 + 无 ..），
+ * listFiles / copyFile / exists / readTextFile 完全没有校验，可读 /data、/system 下任意文件、
+ * 把文件写到任意位置，或 deleteRecursively() 删掉整本相册。现在六个方法统一走
+ * [PrivilegedPaths]：读写限共享存储，copy 落点限应用 external-files，删除禁止根与一级子目录。
  */
 class FileBridgeService : IFileBridgeService.Stub() {
     companion object {
         private const val TAG = "FileBridgeService"
-
-        // Shizuku 官方保留的销毁事务码（AIDL 中 transaction id 16777114 + 1）
-        private const val DESTROY_TRANSACTION = android.os.IBinder.LAST_CALL_TRANSACTION + 1
     }
 
     override fun listFiles(path: String): Array<String> {
+        if (!PrivilegedPaths.isSharedStorage(path)) {
+            Log.e(TAG, "listFiles 拒绝非共享存储路径: $path")
+            return emptyArray()
+        }
         return try {
             val dir = File(path)
             if (!dir.exists() || !dir.isDirectory) return emptyArray()
@@ -33,7 +35,10 @@ class FileBridgeService : IFileBridgeService.Stub() {
                 ?.mapNotNull { f ->
                     try {
                         val type = if (f.isDirectory) "D" else "F"
-                        "$type|${f.name}|${f.length()}"
+                        // 核心修复：字段分隔符从 `|` 改为 NUL。`|` 是合法文件名字符，
+                        // 名字里带 `|` 时客户端按 `|` split 会静默切错（路径截断 + 大小变 0）。
+                        // 客户端见 ShizukuBridge.listFiles 的同名解析。
+                        "$type\u0000${f.name}\u0000${f.length()}"
                     } catch (_: Exception) {
                         null
                     }
@@ -48,6 +53,10 @@ class FileBridgeService : IFileBridgeService.Stub() {
         srcPath: String,
         destPath: String,
     ): Long {
+        if (!PrivilegedPaths.isSharedStorage(srcPath) || !PrivilegedPaths.isAllowedCopyDestination(destPath)) {
+            Log.e(TAG, "copyFile 拒绝非法路径: $srcPath -> $destPath")
+            return -1
+        }
         var copied = 0L
         try {
             val src = File(srcPath)
@@ -68,7 +77,6 @@ class FileBridgeService : IFileBridgeService.Stub() {
             return copied
         } catch (e: Exception) {
             Log.e(TAG, "copyFile failed: $srcPath -> $destPath", e)
-            // 清理半成品
             try {
                 File(destPath).delete()
             } catch (_: Exception) {
@@ -78,24 +86,16 @@ class FileBridgeService : IFileBridgeService.Stub() {
     }
 
     override fun deletePath(path: String): Boolean {
+        // 核心修复：拒绝共享存储根与其一级子目录（DCIM / Download / Pictures ...），
+        // 旧实现仅凭「两级路径」判断，/storage/emulated/0/DCIM 会被整体 deleteRecursively()。
+        if (!PrivilegedPaths.isSafeDeleteTarget(path)) {
+            Log.e(TAG, "deletePath 拒绝可疑路径: $path")
+            return false
+        }
         return try {
-            // 这一层跑在 shell 身份下，删错就是系统级破坏：只接受绝对路径、
-            // 至少两级目录、且不含 ".."（请求文件本身也可能被伪造）
-            val normalized = path.trim()
-            if (!normalized.startsWith("/") ||
-                normalized.contains("..") ||
-                normalized.trimEnd('/').count { it == '/' } < 2
-            ) {
-                Log.e(TAG, "deletePath 拒绝可疑路径: $path")
-                return false
-            }
-            val f = File(normalized)
+            val f = File(path)
             if (!f.exists()) return true
-            if (f.isDirectory) {
-                f.deleteRecursively()
-            } else {
-                f.delete()
-            }
+            if (f.isDirectory) f.deleteRecursively() else f.delete()
         } catch (e: Exception) {
             Log.e(TAG, "deletePath failed: $path", e)
             false
@@ -103,17 +103,25 @@ class FileBridgeService : IFileBridgeService.Stub() {
     }
 
     override fun exists(path: String): Boolean =
-        try {
-            File(path).exists()
-        } catch (_: Exception) {
+        if (!PrivilegedPaths.isSharedStorage(path)) {
             false
+        } else {
+            try {
+                File(path).exists()
+            } catch (_: Exception) {
+                false
+            }
         }
 
     override fun readTextFile(path: String): String? {
+        if (!PrivilegedPaths.isSharedStorage(path)) {
+            Log.e(TAG, "readTextFile 拒绝非共享存储路径: $path")
+            return null
+        }
         return try {
             val f = File(path)
             if (!f.exists() || !f.isFile) return null
-            if (f.length() > 4 * 1024 * 1024) return null // 仅限小文件
+            if (f.length() > 4 * 1024 * 1024) return null
             f.readText(Charsets.UTF_8)
         } catch (e: Exception) {
             Log.e(TAG, "readTextFile failed: $path", e)

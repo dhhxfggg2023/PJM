@@ -17,6 +17,7 @@ import com.dhhxfggg.pjm.data.model.TakeoverStatus
 import com.dhhxfggg.pjm.domain.util.IngestionEngine
 import com.dhhxfggg.pjm.domain.util.PjmLogger
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -34,6 +35,12 @@ import java.io.File
 object TakeoverScanEngine {
     private const val TAG = "TakeoverScan"
 
+    // 核心修复：互斥必须在 Engine（object 单例）层，而不是前台 Service 的实例字段。
+    // 两条执行路径 —— TakeoverService 的常驻观察者与 TakeoverJobService 的 JobScheduler 兜底 ——
+    // 同处主进程却各自持有 Service 实例；旧实现只在 Service 内加 Mutex，兜底任务完全不共享，
+    // 并发时双方读到同一水位、各自导入同一文件（两个 UUID 副本）并争抢删原文件。
+    private val scanMutex = kotlinx.coroutines.sync.Mutex()
+
     const val PREFS_NAME = "pjm_takeover_state"
     const val KEY_LAST_ID = "last_seen_id"
     const val KEY_LAST_SWEEP = "last_sweep_ms"
@@ -41,6 +48,21 @@ object TakeoverScanEngine {
     private const val SCAN_LIMIT = 50
     private const val SETTLE_MS = 2000L
     private const val PRUNE_AFTER_MS = 7L * 24 * 60 * 60 * 1000
+
+    /** 幂等键前缀：`file://` + 绝对路径，与历史目录深扫写入的 `Uri.fromFile(file).toString()` 完全一致 */
+    private const val FILE_KEY_PREFIX = "file://"
+
+    /** PENDING 超过这个时长视为进程被杀的残留，允许重新入库 */
+    private const val STALE_PENDING_MS = 10L * 60 * 1000
+
+    /**
+     * 可以被 7 天清理的收尾状态。
+     *
+     * 包含两种失败态：它们要留给用户看/重试，但也没必要永久占表
+     * （旧实现只清 IMPORTED，失败记录只增不减）。
+     */
+    private val prunableStatuses =
+        listOf(TakeoverStatus.IMPORTED, TakeoverStatus.IMPORT_FAILED, TakeoverStatus.DELETE_FAILED)
 
     /**
      * 跑一轮扫描。
@@ -52,6 +74,18 @@ object TakeoverScanEngine {
      *   把定时兜底的间隔逐步拉长 —— 空闲时没必要每 3 分钟唤醒一次存储。
      */
     suspend fun scanOnce(
+        context: Context,
+        managedAppDao: ManagedAppDao,
+        takeoverJobDao: TakeoverJobDao,
+        fileDao: FileDao,
+        doSweep: Boolean,
+    ): Int =
+        scanMutex.withLock {
+            doScanOnce(context, managedAppDao, takeoverJobDao, fileDao, doSweep)
+        }
+
+    /** 真正的一轮扫描；只能由 [scanOnce] 在互斥下调用。 */
+    private suspend fun doScanOnce(
         context: Context,
         managedAppDao: ManagedAppDao,
         takeoverJobDao: TakeoverJobDao,
@@ -69,8 +103,19 @@ object TakeoverScanEngine {
         val storedId = prefs.getLong(KEY_LAST_ID, 0L)
         var lastId = storedId
         if (storedId <= 0L) {
-            // 首次启用：水位定在当前最大 id，不做历史回填
-            lastId = currentMaxMediaId(context)
+            // 首次启用：水位定在当前最大 id，不做历史回填。
+            // 核心修复：读失败时 **不写** 水位。旧实现把失败的 0 直接落盘，下一轮就从 0 开始，
+            // 等于把用户整个相册的历史照片回扫一遍（全部搬进库）。读失败保持缺省，下轮重试。
+            val maxId = currentMaxMediaId(context)
+            if (maxId == null) {
+                PjmLogger.w(TAG, "读取 MediaStore 最大 id 失败：本轮不初始化水位（下轮重试），不写 0")
+                return if (doSweep) {
+                    sweepManagedAppMediaDirs(context, managed, takeoverJobDao, fileDao, prefs)
+                } else {
+                    0
+                }
+            }
+            lastId = maxId
             prefs.edit { putLong(KEY_LAST_ID, lastId) }
             PjmLogger.i(TAG, "接管水位初始化: lastId=" + lastId)
         }
@@ -100,31 +145,36 @@ object TakeoverScanEngine {
                     item.dataPath?.let { File(it).lastModified() / 1000 } ?: (System.currentTimeMillis() / 1000)
                 }
             if (effectiveSec + 2 < addedAtSec) continue
-            val existing = takeoverJobDao.findByUri(item.uri.toString())
+            // 幂等键统一成绝对路径（见 canonicalKey / idempotencyKeys），与目录深扫共用同一套键
+            val keys = idempotencyKeys(item)
+            val key = keys.first()
+            val existing = takeoverJobDao.findByAnyUri(keys)
             if (existing != null) {
                 if (existing.status == TakeoverStatus.PENDING) {
-                    takeoverJobDao.upsert(
-                        TakeoverJobEntity(uri = existing.uri, status = TakeoverStatus.IMPORT_FAILED, createdAt = existing.createdAt),
-                    )
+                    // 核心修复：PENDING 写入后进程被杀（或 onStopJob 打断）会永久残留。
+                    // 旧实现下一轮直接改判 IMPORT_FAILED，之后所有轮次一直 continue ——
+                    // 原文件既不再入库也不会被删，且这是一条误报的失败。
+                    // 超过阈值视为崩溃残留：删掉记录，让它重新走完整入库流程。
+                    if (System.currentTimeMillis() - existing.createdAt > STALE_PENDING_MS) {
+                        takeoverJobDao.deleteByUri(existing.uri)
+                        PjmLogger.i(TAG, "清理崩溃残留的 PENDING 记录，重新入库: " + existing.uri)
+                    } else {
+                        continue
+                    }
+                } else {
+                    continue
                 }
-                continue
             }
-            takeoverJobDao.upsert(TakeoverJobEntity(uri = item.uri.toString(), status = TakeoverStatus.PENDING))
+            takeoverJobDao.upsert(TakeoverJobEntity(uri = key, status = TakeoverStatus.PENDING))
             if (!importOne(context, fileDao, item.uri)) {
-                takeoverJobDao.upsert(
-                    TakeoverJobEntity(uri = item.uri.toString(), status = TakeoverStatus.IMPORT_FAILED),
-                )
+                takeoverJobDao.updateStatus(key, TakeoverStatus.IMPORT_FAILED)
                 PjmLogger.w(TAG, "入库失败，保留原文件: " + item.uri)
                 continue
             }
             if (deleteOrTrash(context, item.uri)) {
-                takeoverJobDao.upsert(
-                    TakeoverJobEntity(uri = item.uri.toString(), status = TakeoverStatus.IMPORTED),
-                )
+                takeoverJobDao.updateStatus(key, TakeoverStatus.IMPORTED)
             } else {
-                takeoverJobDao.upsert(
-                    TakeoverJobEntity(uri = item.uri.toString(), status = TakeoverStatus.DELETE_FAILED),
-                )
+                takeoverJobDao.updateStatus(key, TakeoverStatus.DELETE_FAILED)
                 failedDeletes.add(item.uri)
             }
             handled++
@@ -140,7 +190,7 @@ object TakeoverScanEngine {
             PjmLogger.i(TAG, "接管完成：处理 " + handled + " 个文件，删除失败 " + failedDeletes.size + " 个")
             runCatching {
                 takeoverJobDao.pruneFinished(
-                    finishedStatuses = listOf(TakeoverStatus.IMPORTED),
+                    finishedStatuses = prunableStatuses,
                     cutoff = System.currentTimeMillis() - PRUNE_AFTER_MS,
                 )
             }
@@ -149,20 +199,41 @@ object TakeoverScanEngine {
         return handled + (if (doSweep) sweepManagedAppMediaDirs(context, managed, takeoverJobDao, fileDao, prefs) else 0)
     }
 
-    /** 当前 MediaStore 表里的最大 _id（首次启用时用于定位水位，不做历史回填） */
-    private fun currentMaxMediaId(context: Context): Long {
-        val collection = MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL)
+    /**
+     * 当前 MediaStore 表里的最大 _id（首次启用时用于定位水位，不做历史回填）。
+     *
+     * 读失败返回 null —— 调用方据此放弃本轮水位初始化，绝不把 0 当水位落盘。
+     */
+    private fun currentMaxMediaId(context: Context): Long? {
+        val collection = mediaFilesCollection()
         val projection = arrayOf(MediaStore.MediaColumns._ID)
         val sortOrder = MediaStore.MediaColumns._ID + " DESC"
         return try {
-            context.contentResolver.query(collection, projection, null, null, sortOrder)?.use { cursor ->
-                if (cursor.moveToFirst()) cursor.getLong(0) else 0L
-            } ?: 0L
+            val cursor = context.contentResolver.query(collection, projection, null, null, sortOrder)
+            if (cursor == null) {
+                PjmLogger.w(TAG, "读取 MediaStore 最大 id 返回空游标")
+                null
+            } else {
+                cursor.use { c -> if (c.moveToFirst()) c.getLong(0) else 0L }
+            }
         } catch (e: Exception) {
             PjmLogger.w(TAG, "读取 MediaStore 最大 id 失败: " + e.message)
-            0L
+            null
         }
     }
+
+    /**
+     * 媒体库文件集合。
+     *
+     * `MediaStore.VOLUME_EXTERNAL` 是 API 29 才引入的卷名常量，minSdk 24 上必须退回
+     * 旧的 `"external"` 字面量，避免旧系统上取到无效集合。
+     */
+    private fun mediaFilesCollection(): Uri =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL)
+        } else {
+            MediaStore.Files.getContentUri("external")
+        }
 
     private suspend fun sweepManagedAppMediaDirs(
         context: Context,
@@ -270,27 +341,49 @@ object TakeoverScanEngine {
                     !file.name.endsWith(".pending")
             }.forEach { file ->
                 val uri = Uri.fromFile(file)
-                if (takeoverJobDao.findByUri(uri.toString()) != null) return@forEach
-                takeoverJobDao.upsert(TakeoverJobEntity(uri = uri.toString(), status = TakeoverStatus.PENDING))
+                // 幂等键与媒体库通道共用（见 [canonicalKey]）：同一文件两条通道只留一行记录
+                val key = canonicalKey(uri, file.absolutePath)
+                if (takeoverJobDao.findByUri(key) != null) return@forEach
+                takeoverJobDao.upsert(TakeoverJobEntity(uri = key, status = TakeoverStatus.PENDING))
                 if (!importOne(context, fileDao, uri)) {
-                    takeoverJobDao.upsert(
-                        TakeoverJobEntity(uri = uri.toString(), status = TakeoverStatus.IMPORT_FAILED),
-                    )
+                    takeoverJobDao.updateStatus(key, TakeoverStatus.IMPORT_FAILED)
                     PjmLogger.w(TAG, "目录接管入库失败，保留原文件: " + file.absolutePath)
                     return@forEach
                 }
                 if (file.delete()) {
-                    takeoverJobDao.upsert(
-                        TakeoverJobEntity(uri = uri.toString(), status = TakeoverStatus.IMPORTED),
-                    )
+                    takeoverJobDao.updateStatus(key, TakeoverStatus.IMPORTED)
                     onHandled()
                 } else {
-                    takeoverJobDao.upsert(
-                        TakeoverJobEntity(uri = uri.toString(), status = TakeoverStatus.DELETE_FAILED),
-                    )
+                    takeoverJobDao.updateStatus(key, TakeoverStatus.DELETE_FAILED)
                     failedDeletes.add(uri)
                 }
             }
+    }
+
+    /**
+     * 幂等键：同一个文件可能来自两条通道 —— 媒体库给 `content://media/...`，
+     * 目录深扫给 `file:///storage/...`。旧实现两处各写各的键，删除失败时同一文件
+     * 会被另一条通道当成新文件再入库一份（两个 UUID 副本）。
+     *
+     * 统一成「绝对路径」：能拿到真实路径就用路径键（与历史目录深扫写入的键完全一致），
+     * 拿不到（媒体行没有 DATA）才退回 content uri。
+     */
+    private fun canonicalKey(
+        uri: Uri,
+        dataPath: String?,
+    ): String {
+        val path = dataPath ?: if (uri.scheme == "file") uri.path else null
+        return if (!path.isNullOrBlank()) FILE_KEY_PREFIX + File(path).absolutePath else uri.toString()
+    }
+
+    /**
+     * 媒体库候选行的查询键：路径键优先，同时带上 content uri 键 ——
+     * 历史记录可能只存了 content uri，两个都查才不会重复入库。
+     */
+    private fun idempotencyKeys(item: MediaCandidate): List<String> {
+        val canonical = canonicalKey(item.uri, item.dataPath)
+        val raw = item.uri.toString()
+        return if (canonical == raw) listOf(canonical) else listOf(canonical, raw)
     }
 
     private data class MediaCandidate(
@@ -305,7 +398,15 @@ object TakeoverScanEngine {
         context: Context,
         lastId: Long,
     ): List<MediaCandidate>? {
-        val collection = MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL)
+        // API 28 及以下没有 OWNER_PACKAGE_NAME：媒体库通道无法把文件归属到具体应用。
+        // 这类系统上整体跳过媒体库通道（目录深扫仍按应用目录/label 捡文件）——
+        // 若改成「跳过 owner 过滤」，用户自己拍的照片也会被搬进库，比漏扫更糟。
+        // 返回空列表而不是 null：避免每轮都发一条「接管失效」通知。
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            PjmLogger.d(TAG, "系统低于 Android 10（无 OWNER_PACKAGE_NAME），跳过媒体库通道，仅目录深扫")
+            return emptyList()
+        }
+        val collection = mediaFilesCollection()
         val projection =
             arrayOf(
                 MediaStore.MediaColumns._ID,

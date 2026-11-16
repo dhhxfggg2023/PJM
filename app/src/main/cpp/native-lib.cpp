@@ -131,28 +131,35 @@ Java_com_dhhxfggg_pjm_domain_util_CryptoUtils_transformBytesNative(
         return;
     }
 
-    jbyte* pData = env->GetByteArrayElements(data, nullptr);
-    jbyte* pKey = env->GetByteArrayElements(key, nullptr);
+    // 核心优化：用 GetPrimitiveArrayCritical 直接拿数组指针，避免 GetByteArrayElements
+    // 在部分 VM 上「拷出 → 变换 → 拷回」的两次 1MB 级内存过手（加密/解密是 I/O 热路径）。
+    // 临界区内只做纯计算，不调用任何 JNI 函数，满足 Critical 的约束。
+    jbyte* pData = (jbyte*) env->GetPrimitiveArrayCritical(data, nullptr);
+    jbyte* pKey = (jbyte*) env->GetPrimitiveArrayCritical(key, nullptr);
 
-    if (pData != nullptr && pKey != nullptr) {
-        // 使用 uint8_t 确保无符号运算一致性
-        uint8_t* uData = (uint8_t*) pData;
-        const uint8_t* uKey = (const uint8_t*) pKey;
+    // Critical 获取失败（OOM / VM 拒绝）必须抛 Java 异常，让上层走失败/回退路径，
+    // 绝不静默跳过变换产出半明文数据。
+    if (pData == nullptr || pKey == nullptr) {
+        if (pData != nullptr) env->ReleasePrimitiveArrayCritical(data, pData, JNI_ABORT);
+        if (pKey != nullptr) env->ReleasePrimitiveArrayCritical(key, pKey, JNI_ABORT);
+        env->ThrowNew(env->FindClass("java/lang/OutOfMemoryError"),
+                      "transformBytesNative: failed to access byte arrays");
+        return;
+    }
 
-        if (mode == 0) {
-            transformLegacyMask(uData, (int32_t) off, (int32_t) len, uKey,
-                                (uint32_t) keyLen, (uint64_t) startPos);
-        } else {
-            transformModulo(uData, (int32_t) off, (int32_t) len, uKey,
+    // 使用 uint8_t 确保无符号运算一致性
+    uint8_t* uData = (uint8_t*) pData;
+    const uint8_t* uKey = (const uint8_t*) pKey;
+
+    if (mode == 0) {
+        transformLegacyMask(uData, (int32_t) off, (int32_t) len, uKey,
                             (uint32_t) keyLen, (uint64_t) startPos);
-        }
+    } else {
+        transformModulo(uData, (int32_t) off, (int32_t) len, uKey,
+                        (uint32_t) keyLen, (uint64_t) startPos);
     }
 
-    // 成对释放：只有成功获取的指针才允许释放
-    if (pData != nullptr) {
-        env->ReleaseByteArrayElements(data, pData, 0);
-    }
-    if (pKey != nullptr) {
-        env->ReleaseByteArrayElements(key, pKey, JNI_ABORT); // Key 无需同步回 Java
-    }
+    // 成对释放：数据写回 Java；Key 无需同步
+    env->ReleasePrimitiveArrayCritical(data, pData, 0);
+    env->ReleasePrimitiveArrayCritical(key, pKey, JNI_ABORT);
 }

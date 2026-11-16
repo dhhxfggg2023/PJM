@@ -24,14 +24,22 @@ package com.dhhxfggg.pjm.ui.viewmodel
  * 这意味着"取到了但用户没翻到"的那些会回到队列，这正是我们想要的：
  * 用户本来就没看过它们，不该被当作已消费。
  *
- * @param unviewedPaths 分类内"还没有浏览记录"的全部路径
- * @param hasAnyPaths 分类内是否存在任何路径（用于区分"分类为空"与"本轮走完"）
+ * @param unviewedPaths 指定分类内"还没有浏览记录"的全部路径
+ * @param hasAnyPaths 指定分类内是否存在任何路径（用于区分"分类为空"与"本轮走完"）
  * @param onRoundRestart 本轮走完后的重置动作（清空该分类的浏览历史）
+ *
+ * ## 分类必须作为参数传入，不能读可变闭包状态
+ *
+ * 调用方（DiscoveryViewModel）切分类时会先改"当前模式"再作废在途批次，
+ * 但已在 `takeBatch` 里挂起的旧协程仍会继续执行 `onRoundRestart` 等回调。
+ * 若这些回调从闭包里读"当前分类"，旧协程就会作用到**新**分类上 ——
+ * 把刚切过去的分类的浏览历史清掉（跨分类进度串味）。
+ * 因此三个 DAO 回调都接收显式 `category`，由调用方在取批之初固化后一路传入。
  */
 class DiscoveryQueue(
-    private val unviewedPaths: suspend () -> List<String>,
-    private val hasAnyPaths: suspend () -> Boolean = { true },
-    private val onRoundRestart: suspend () -> Unit = {},
+    private val unviewedPaths: suspend (String) -> List<String>,
+    private val hasAnyPaths: suspend (String) -> Boolean = { _ -> true },
+    private val onRoundRestart: suspend (String) -> Unit = { _ -> },
 ) {
     private val queue = ArrayDeque<String>()
 
@@ -67,11 +75,16 @@ class DiscoveryQueue(
      * **也不在这里自动重开一轮**：重开会让本次调用跨越轮次边界，
      * 调用方（以及它的测试）就再也无法把某一批归属到确定的轮次。
      * 重开由调用方在拿到空批次后调用 [restartNextRound] 显式完成。
+     *
+     * @param category 本次取批所属分类，一路传给 DAO 回调；见类注释「分类必须作为参数传入」。
      */
-    suspend fun nextBatch(limit: Int): List<String> {
+    suspend fun nextBatch(
+        limit: Int,
+        category: String,
+    ): List<String> {
         if (limit <= 0) return emptyList()
         while (queue.isEmpty()) {
-            if (!pump()) break
+            if (!pump(category)) break
         }
         val batch = ArrayList<String>(minOf(limit, queue.size))
         while (batch.size < limit) {
@@ -86,12 +99,13 @@ class DiscoveryQueue(
     /**
      * 补队一次：纳入"还没有浏览记录、且本次会话没送出过、也不在队列里"的路径。
      *
+     * @param category 本次补队所属分类（由调用方固化传入）。
      * @return 队列是否获得新内容
      */
-    private suspend fun pump(): Boolean {
+    private suspend fun pump(category: String): Boolean {
         val pending = queue.toHashSet()
         val candidates =
-            unviewedPaths().filter {
+            unviewedPaths(category).filter {
                 it.isNotBlank() && it !in servedThisSession && it !in pending
             }
         if (candidates.isEmpty()) return false
@@ -120,7 +134,7 @@ class DiscoveryQueue(
      * **只看浏览历史**：一轮的边界是"用户把库看完一遍"，与本次会话送出过什么无关。
      * 分类为空时返回 false —— 空库不是"看完了"，否则调用方会不断重开一轮、空转。
      */
-    suspend fun isRoundComplete(): Boolean = hasAnyPaths() && unviewedPaths().isEmpty()
+    suspend fun isRoundComplete(category: String): Boolean = hasAnyPaths(category) && unviewedPaths(category).isEmpty()
 
     /**
      * 只清空待消费队列（切换分类时用）。
@@ -149,14 +163,15 @@ class DiscoveryQueue(
      * **只应在 [isRoundComplete] 为 true 时调用** —— 否则会把本轮还没送出的路径
      * 一起重排，等于变相允许重复。
      *
+     * @param category 本轮所属分类（由调用方固化传入，重开只能清这个分类的历史）。
      * @return 是否成功排入内容（分类为空时为 false）
      */
-    suspend fun restartNextRound(): Boolean {
+    suspend fun restartNextRound(category: String): Boolean {
         queue.clear()
         servedThisSession.clear()
-        onRoundRestart()
+        onRoundRestart(category)
         roundRestarts++
-        val ok = pump()
+        val ok = pump(category)
         // 新一轮的第一条如果正好是上一轮最后一条，往队尾挪一下，避免交界处立刻重播
         if (ok && queue.size > 1 && queue.first() == lastServedPath) {
             queue.addLast(queue.removeFirst())

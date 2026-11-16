@@ -25,7 +25,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -34,6 +33,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.composables.icons.lucide.*
 import com.dhhxfggg.pjm.R
 import com.dhhxfggg.pjm.domain.util.UpdateController
@@ -58,10 +58,10 @@ import kotlinx.coroutines.delay
 @Composable
 fun UpdateNoticeBanner(modifier: Modifier = Modifier) {
     val context = LocalContext.current
-    val update by UpdateController.available.collectAsState()
-    val downloadProgress by UpdateController.downloadProgress.collectAsState()
-    val dismissed by UpdateController.dismissed.collectAsState()
-    val message by UpdateController.message.collectAsState()
+    val update by UpdateController.available.collectAsStateWithLifecycle()
+    val downloadProgress by UpdateController.downloadProgress.collectAsStateWithLifecycle()
+    val dismissed by UpdateController.dismissed.collectAsStateWithLifecycle()
+    val message by UpdateController.message.collectAsStateWithLifecycle()
 
     // 1) 启动后静默检查一次（controller 内部幂等，重组不会重复触发）
     LaunchedEffect(Unit) {

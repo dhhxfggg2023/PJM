@@ -10,8 +10,6 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.InputStream
@@ -26,6 +24,12 @@ import kotlin.math.abs
  */
 object VaultScanner {
     private const val TAG = "VaultScanner"
+
+    /** MD5 → 小写十六进制查表（逐字节 String.format 较慢，查表结果等价） */
+    private val HEX = "0123456789abcdef".toCharArray()
+
+    /** 查重时回写 contentHash 的批量大小：逐条 upsert 在 4 万文件时是 4 万次事务/写锁 */
+    private const val HASH_FLUSH_BATCH = 500
 
     /**
      * 视频感知指纹在 `contentHash` 列中的前缀标记。
@@ -51,8 +55,18 @@ object VaultScanner {
             val all = fileDao.getAllFiles().first()
             val missing = mutableListOf<FileEntity>()
             val corrupted = mutableListOf<FileEntity>()
+            // 进度节流：4 万文件逐条回调 = 4 万次 StateFlow 更新（UI 每帧重组）。
+            // 只在跨过 1% 或距上次上报 ≥200ms 时回调。
+            var lastProgress = -1f
+            var lastReportAt = 0L
             all.forEachIndexed { i, e ->
-                onProgress(i.toFloat() / all.size)
+                val progress = i.toFloat() / all.size
+                val nowMs = System.currentTimeMillis()
+                if (progress - lastProgress >= 0.01f || nowMs - lastReportAt >= 200L) {
+                    onProgress(progress)
+                    lastProgress = progress
+                    lastReportAt = nowMs
+                }
                 val f = VaultManager.getFileFromEntity(context, e)
                 val hash = e.contentHash
                 // 只有「确定是 MD5」的记录才做字节级校验：
@@ -62,7 +76,12 @@ object VaultScanner {
                 val md5Comparable = hash != null && !isPerceptualFingerprint(hash) && !FileUtils.isVideoFile(e.name)
                 when {
                     !f.exists() -> missing.add(e)
-                    md5Comparable && calculateHash(f) != hash -> corrupted.add(e)
+                    md5Comparable -> {
+                        val actual = calculateHash(f)
+                        // null 表示读取失败（瞬时 IO 错误 / 文件被占用），不是内容变化。
+                        // 旧写法把 null 直接与已存哈希比较，健康文件会被误报为「已损坏」。
+                        if (actual != null && actual != hash) corrupted.add(e)
+                    }
                 }
             }
             mapOf("missing" to missing, "corrupted" to corrupted)
@@ -74,13 +93,22 @@ object VaultScanner {
         onProgress: (Float) -> Unit,
     ): List<DuplicateGroup> =
         withContext(VaultManager.PjmDispatchers.IO) {
-            val allFiles = fileDao.getAllFiles().first()
+            // 可变副本：算出的 hash 直接回写到这里，避免末尾再 getAllFiles() 全库物化一次。
+            // 4 万行时两遍全库读取 + 两遍实体列表是纯浪费，且与 upsert 之间还可能出现
+            // "刚写入又被并发 replaceAll 覆盖"的窗口。
+            val allFiles = fileDao.getAllFiles().first().toMutableList()
+            // 预先建 path→index 映射：下面每个 suspect 回写 hash 时 O(1) 定位，
+            // 避免 indexOfFirst 在大库里退化成 O(n²)。
+            val indexByPath = HashMap<String, Int>(allFiles.size * 2)
+            allFiles.forEachIndexed { i, e -> indexByPath[e.relativePath] = i }
             val suspects =
                 allFiles
                     .groupBy { it.size }
                     .filter { it.value.size > 1 }
                     .values
                     .flatten()
+            // 攒够一批再落库：逐条 upsert 会让 4 万文件产生 4 万次事务/写锁
+            val pendingHashes = ArrayList<FileEntity>()
             suspects.forEachIndexed { i, entity ->
                 if (VaultManager.isTaskCancelled(VaultManager.TASK_DUPLICATES)) throw CancellationException("精确查重已取消")
                 onProgress(i.toFloat() / suspects.size)
@@ -104,9 +132,23 @@ object VaultScanner {
                     } else {
                         entity.contentHash ?: calculateHash(file)
                     }
-                if (hash != entity.contentHash) fileDao.upsert(entity.copy(contentHash = hash))
+                // 核心修复：与其余写入点一致走 upsertLocked，避免与 fullSyncDatabase 的 replaceAll 竞态。
+                // 同时同步内存副本，供下方分组直接使用，省掉第二次 getAllFiles()。
+                if (hash != entity.contentHash) {
+                    val updated = entity.copy(contentHash = hash)
+                    pendingHashes.add(updated)
+                    indexByPath[entity.relativePath]?.let { idx -> allFiles[idx] = updated }
+                    if (pendingHashes.size >= HASH_FLUSH_BATCH) {
+                        fileDao.upsertAllLocked(pendingHashes.toList())
+                        pendingHashes.clear()
+                    }
+                }
             }
-            val finalFiles = fileDao.getAllFiles().first()
+            if (pendingHashes.isNotEmpty()) {
+                fileDao.upsertAllLocked(pendingHashes.toList())
+                pendingHashes.clear()
+            }
+            val finalFiles = allFiles
             // 核心修复：返回【分组】结构 —— 组内包含全部成员（含保留的原图）与建议删除集，
             // 供 UI 双图对比展示（让用户确认后自行勾选要删除的）
             val result = mutableListOf<DuplicateGroup>()
@@ -168,7 +210,7 @@ object VaultScanner {
             // 1) 计算/读取感知数据（增量：已缓存跳过）
             // 核心修复（崩溃/卡死）：
             //   a. 分批处理（每批 128 张）—— 不一次性创建大量协程，控制内存峰值；
-            //   b. Semaphore(3) 限流 —— 只 3 路并发解码，避免 OOM + 避免占满 8 线程 IO 池
+            //   b. 解码走 PjmDispatchers.Decode（3 路）—— 避免 OOM + 不占满 8 线程 IO 池
             //      （否则删除等其他操作排队，用户感知"卡死"）；
             //   c. computeBundle 内部 catch Throwable（含 OOM）+ 显式 recycle，单图失败不影响整体。
             // 核心优化（一次解码）：dHash 指纹、32×32 灰度、64 宽验证签名三者都来自同一次
@@ -178,7 +220,6 @@ object VaultScanner {
                 val entity: FileEntity,
                 val fp: ImageFingerprint?,
             )
-            val fpSemaphore = Semaphore(3)
             val fps = mutableListOf<Fp>()
             var processedTotal = 0
             for (batch in images.chunked(128)) {
@@ -187,28 +228,28 @@ object VaultScanner {
                     coroutineScope {
                         batch
                             .map { e ->
-                                async(VaultManager.PjmDispatchers.IO) {
-                                    fpSemaphore.withPermit {
-                                        val cachedFp = ImageFingerprintCache.getFingerprint(context, e)
-                                        // 三项缓存都只做 stat 探测，不把内容读进内存：
-                                        // 全库全读一遍会产生上百 MB 的无效 I/O（内容留给候选对验证阶段按需读）
-                                        val cacheComplete =
-                                            cachedFp != null &&
-                                                ImageFingerprintCache.hasGray32(context, e) &&
-                                                ImageFingerprintCache.hasVerifySignature(context, e)
-                                        if (cacheComplete) {
-                                            // 三项全命中 → 零解码（增量场景：第二次起查重是秒级）
-                                            Fp(e, cachedFp)
+                                // 解码统一走 Decode（3 路）而不是 8 线程 IO 池：大图解码内存密集，
+                                // 混在 IO 池里会同时打满 CPU 与堆，还会挤占删除/导入等用户操作。
+                                async(VaultManager.PjmDispatchers.Decode) {
+                                    val cachedFp = ImageFingerprintCache.getFingerprint(context, e)
+                                    // 三项缓存都只做 stat 探测，不把内容读进内存：
+                                    // 全库全读一遍会产生上百 MB 的无效 I/O（内容留给候选对验证阶段按需读）
+                                    val cacheComplete =
+                                        cachedFp != null &&
+                                            ImageFingerprintCache.hasGray32(context, e) &&
+                                            ImageFingerprintCache.hasVerifySignature(context, e)
+                                    if (cacheComplete) {
+                                        // 三项全命中 → 零解码（增量场景：第二次起查重是秒级）
+                                        Fp(e, cachedFp)
+                                    } else {
+                                        // 任一缺失 → 一次解码同时补齐三项（老缓存升级也走这里）
+                                        val bundle = ImageFingerprintCache.computeBundle(context, e)
+                                        if (bundle != null) {
+                                            ImageFingerprintCache.saveBundle(context, e, bundle)
+                                            Fp(e, bundle.fingerprint)
                                         } else {
-                                            // 任一缺失 → 一次解码同时补齐三项（老缓存升级也走这里）
-                                            val bundle = ImageFingerprintCache.computeBundle(context, e)
-                                            if (bundle != null) {
-                                                ImageFingerprintCache.saveBundle(context, e, bundle)
-                                                Fp(e, bundle.fingerprint)
-                                            } else {
-                                                // 解码失败：退回已缓存的部分，绝不因单图失败影响整体
-                                                Fp(e, cachedFp)
-                                            }
+                                            // 解码失败：退回已缓存的部分，绝不因单图失败影响整体
+                                            Fp(e, cachedFp)
                                         }
                                     }
                                 }
@@ -377,7 +418,13 @@ object VaultScanner {
         return try {
             var r: Int
             while (input.read(buf).also { r = it } != -1) digest.update(buf, 0, r)
-            digest.digest().joinToString("") { "%02x".format(it) }
+            val bytes = digest.digest()
+            val hex = StringBuilder(bytes.size * 2)
+            for (b in bytes) {
+                val v = b.toInt() and 0xFF
+                hex.append(HEX[v ushr 4]).append(HEX[v and 0x0F])
+            }
+            hex.toString()
         } catch (_: Exception) {
             null
         } finally {
