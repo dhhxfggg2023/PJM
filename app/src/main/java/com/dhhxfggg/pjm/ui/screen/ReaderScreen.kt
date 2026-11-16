@@ -656,13 +656,11 @@ private fun ReaderTopBar(
                 .padding(horizontal = 2.dp, vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // 阅读器顶栏四颗按钮全是纯图标，补一行小字；顶栏本来就窄，
-        // 所以只用 10sp 单行（不换行），标题仍然占 weight(1f)。
+        // 返回是通用图标，不再加小字；其余功能按钮保留一行 10sp 小字。
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             IconButton(onClick = onBack) {
                 Icon(Lucide.ArrowLeft, stringResource(R.string.action_back), tint = Color.White)
             }
-            PjmButtonCaption(caption = stringResource(R.string.hint_back), color = Color.White.copy(alpha = 0.7f))
         }
         Column(modifier = Modifier.weight(1f).padding(horizontal = 4.dp)) {
             Text(

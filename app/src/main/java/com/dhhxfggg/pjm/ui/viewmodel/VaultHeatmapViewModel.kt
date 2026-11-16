@@ -54,6 +54,18 @@ class VaultHeatmapViewModel
         private val _state = MutableStateFlow(HeatmapUiState())
         val state: StateFlow<HeatmapUiState> = _state.asStateFlow()
 
+        /**
+         * 大小分布里选中的「分类 + 档位」。存在 ViewModel 而不是 Composable 的 remember 里：
+         * 点某一档会导航到文件库，热力页的 Composable 会被销毁；返回时仍是同一个返回栈条目，
+         * ViewModel 还在，所以选中的分类和档位能保留下来。
+         */
+        private val _sizeSelection = MutableStateFlow<Pair<String, Int>?>(null)
+        val sizeSelection: StateFlow<Pair<String, Int>?> = _sizeSelection.asStateFlow()
+
+        fun setSizeSelection(selection: Pair<String, Int>?) {
+            _sizeSelection.value = selection
+        }
+
         init {
             load()
         }

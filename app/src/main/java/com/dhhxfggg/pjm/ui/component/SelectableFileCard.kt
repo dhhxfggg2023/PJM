@@ -91,11 +91,7 @@ fun SelectableFileCard(
         colors =
             CardDefaults.cardColors(
                 containerColor =
-                    if (isSelected) {
-                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                    } else {
-                        MaterialTheme.colorScheme.surface
-                    },
+                    MaterialTheme.colorScheme.surface,
             ),
     ) {
         if (imageOnly) {
@@ -111,26 +107,31 @@ fun SelectableFileCard(
                             selected = isSelected
                         },
             ) {
-                Surface(
-                    color = MaterialTheme.colorScheme.secondaryContainer,
-                    modifier = Modifier.fillMaxSize(),
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = icon,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                            modifier = Modifier.size(48.dp),
-                        )
+                // 能显示封面的类型才加载缩略图；否则完整显示原来的类型图标，
+                // 和 FileCard 的网格行为保持一致，也省掉一次无意义的图片请求。
+                val hasCover = fileEntity.isImage || FileUtils.isVideoFile(fileEntity.name)
+                if (hasCover) {
+                    FileThumbnail(
+                        fileEntity = fileEntity,
+                        size = thumbnailSizeFor(gridSpanCount),
+                        crossfade = false, // 相册滚动时逐张淡入会持续触发动画，明显掉帧
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                } else {
+                    Surface(
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        modifier = Modifier.fillMaxSize(),
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = icon,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                modifier = Modifier.size(48.dp),
+                            )
+                        }
                     }
                 }
-
-                FileThumbnail(
-                    fileEntity = fileEntity,
-                    size = thumbnailSizeFor(gridSpanCount),
-                    crossfade = false, // 相册滚动时逐张淡入会持续触发动画，明显掉帧
-                    modifier = Modifier.fillMaxSize(),
-                )
 
                 if (isSelected) {
                     Box(

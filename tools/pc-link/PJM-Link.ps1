@@ -1267,9 +1267,6 @@ function Start-MainWindow {
         return $b
     }
 
-    $btnReceive = New-FlatButton '接收手机文件' ([System.Drawing.Point]::new(20, 218)) ([System.Drawing.Size]::new(190, 42)) $bold $primary ([System.Drawing.Color]::White) $primary
-    $form.Controls.Add($btnReceive)
-
     $btnOpen = New-FlatButton '打开文件夹' ([System.Drawing.Point]::new(222, 218)) ([System.Drawing.Size]::new(150, 42)) $font $card $text $line
     $form.Controls.Add($btnOpen)
 
@@ -1328,22 +1325,10 @@ function Start-MainWindow {
     $timer.Interval = 300
     $script:Ui = @{
         Form = $form; Device = $lblDevice; Adb = $lblAdb; Data = $lblData; Disk = $lblDisk
-        Receive = $btnReceive; Open = $btnOpen; Stop = $btnStop; Help = $btnHelp; Exit = $btnExit
+        Open = $btnOpen; Stop = $btnStop; Help = $btnHelp; Exit = $btnExit
         Progress = $progress; Speed = $lblSpeed; Log = $log; Timer = $timer; Tip = $tip
         Subtitle = $subtitle
     }
-
-    $btnReceive.Add_Click({
-        try {
-            if ($script:Runtime.State.Device -ne '已连接') {
-                [void][System.Windows.Forms.MessageBox]::Show($script:Ui.Form, '手机还没连接：请插好数据线并允许 USB 调试。', 'PJM Link', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
-                return
-            }
-            if ($script:Runtime.Task.active) { return }
-            Write-Log '用户点击「接收手机文件」'
-            [void](Start-Pull -Runtime $script:Runtime)
-        } catch { Write-Log ('启动接收失败：' + $_.Exception.Message) '错误' }
-    })
 
     $btnOpen.Add_Click({
         try {
@@ -1361,7 +1346,7 @@ function Start-MainWindow {
             $help = @(
                 '1. 手机用数据线连电脑，打开开发者选项里的 USB 调试，并在手机上点「允许」。',
                 '2. 手机端：设置 → 传输到电脑 → 打开传输服务。',
-                '3. 回到这个窗口点「接收手机文件」，文件会出现在本文件夹的 PJM-Transfer\分类\日期\ 下。',
+                '3. 文件会自动出现在这个文件夹的 PJM-Transfer\分类\日期\ 下，窗口里能看到进度。',
                 '4. 整个 PJM-Link 文件夹可以放到移动硬盘或 U 盘，位置随你。',
                 '5. 关闭窗口即断开隧道，不会关闭 adb 服务、不会开机自启。'
             ) -join [Environment]::NewLine
@@ -1430,7 +1415,6 @@ function Start-MainWindow {
                 $script:Ui.Speed.Text = '就绪'
             }
             $script:Ui.Stop.Enabled = [bool]$task.active
-            $script:Ui.Receive.Enabled = (-not [bool]$task.active) -and (-not $pushLive)
             $count = 0
             while ($count -lt 200) {
                 $line = $null

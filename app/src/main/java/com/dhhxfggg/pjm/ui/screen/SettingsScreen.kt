@@ -38,7 +38,6 @@ import com.dhhxfggg.pjm.domain.util.UpdateChecker
 import com.dhhxfggg.pjm.domain.util.UpdateController
 import com.dhhxfggg.pjm.domain.util.VaultManager
 import com.dhhxfggg.pjm.ui.component.PjmAeroDialog
-import com.dhhxfggg.pjm.ui.component.PjmButtonCaption
 import com.dhhxfggg.pjm.ui.component.PjmDuplicateCompareDialog
 import com.dhhxfggg.pjm.ui.component.PjmFolderPickerDialog
 import com.dhhxfggg.pjm.ui.viewmodel.RandomShareMode
@@ -285,24 +284,14 @@ fun SettingsScreen(
                     )
                 },
                 navigationIcon = {
-                    // 顶栏左侧只有一颗箭头，补一行「返回」小字让功能一眼可见；
-                    // 顶栏高度固定 64dp，所以按钮视觉尺寸收到 36dp，给下面那行小字留出位置。
+                    // 返回是通用图标，不再加小字；图标自带 contentDescription 供读屏使用。
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        IconButton(
-                            onClick = { if (currentPage == null) onBack() else closePage() },
-                            modifier = Modifier.size(36.dp),
-                        ) {
-                            // 下方小字被 PjmButtonCaption 清了语义，图标必须自己带 contentDescription，
-                            // 否则 TalkBack 只念「按钮」，读屏用户不知道这是返回。
+                        IconButton(onClick = { if (currentPage == null) onBack() else closePage() }) {
                             Icon(
                                 if (currentPage == null) Lucide.ArrowLeft else Lucide.ChevronLeft,
                                 stringResource(R.string.action_back),
                             )
                         }
-                        PjmButtonCaption(
-                            caption = stringResource(R.string.hint_back),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
-                        )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),

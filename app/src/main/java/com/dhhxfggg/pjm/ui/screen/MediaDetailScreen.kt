@@ -55,7 +55,6 @@ import com.dhhxfggg.pjm.domain.util.FileUtils
 import com.dhhxfggg.pjm.domain.util.PjmLogger
 import com.dhhxfggg.pjm.domain.util.PlayMode
 import com.dhhxfggg.pjm.domain.util.VaultManager
-import com.dhhxfggg.pjm.ui.component.PjmButtonCaption
 import com.dhhxfggg.pjm.ui.component.PjmIconWithCaption
 import com.dhhxfggg.pjm.ui.component.PlayerProgressBar
 import com.dhhxfggg.pjm.ui.component.PlayerProgressState
@@ -615,10 +614,6 @@ private fun VideoPage(
                                 modifier = Modifier.size(28.dp),
                             )
                         }
-                        PjmButtonCaption(
-                            caption = stringResource(if (progress.isPlaying) R.string.hint_pause else R.string.hint_play),
-                            color = Color.White.copy(alpha = 0.7f),
-                        )
                     }
                 }
                 // 控制条和发现页共用一份；全屏 / 竖屏切换：想躺着看就全屏，想竖着刷就保持竖屏
@@ -1339,10 +1334,6 @@ private fun AudioPlayPauseButton(
                 modifier = Modifier.size(32.dp),
             )
         }
-        PjmButtonCaption(
-            caption = stringResource(if (progress.isPlaying) R.string.hint_pause else R.string.hint_play),
-            color = Color.White.copy(alpha = 0.7f),
-        )
     }
 }
 
@@ -1491,16 +1482,11 @@ private fun ViewerTopBar(
                 .padding(horizontal = 6.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // 顶栏只有一颗返回箭头：图标本身够直观，但按用户要求统一补一行小字，
-        // 顶栏高度由状态栏内边距兜底，不会把标题挤掉（标题仍是 weight(1f)）。
+        // 返回是通用图标，不再加小字。
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             IconButton(onClick = onBack) {
                 Icon(Lucide.ArrowLeft, stringResource(R.string.action_back), tint = Color.White)
             }
-            PjmButtonCaption(
-                caption = stringResource(R.string.hint_back),
-                color = Color.White.copy(alpha = 0.7f),
-            )
         }
         Text(
             text = title,

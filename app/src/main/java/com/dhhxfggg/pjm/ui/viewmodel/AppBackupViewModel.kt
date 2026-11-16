@@ -40,6 +40,15 @@ data class BackupAppInfo(
     val searchKey: String = (label + " " + packageName).lowercase()
 }
 
+/**
+ * 备份应用筛选规则（纯函数，方便单测钉死）：只保留用户安装的应用。
+ * 更新过的系统应用仍然带 [ApplicationInfo.FLAG_SYSTEM]，同样排除。
+ */
+internal fun isBackupableApp(
+    info: ApplicationInfo,
+    selfPackage: String,
+): Boolean = info.packageName != selfPackage && (info.flags and ApplicationInfo.FLAG_SYSTEM) == 0
+
 /** 备份过程中的进度：字节级细读由 [ApkExporter] 提供，这里只保留界面要显示的数字。 */
 data class AppBackupProgress(
     val currentIndex: Int,
@@ -119,10 +128,10 @@ class AppBackupViewModel
         /**
          * 读取已安装应用。
          *
-         * 过滤规则：去掉本应用自身；系统预装应用只有在「不可更新」时才排除 ——
-         * [ApplicationInfo.FLAG_SYSTEM] 决定它是不是系统应用，[ApplicationInfo.FLAG_UPDATED_SYSTEM_APP]
-         * 说明它被用户更新过（如 Google Play 服务、系统浏览器），这类应用的 APK 通常有备份价值。
-         * 纯预装、不可更新的（system/priv-app 里的东西）对用户没有意义，排除。
+         * 过滤规则：去掉本应用自身和全部系统应用。
+         * [ApplicationInfo.FLAG_SYSTEM] 标记预装系统应用；[ApplicationInfo.FLAG_UPDATED_SYSTEM_APP]
+         * 标记被商店更新过的系统应用 —— 它仍是系统应用，只是版本号更新，同样不备份。
+         * 只保留用户自己安装的应用。
          */
         private fun loadApps() {
             viewModelScope.launch {
@@ -142,12 +151,8 @@ class AppBackupViewModel
                     }
             return installed
                 .asSequence()
-                .filter { it.packageName != context.packageName }
-                .filter { info ->
-                    val isSystem = (info.flags and ApplicationInfo.FLAG_SYSTEM) != 0
-                    val isUpdatedSystem = (info.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
-                    !isSystem || isUpdatedSystem
-                }.mapNotNull { info -> info.toBackupApp(packageManager) }
+                .filter { isBackupableApp(it, context.packageName) }
+                .mapNotNull { info -> info.toBackupApp(packageManager) }
                 .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.label })
                 .toList()
         }

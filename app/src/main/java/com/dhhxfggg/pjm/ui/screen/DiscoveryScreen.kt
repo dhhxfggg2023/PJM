@@ -577,10 +577,6 @@ private fun DiscoveryAudioControls(player: ExoPlayer?) {
                     modifier = Modifier.size(44.dp),
                 )
             }
-            PjmButtonCaption(
-                caption = stringResource(if (progress.isPlaying) R.string.hint_pause else R.string.hint_play),
-                color = Color.White.copy(alpha = 0.7f),
-            )
         }
     }
 }
@@ -846,10 +842,6 @@ fun DiscoveryVideoRenderer(
                         tint = Color.White.copy(alpha = 0.8f),
                     )
                 }
-                PjmButtonCaption(
-                    caption = stringResource(R.string.hint_play),
-                    color = Color.White.copy(alpha = 0.7f),
-                )
             }
         }
 

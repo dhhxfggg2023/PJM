@@ -19,12 +19,13 @@ object VaultCategories {
     /** 全部分类（顺序即主界面/封面的展示顺序） */
     val CATEGORIES =
         listOf(
-            CAT_PJM,
             CAT_IMAGES,
             CAT_VIDEOS,
             CAT_TEXTS,
             CAT_AUDIOS,
             CAT_BILI_VIDEOS,
+            // PJM 混淆包属于加密容器，排在所有常规分类（含「其他」）之后。
             CAT_OTHERS,
+            CAT_PJM,
         )
 }

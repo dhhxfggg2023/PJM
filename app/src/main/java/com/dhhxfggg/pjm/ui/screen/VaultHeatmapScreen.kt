@@ -87,6 +87,8 @@ fun VaultHeatmapScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     var selectedDay by remember { mutableStateOf<Long?>(null) }
+    // 大小档的「分类 + 档位」存在 ViewModel 里（绑定返回栈条目），点进文件库再返回仍保留。
+    val savedSizeSelection by viewModel.sizeSelection.collectAsStateWithLifecycle()
     // 每次回到本页都重算一次：ViewModel 只在 init 里 load 过，做完一次 APK 备份或删掉
     // 几百个文件再回来，热力图和大小分布还停在旧数字上。
     androidx.lifecycle.compose.LifecycleResumeEffect(viewModel) {
@@ -150,6 +152,8 @@ fun VaultHeatmapScreen(
         Spacer(Modifier.height(20.dp))
         SizeDistribution(
             histograms = state.sizeHistograms,
+            savedSelection = savedSizeSelection,
+            onSelectionChanged = { viewModel.setSizeSelection(it) },
             onOpenSizeFilter = onOpenSizeFilter,
         )
     }
@@ -408,6 +412,8 @@ private fun SizeBucket.label(): String {
 @Composable
 private fun SizeDistribution(
     histograms: Map<String, SizeHistogram>,
+    savedSelection: Pair<String, Int>?,
+    onSelectionChanged: (Pair<String, Int>?) -> Unit,
     onOpenSizeFilter: (category: String, sizeMin: Long, sizeMax: Long) -> Unit,
 ) {
     val available =
@@ -415,9 +421,25 @@ private fun SizeDistribution(
             SIZE_CATEGORIES.filter { (histograms[it.first]?.total ?: 0) > 0 }
         }
     if (available.isEmpty()) return
-    var selected by remember(available) { mutableStateOf(available.firstOrNull()?.first) }
+    // 分类与档位由 ViewModel 保存，导航去文件库再返回仍保留；档位按下标恢复。
+    var selected by remember(available) {
+        mutableStateOf(
+            savedSelection?.first?.takeIf { key -> available.any { it.first == key } }
+                ?: available.first().first,
+        )
+    }
+    var bucketIndex by remember(available, selected) {
+        mutableStateOf(
+            if (savedSelection?.first == selected) {
+                savedSelection.second.coerceIn(0, (histograms[selected]?.buckets?.size ?: 1) - 1)
+            } else {
+                0
+            },
+        )
+    }
+    LaunchedEffect(selected, bucketIndex) { onSelectionChanged(selected to bucketIndex) }
     var menuExpanded by remember { mutableStateOf(false) }
-    val histogram = selected?.let { histograms[it] } ?: SizeHistogram.EMPTY
+    val histogram = histograms[selected] ?: SizeHistogram.EMPTY
     val maxCount = histogram.maxCount.coerceAtLeast(1)
     val total = histogram.total
     val selectedLabelRes = available.firstOrNull { it.first == selected }?.second
@@ -480,14 +502,16 @@ private fun SizeDistribution(
             )
         }
         Spacer(Modifier.height(8.dp))
-        histogram.buckets.forEach { bucket ->
+        histogram.buckets.forEachIndexed { index, bucket ->
             SizeBucketRow(
+                highlighted = index == bucketIndex,
                 label = bucket.label(),
                 count = bucket.count,
                 maxCount = maxCount,
                 // 最后一档没有上界：抓不到长整数的上界就传 MAX_VALUE，调用方据此走「X 以上」
                 onClick = {
-                    selected?.let { onOpenSizeFilter(it, bucket.start, if (bucket.isLast) Long.MAX_VALUE else bucket.end) }
+                    bucketIndex = index
+                    onOpenSizeFilter(selected, bucket.start, if (bucket.isLast) Long.MAX_VALUE else bucket.end)
                 },
             )
         }
@@ -505,13 +529,17 @@ private fun SizeBucketRow(
     label: String,
     count: Int,
     maxCount: Int,
+    highlighted: Boolean,
     onClick: () -> Unit,
 ) {
+    val rowColor = if (highlighted) MaterialTheme.colorScheme.surfaceContainerHigh else Color.Transparent
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier =
             Modifier
                 .fillMaxWidth()
+                // 点过的档位垫一层主题实色，返回后能看出刚才看的是哪一档。
+                .background(rowColor, RoundedCornerShape(8.dp))
                 // 先 clip 再 clickable：否则 ripple 会溢出圆角，画到相邻两行上
                 .clip(RoundedCornerShape(8.dp))
                 .clickable(onClick = onClick)

@@ -94,8 +94,9 @@ fun FileCard(
                 modifier
                     .fillMaxWidth()
                     .clip(shape)
-                    // 图片铺满整格：底色用接近中性的深色，缩略图还没解码出来时也不会是一块浅灰
-                    .background(Color.Black.copy(alpha = 0.06f))
+                    // 网格统一用主题实色底：能拿到封面就铺满，拿不到就露出下面同色底的图标，
+                    // 不再让壁纸透上来把音频/文本格冲得半透明。
+                    .background(MaterialTheme.colorScheme.secondaryContainer)
                     .then(selectionBorder)
                     .combinedClickable(onClick = onClick, onLongClick = onLongClick)
                     // 缩略图/图标都把 contentDescription 设成 null，读屏逐格只会念「按钮」。

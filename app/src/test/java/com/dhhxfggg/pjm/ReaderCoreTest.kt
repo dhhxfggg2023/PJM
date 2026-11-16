@@ -128,6 +128,59 @@ class ReaderCoreTest {
         assertTrue(ChapterDetection.detect(paragraphs).isEmpty())
     }
 
+    @Test
+    fun chapterDetection_recognizesVariedFormats() {
+        // 三种常见写法都要认出来：中文数字、阿拉伯数字、英文 Chapter
+        assertTrue(ChapterDetection.isChapterTitle("第 12 章 夜谈"))
+        assertTrue(ChapterDetection.isChapterTitle("第零章 序"))
+        assertTrue(ChapterDetection.isChapterTitle("12、雨落"))
+        assertTrue(ChapterDetection.isChapterTitle("（三）风起"))
+        assertTrue(ChapterDetection.isChapterTitle("Chapter One 开端"))
+        assertTrue(ChapterDetection.isChapterTitle("Chapter Twelve 深冬"))
+    }
+
+    @Test
+    fun chapterDetection_rejectsBodyWithNumberInside() {
+        // 正文里提到章节号不能算标题
+        assertFalse(ChapterDetection.isChapterTitle("他翻到第三章的时候天已经黑了。"))
+        assertFalse(ChapterDetection.isChapterTitle("这一章写得真好，我很喜欢。"))
+        assertFalse(ChapterDetection.isChapterTitle("第一章里发生过很多事，后来都忘了。"))
+        assertFalse(ChapterDetection.isChapterTitle("他说：第一章结束了。"))
+    }
+
+    @Test
+    fun chapterDetection_clustersPlainNumberTitles() {
+        // 裸数字标题：旧实现一条都认不出，靠聚类识别
+        val paragraphs =
+            listOf(
+                "1 雨落",
+                "这是第一段正文。",
+                "2 风起",
+                "这是第二段正文。",
+                "3 云涌",
+                "这是第三段正文。",
+            )
+        val chapters = ChapterDetection.detect(paragraphs)
+        assertEquals(3, chapters.size)
+        assertEquals("1 雨落", chapters[0].title)
+        assertEquals(2, chapters[1].startParagraph)
+    }
+
+    @Test
+    fun chapterDetection_doesNotClusterBodyShortSentences() {
+        // 一堆格式各异的短正文句不能被当成章节
+        val paragraphs =
+            listOf(
+                "他笑了。",
+                "天很蓝",
+                "她转身离开",
+                "门开了",
+                "没有回答",
+                "风停了",
+            )
+        assertTrue(ChapterDetection.detect(paragraphs).isEmpty())
+    }
+
     // ---------------- 分页 ----------------
 
     @Test
