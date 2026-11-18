@@ -15,14 +15,14 @@ plugins {
 // - release：必须使用 keystore.properties 指向的正式证书。缺配置时构建【直接失败】，
 //   不再回退 debug 签名 —— 旧行为会让"正式版"带着随构建环境变化的调试证书发出去，
 //   换机重装、应用内升级都会因为签名不一致失败。
-// keystore.properties 与 *.jks 都在 .gitignore 里；证书本体离线备份在
-// E:\项目备份\PJM\signing\（同目录「签名信息.txt」记录密码与指纹），仓库里只有读取逻辑。
-// 文件格式：storeFile=/绝对路径/pjm-release.jks, storePassword=..., keyAlias=..., keyPassword=...
+// keystore.properties 与 *.jks 都在 .gitignore 里，仓库只保留读取逻辑、不含任何密钥材料；
+// 证书本体与密码请离线保管在仓库之外（U 盘/加密盘/密码管理器）。
+// 文件格式：storeFile=<证书绝对路径或相对项目根目录的路径>, storePassword=..., keyAlias=..., keyPassword=...
 val keystorePropertiesFile = rootProject.file("keystore.properties")
 val keystoreProperties =
     Properties().apply {
         // 必须按 UTF-8 读：Properties.load(InputStream) 用的是 ISO-8859-1，
-        // 证书路径里带中文（E:\项目备份\...）会被解成乱码，变成"文件不存在"。
+        // 证书路径里若带非 ASCII 字符（例如中文目录名）会被解成乱码，变成"文件不存在"。
         if (keystorePropertiesFile.exists()) {
             keystorePropertiesFile.reader(Charsets.UTF_8).use { load(it) }
         }
@@ -147,8 +147,8 @@ gradle.taskGraph.whenReady {
             """
             release 构建需要正式签名，但没有找到可用的证书。
             请在项目根目录创建 keystore.properties（已被 .gitignore 排除）：
-              storeFile=E:/项目备份/PJM/signing/pjm-release.jks
-              storePassword=...（见 E:\项目备份\PJM\signing\签名信息.txt）
+              storeFile=<证书绝对路径，如 /path/to/pjm-release.jks>
+              storePassword=...
               keyAlias=pjm
               keyPassword=...
             debug 与 release 是两套独立证书，本工程不再回退 debug 签名。规则说明见 README「构建」一节。

@@ -175,13 +175,13 @@ PJM 是一个 Android 本地文件保险库应用。它把图片、视频、音�
    **release 必须先配好正式签名**：debug 与 release 用两套独立证书，release 缺配置时构建直接失败（不会回退 debug 签名）。在项目根目录放一个 `keystore.properties`（已被 `.gitignore` 排除）：
 
    ```properties
-   storeFile=E:/项目备份/PJM/signing/pjm-release.jks
+   storeFile=/path/to/pjm-release.jks   # 绝对路径，或相对项目根目录
    storePassword=...
    keyAlias=pjm
    keyPassword=...
    ```
 
-   **请务必离线备份证书与密码**：丢了就无法覆盖安装，只能卸载重装（应用数据会一起丢）。本机把证书本体与密码放在仓库之外的 `E:\项目备份\PJM\signing\`（同目录 `签名信息.txt` 记录密码、SHA-256 指纹与有效期）。CI 用一次性临时证书构建 release 只为验证链路，产物不可分发。
+   **请务必离线备份证书与密码**：丢了就无法覆盖安装，只能卸载重装（应用数据会一起丢）。证书本体与密码应当存放在**仓库之外**的可信介质上（U 盘、加密盘或密码管理器），并在那里另记一份 SHA-256 指纹与有效期备查。CI 用一次性临时证书构建 release 只为验证链路，产物不可分发。
 
 ```bash
 ./gradlew :app:assembleDebug      # 调试包
