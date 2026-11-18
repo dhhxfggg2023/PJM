@@ -480,22 +480,29 @@
     <string name="transfer_clear">清空</string>
     <string name="transfer_dates_hint">这里会列出库里出现过的入库日期；一条记录都没有时只能传全部</string>
     <string name="transfer_last30_hint">只列最近 30 天，更早的选「全部」一起传</string>
+    <string name="transfer_month_label">%1$d年%2$d月</string>
+    <string name="transfer_month_days">%1$d 天</string>
+    <string name="transfer_month_select">全选本月</string>
+    <string name="transfer_month_clear">取消本月</string>
     <string name="transfer_status_active">正在传输</string>
     <string name="transfer_status_last">上次传输</string>
     <string name="transfer_progress">已传 %1$d/%2$d</string>
     <string name="transfer_remaining"> · 还剩 %1$d 个</string>
     <string name="transfer_skipped">跳过 %1$d · 失败 %2$d</string>
+    <string name="transfer_failed_list_title">失败文件</string>
+    <string name="transfer_failed_list_hint">本批共 %1$d 个文件失败，原因如下：</string>
     <string name="transfer_in_progress">传输中…</string>
     <string name="transfer_start_push">开始传到电脑</string>
     <string name="transfer_stop">停止</string>
     <string name="transfer_pc_empty">电脑端还没有文件：先把文件传过去，或把文件放进 PJM-Link 里的 PJM-Transfer</string>
     <string name="transfer_pc_offline">电脑端未连接：确认 PJM-Link 已打开并连上 USB</string>
     <string name="transfer_folder_count">共 %1$d 个文件夹</string>
-    <string name="transfer_select_all">全选 / 取消</string>
     <string name="transfer_importing">导入中…</string>
     <string name="transfer_import_to_phone">导入到手机</string>
     <string name="transfer_import_progress">已导入 %1$d/%2$d</string>
-    <string name="transfer_folder_meta">%1$s · %2$d 个 · %3$s</string>
+    <string name="transfer_folder_meta_short">%1$d 个 · %2$s</string>
+    <string name="transfer_import_stopped">已停止 · 本批已导入 %1$d 个</string>
+    <string name="transfer_selected_folders">已选 %1$d 个文件夹</string>
 
     <!-- 分类短名（传输列表、热力图大小分布共用） -->
     <string name="cat_short_images">图片</string>

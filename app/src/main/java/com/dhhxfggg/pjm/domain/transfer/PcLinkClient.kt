@@ -35,6 +35,8 @@ data class PcTask(
     val skipped: Int,
     val failed: Int,
     val error: String?,
+    /** 本次传输的总平均速度 = 累计字节 / 累计耗时；与瞬时 speed 并列显示 */
+    val avgSpeed: Long = 0L,
 )
 
 data class PcFile(
@@ -50,6 +52,17 @@ data class PcFile(
 class PcLinkClient(
     private val base: String = "http://127.0.0.1:8788",
 ) {
+    // 快速上传通道：PC 端在 8789 开了裸 TCP 接收器，专门服务大量小文件推送。
+    // 实测原 HttpListener(8788) 每请求约 93ms、整体约 10 MB/s；裸 TCP 约 25ms、约 39 MB/s。
+    // 全部走 adb reverse 隧道，不消耗手机流量。快速通道不可用时自动回退到 8788。
+    private val fastBase = base.replace(":8788", ":8789")
+    private val fastHost: String get() = java.net.URI(fastBase).host
+    private val fastPort: Int get() =
+        java.net
+            .URI(fastBase)
+            .port
+            .takeIf { it > 0 } ?: 8789
+
     fun state(): PcState? =
         runCatching {
             val obj = JSONObject(get("/api/pc/state"))
@@ -124,13 +137,172 @@ class PcLinkClient(
 
     fun stopPull(): Boolean = runCatching { post("/api/pc/stop", "{}").contains("\"ok\":true") }.getOrDefault(false)
 
+    /** 快速通道的一条长连接：多个文件复用同一条 TCP，避免每条建连开销 */
+    private class FastConn(
+        val socket: java.net.Socket,
+        val out: java.io.OutputStream,
+        val input: java.io.InputStream,
+    ) {
+        /**
+         * 读一行 ASCII 响应头（每字符对应一字节）。
+         *
+         * 不能用 BufferedReader.readLine()：响应体是按【字节】声明长度的，
+         * 中文文件名的 UTF-8 字节数大于字符数，按字符读会一直等不够而卡到超时。
+         */
+        fun readAsciiLine(): String? {
+            val sb = StringBuilder()
+            while (true) {
+                val c = input.read()
+                if (c < 0) return if (sb.isEmpty()) null else sb.toString()
+                if (c == '\r'.code) {
+                    input.read()
+                    return sb.toString()
+                }
+                sb.append(c.toChar())
+            }
+        }
+
+        /** 按字节精确读满 len 字节；返回实际读到的字节数 */
+        fun readFully(
+            buffer: ByteArray,
+            len: Int,
+        ): Int {
+            var read = 0
+            while (read < len) {
+                val n = input.read(buffer, read, len - read)
+                if (n <= 0) break
+                read += n
+            }
+            return read
+        }
+    }
+
+    @Volatile
+    private var fastConn: FastConn? = null
+
+    /** 打开快速通道连接；PC 端没有该服务（旧版本）时返回 null，调用方回退到 HTTP */
+    private fun openFastConn(): FastConn? =
+        runCatching {
+            val socket = java.net.Socket()
+            socket.connect(java.net.InetSocketAddress(fastHost, fastPort), 3000)
+            socket.soTimeout = 60000
+            socket.tcpNoDelay = true
+            FastConn(
+                socket,
+                socket.getOutputStream().buffered(256 * 1024),
+                socket.getInputStream().buffered(64 * 1024),
+            )
+        }.getOrNull()
+
+    private fun closeFastConn() {
+        runCatching { fastConn?.socket?.close() }
+        fastConn = null
+    }
+
     /**
-     * 把一个文件直接推给电脑端（手机是发送方）。
+     * 发到电脑：优先走 8789 裸 TCP 快速通道，不可用时回退到 8788 的 HttpListener。
      *
-     * 进度、速度、剩余全部在手机本地算，不再依赖电脑端回报的任务状态：
-     * 传多大、传多快由手机这边的读取速度决定，电脑端只是被动收字节。
+     * 快速通道协议（见 PJM-Link.ps1 的 PjmFastUpload）：定长二进制 body + 文本头，
+     * 与 HTTP/1.1 兼容但由 C# 直接解析，绕开 Windows HTTP.sys 的每请求开销。
+     * 全程走 adb reverse 隧道，不消耗手机流量。
      */
     fun upload(
+        category: String,
+        date: String,
+        name: String,
+        uuid: String,
+        file: File,
+        index: Int,
+        total: Int,
+        isCancelled: () -> Boolean,
+        onBytes: (Long) -> Unit,
+    ): Boolean {
+        var conn = fastConn ?: openFastConn().also { fastConn = it }
+        if (conn != null) {
+            try {
+                return uploadFast(conn, category, date, name, uuid, file, index, total, isCancelled, onBytes)
+            } catch (e: Exception) {
+                closeFastConn()
+                if (isCancelled()) throw e
+                // 旧连接可能已被对端关闭（工具重启）：重开一条再试一次
+                conn = openFastConn().also { fastConn = it }
+                if (conn != null) {
+                    try {
+                        return uploadFast(conn, category, date, name, uuid, file, index, total, isCancelled, onBytes)
+                    } catch (e2: Exception) {
+                        closeFastConn()
+                        throw e2
+                    }
+                }
+            }
+        }
+        // 旧版电脑端没有 8789 服务：回退到原 HTTP 路径，保证兼容
+        return uploadHttp(category, date, name, uuid, file, index, total, isCancelled, onBytes)
+    }
+
+    /** 在快速通道连接上上传单个文件，返回电脑端是否报告 skipped */
+    private fun uploadFast(
+        conn: FastConn,
+        category: String,
+        date: String,
+        name: String,
+        uuid: String,
+        file: File,
+        index: Int,
+        total: Int,
+        isCancelled: () -> Boolean,
+        onBytes: (Long) -> Unit,
+    ): Boolean {
+        val length = file.length()
+
+        // 头部值去掉 CR/LF，防止破坏协议；中文按 UTF-8 写入（PC 端同样按 UTF-8 解析）
+        fun header(v: String) = v.replace("\r", "").replace("\n", "")
+        val head =
+            "POST / HTTP/1.1\r\n" +
+                "Content-Type: application/octet-stream\r\n" +
+                "Content-Length: " + length + "\r\n" +
+                "X-PJM-Cat: " + header(category) + "\r\n" +
+                "X-PJM-Date: " + header(date) + "\r\n" +
+                "X-PJM-Name: " + header(name) + "\r\n" +
+                "X-PJM-Uuid: " + header(uuid) + "\r\n" +
+                "X-PJM-Index: " + index + "\r\n" +
+                "X-PJM-Total: " + total + "\r\n\r\n"
+        conn.out.write(head.toByteArray(Charsets.UTF_8))
+        var sent = 0L
+        file.inputStream().buffered(256 * 1024).use { input ->
+            val buffer = ByteArray(256 * 1024)
+            while (true) {
+                if (isCancelled()) error("已取消")
+                val n = input.read(buffer)
+                if (n <= 0) break
+                conn.out.write(buffer, 0, n)
+                sent += n
+                onBytes(sent)
+            }
+        }
+        if (sent != length) error("读取长度不一致：" + length + " → " + sent)
+        conn.out.flush()
+
+        // 读取响应：状态行 + 头 + 定长 body（必须读满，否则下个请求错位）。
+        // body 一律按字节读再按 UTF-8 解码 —— Content-Length 是字节数，
+        // 中文文件名的响应体字节数大于字符数，按字符读会卡到套接字超时（实测每文件 60 秒）。
+        val status = conn.readAsciiLine() ?: error("快速通道无响应")
+        if (!status.contains("200")) error("快速通道响应异常：" + status)
+        var contentLength = 0
+        while (true) {
+            val line = conn.readAsciiLine() ?: error("快速通道响应头提前结束")
+            if (line.isEmpty()) break
+            if (line.startsWith("Content-Length:", ignoreCase = true)) {
+                contentLength = line.substringAfter(':').trim().toInt()
+            }
+        }
+        val body = ByteArray(contentLength)
+        val read = conn.readFully(body, contentLength)
+        return String(body, 0, read, Charsets.UTF_8).contains("\"skipped\":true")
+    }
+
+    /** 原 HttpListener 上传路径（旧版电脑端兼容 / 快速通道不可用时的回退） */
+    private fun uploadHttp(
         category: String,
         date: String,
         name: String,
@@ -180,7 +352,6 @@ class PcLinkClient(
                     ?.use { it.readText() }
                     .orEmpty()
             if (code != 200) error("HTTP " + code + " " + text)
-            // 电脑端按 uuid 记过账：这个文件它已经有了，只是手机这边不知道
             return text.contains("\"skipped\":true")
         } finally {
             conn.disconnect()
@@ -188,15 +359,25 @@ class PcLinkClient(
     }
 
     /** 告诉电脑端这次推送结束（用于结束对端的「接收中」状态） */
-    fun uploadDone(): Boolean = runCatching { post("/api/pc/uploaddone", "{}").contains("\"ok\":true") }.getOrDefault(false)
+    fun uploadDone(): Boolean {
+        // 推送结束：关闭快速通道长连接，下次推送重新建连
+        closeFastConn()
+        return runCatching { post("/api/pc/uploaddone", "{}").contains("\"ok\":true") }.getOrDefault(false)
+    }
 
-    /** 把一个文件下载到 target（先写 .part，再由调用方改名） */
+    /**
+     * 把一个文件下载到 target（先写 .part，再由调用方改名）。
+     *
+     * [isCancelled] 每写一块检查一次：用户点「停止」时能在当前文件的中途退出，
+     * 而不是等整个文件传完 —— 大文件（几个 GB）等一整块就直接等于没法停。
+     */
     fun download(
         category: String,
         date: String,
         name: String,
         target: File,
         onBytes: (Long) -> Unit,
+        isCancelled: () -> Boolean = { false },
     ) {
         val conn =
             (
@@ -221,6 +402,7 @@ class PcLinkClient(
                         output.write(buffer, 0, n)
                         read += n
                         onBytes(read)
+                        if (isCancelled()) error("已取消")
                     }
                 }
             }

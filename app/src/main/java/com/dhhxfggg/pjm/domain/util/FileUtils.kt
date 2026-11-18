@@ -290,6 +290,23 @@ object FileUtils {
         }
 
     /**
+     * 接管/分享共用的幂等键：能取到真实路径就用 "file://" + 绝对路径，
+     * 否则退回 uri 字符串。两条导入路径（分享 gateway 与接管服务）必须用同一套键，
+     * 否则同一文件会被各处理一次 —— 一个入库成功，另一个因源文件已被删除而误报失败。
+     */
+    fun takeoverKey(
+        context: Context,
+        uri: Uri,
+    ): String {
+        val path = getPathFromUri(context, uri)
+        return if (!path.isNullOrBlank()) {
+            "file://" + File(path).absolutePath
+        } else {
+            uri.toString()
+        }
+    }
+
+    /**
      * Resolves the display name of a file from its Uri.
      */
     fun getFileName(

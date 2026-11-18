@@ -65,7 +65,7 @@ PJM 是一个 Android 本地文件保险库应用。它把图片、视频、音�
 - `allowBackup` 已关闭，且备份规则排除了保险库目录，避免系统云备份把明文带走。
 - 仓库不包含任何密钥、签名文件或令牌（`local.properties`、`*.keystore`、`*.jks` 已被 `.gitignore` 排除）。
 - 「传输到电脑」的回环服务（`127.0.0.1:8787`）每次开启都会生成一个随机令牌，写在 `/sdcard/Android/data/com.dhhxfggg.pjm/files/pjm_transfer_token`；数据接口必须带 `X-PJM-Token`，否则返回 401。所以**用浏览器直接访问要手动带上 `?token=<该文件内容>`**，电脑端脚本会自动读取。该令牌只防同机其他应用误连，不是加密：能读应用外部私有目录的进程同样能拿到它。
-- 更新检查会校验下载地址的域名白名单，并比对 APK 签名与已安装版本一致，防止中间人替换安装包。**注意**：CI 在未配置 `keystore.properties` 时用 debug 签名打 release（见 `app/build.gradle.kts`），这种包的证书随构建环境变化，仅适用于本地/冒烟验证，不要作为正式发布版分发；正式发布前务必配置正式签名。
+- 更新检查会校验下载地址的域名白名单，并比对 APK 签名与已安装版本一致，防止中间人替换安装包。debug 与 release 使用**两套独立证书**：debug 用工具链自动生成的调试证书，release 用 `keystore.properties` 指向的正式证书；release 缺配置时构建直接失败，不会回退 debug 签名。CI 用一次性临时证书构建 release 只为验证链路，其产物不要作为正式发布版分发。
 
 ---
 
@@ -113,9 +113,21 @@ PJM 是一个 Android 本地文件保险库应用。它把图片、视频、音�
 - **安装包**：提取应用的 APK，命名 `应用名_版本.apk`，一个应用一份文件。
 - **入库**：统一存进保险库「其他」分类，与库内其它文件同样可查看、分享、导出；单个应用失败不影响整批。
 
+### 传到电脑 / 从电脑取回
+- **全程走 USB**：传输服务只监听 `127.0.0.1`，电脑端经 `adb forward/reverse` 隧道接入；不联网、不耗移动数据，手机上也不产生第二份副本。
+- **发到电脑**：按入库日期挑要传的天数（按月份翻页），逐文件推送，进度/速度/平均速度都在手机上算；已传过的文件按 uuid 记账自动跳过。
+- **从电脑取回**：先选分类（图片/视频/B站/音频/文本/容器/其他），再按月份翻页选日期，支持整月全选；传输中可随时「停止」，当前文件中途即断，已导好的保留、不残留半截文件。
+- **失败可见**：本批失败的文件列在「失败文件」弹窗里，图片/视频带缩略图，文本类显示文件名 + 原因。
+- **日期沿用**：取回的文件按电脑上那个日期目录入库，不会把历史文件全算成「今天」，热力图与统计不失真。
+
+### 应用接管
+- 指定应用「保存到手机/相册」的新文件自动搬进保险库（先入库，再删原文件），只处理开启之后新产生的文件。
+- 后台运行状态一目了然：电池优化白名单、上次扫描时间、后台断档次数；可直接跳到系统的电池/自启动设置页。
+
 ### 其他
 - 前台服务执行后台任务（带进度通知；取消在文件边界生效；Android 15 超时会释放任务槽位）。
 - 冷启动清理孤儿缓存、残留临时文件与失效的浏览历史。
+- 内置 **Baseline Profile**：装完即 AOT 编译，首屏与滚动不需要等系统用几天热身。
 
 ---
 
@@ -129,8 +141,9 @@ PJM 是一个 Android 本地文件保险库应用。它把图片、视频、音�
 | 数据 | Room（WAL、显式 Migration、导出 schema）、DataStore Preferences |
 | 权限 | Shizuku、Scoped Storage 兼容、所有文件访问 |
 | 压缩 | Apache Commons Compress、junrar、XZ |
-| 构建 | AGP 9.x、KSP、NDK + CMake |
-| 质量 | ktlint、JUnit + Robolectric、GitHub Actions |
+| 构建 | AGP 9.x、KSP、NDK + CMake、Baseline Profile |
+| 签名 | debug / release 两套独立证书（release 缺配置直接构建失败） |
+| 质量 | ktlint、JUnit + Robolectric、Android lint、GitHub Actions |
 
 ---
 
@@ -157,18 +170,18 @@ PJM 是一个 Android 本地文件保险库应用。它把图片、视频、音�
 
    注意平台包名带次版本号（`android-37.0`，不是 `android-37`），装错名会直接报错退出。CI 用的是同一组包名，见 `.github/workflows/ci.yml`。
 
-3. **直接构建**，不需要任何密钥：debug 签名由 Android Studio 自动生成。release 默认沿用 debug 签名，`assembleRelease` 开箱即可出包。
+3. **debug 直接构建**，不需要任何密钥：调试签名由 Android Studio / 工具链自动生成（`~/.android/debug.keystore`）。
 
-   **要换成正式签名**：在项目根目录放一个 `keystore.properties`（已被 `.gitignore` 排除）：
+   **release 必须先配好正式签名**：debug 与 release 用两套独立证书，release 缺配置时构建直接失败（不会回退 debug 签名）。在项目根目录放一个 `keystore.properties`（已被 `.gitignore` 排除）：
 
    ```properties
-   storeFile=/绝对路径/release.jks
+   storeFile=E:/项目备份/PJM/signing/pjm-release.jks
    storePassword=...
-   keyAlias=...
+   keyAlias=pjm
    keyPassword=...
    ```
 
-   存在该文件时 release 自动使用它，否则回退 debug 签名。**请务必离线备份签名文件**：丢了就无法覆盖安装，只能卸载重装（保险库数据会一起丢）。
+   **请务必离线备份证书与密码**：丢了就无法覆盖安装，只能卸载重装（应用数据会一起丢）。本机把证书本体与密码放在仓库之外的 `E:\项目备份\PJM\signing\`（同目录 `签名信息.txt` 记录密码、SHA-256 指纹与有效期）。CI 用一次性临时证书构建 release 只为验证链路，产物不可分发。
 
 ```bash
 ./gradlew :app:assembleDebug      # 调试包
@@ -239,6 +252,7 @@ app/schemas/               # Room schema JSON（入库，供迁移测试使用�
 
 | 版本 | 变化 |
 |---|---|
+| 2.1.9 | 传到电脑大幅提速（约 8 倍，需同时更新电脑端 PJM-Link 工具）；「从电脑取回」改为按分类 + 月份分组；传输失败的文件可看缩略图；正式版改用独立签名（装过旧版需先卸载再装）。详见 [更新日志](CHANGELOG.md) |
 | 2.1.7 | 阅读器重写（TXT/EPUB/FB2/HTML/Markdown、编码自动识别、书签按段落定位）；新增「备份已安装应用」（APK 提取进「其他」分类）；热力图大小分布改下拉菜单且可点档位跳转到筛选后的文件库；除图片外显示真实文件名；音频删倍速、播放模式合并四态；图标按钮补小字说明；英文文案审校。详见 [更新日志](CHANGELOG.md) |
 | 2.1.6 | 修 bug 为主：并发解压/容器解包/缩略图竞态、4K 视频合并丢失后半段、传输服务令牌与固定端口、阅读器与播放页性能、导出提示、速率平滑、无障碍描述。详见 [更新日志](CHANGELOG.md) |
 | 2.1.5 | 热力图不贴状态栏、色阶可辨、大小分布自适应分桶；播放器恢复快退/快进按钮；阅读器书签改图标按钮、目录书签可切换；设置页内容滚到浮动底栏下。详见 [发布说明](build/release-notes-2.1.5.md) |

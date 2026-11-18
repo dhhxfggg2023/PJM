@@ -10,19 +10,32 @@ plugins {
     alias(libs.plugins.ktlint)
 }
 
-// 签名策略（2026-11-16 用户确认）：根目录 keystore.properties 存在时用正式签名；
-// 否则【暂时】用 debug 签名打 release —— 这是当前明确接受的行为，不是疏漏。
-// 已知影响：debug 证书随构建环境变化，装了这种包的设备后续无法直接覆盖安装正式签名版；
-// 未来要正式发布时，补上 keystore.properties 即自动切回正式签名，无需改本文件。
-// 文件格式：storeFile=/绝对路径/release.jks, storePassword=..., keyAlias=..., keyPassword=...
+// 签名策略（2026-11-18 调整）：debug 与 release 使用【两套独立证书】。
+// - debug：Android 工具链自动生成的调试证书（~/.android/debug.keystore），只用于本机调试；
+// - release：必须使用 keystore.properties 指向的正式证书。缺配置时构建【直接失败】，
+//   不再回退 debug 签名 —— 旧行为会让"正式版"带着随构建环境变化的调试证书发出去，
+//   换机重装、应用内升级都会因为签名不一致失败。
+// keystore.properties 与 *.jks 都在 .gitignore 里；证书本体离线备份在
+// E:\项目备份\PJM\signing\（同目录「签名信息.txt」记录密码与指纹），仓库里只有读取逻辑。
+// 文件格式：storeFile=/绝对路径/pjm-release.jks, storePassword=..., keyAlias=..., keyPassword=...
 val keystorePropertiesFile = rootProject.file("keystore.properties")
 val keystoreProperties =
     Properties().apply {
+        // 必须按 UTF-8 读：Properties.load(InputStream) 用的是 ISO-8859-1，
+        // 证书路径里带中文（E:\项目备份\...）会被解成乱码，变成"文件不存在"。
         if (keystorePropertiesFile.exists()) {
-            keystorePropertiesFile.inputStream().use { load(it) }
+            keystorePropertiesFile.reader(Charsets.UTF_8).use { load(it) }
         }
     }
-val hasReleaseKeystore = keystorePropertiesFile.exists()
+
+// storeFile 允许写绝对路径（本机证书放在备份盘上）或写相对项目根目录的路径。
+// 文件不存在时视为未配置：宁可让 release 构建失败，也不要签出一个别人装不上的包。
+val releaseKeystoreFile =
+    keystoreProperties
+        .getProperty("storeFile")
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+        ?.let { raw -> rootProject.file(raw).takeIf { it.isFile } }
 
 android {
     namespace = "com.dhhxfggg.pjm"
@@ -35,8 +48,8 @@ android {
         applicationId = "com.dhhxfggg.pjm"
         minSdk = 24
         targetSdk = 35
-        versionCode = 55
-        versionName = "2.1.8"
+        versionCode = 56
+        versionName = "2.1.9"
 
         ndk {
             // 只留真机架构：x86/x86_64 只有模拟器用得上，留在包里等于让每个用户
@@ -55,15 +68,18 @@ android {
 
     signingConfigs {
         getByName("debug") {
+            // 调试证书由 Android 工具链自动生成（~/.android/debug.keystore），与正式证书互相独立。
             // 开启所有签名版本，确保在 Android 15 上能直接安装
             enableV1Signing = true
             enableV2Signing = true
             enableV3Signing = true
             enableV4Signing = true
         }
-        if (hasReleaseKeystore) {
+        // 正式证书只在 keystore.properties 与证书文件都存在时创建；缺失时 release 保持未签名，
+        // 由 requireReleaseSigning 门禁在打包前报错（不回退 debug 证书）。
+        if (releaseKeystoreFile != null) {
             create("release") {
-                storeFile = file(keystoreProperties.getProperty("storeFile"))
+                storeFile = releaseKeystoreFile
                 storePassword = keystoreProperties.getProperty("storePassword")
                 keyAlias = keystoreProperties.getProperty("keyAlias")
                 keyPassword = keystoreProperties.getProperty("keyPassword")
@@ -78,13 +94,9 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
-            // 缺正式签名时按当前约定回退 debug 签名（见文件头签名策略说明）。
-            signingConfig =
-                if (hasReleaseKeystore) {
-                    signingConfigs.getByName("release")
-                } else {
-                    signingConfigs.getByName("debug")
-                }
+            // 只认正式证书；缺配置时留空，由 requireReleaseSigning 在打包前拦截
+            // （见文件头签名策略）。
+            signingConfig = signingConfigs.findByName("release")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
@@ -121,6 +133,30 @@ android {
     }
 }
 
+// 门禁：release 构建必须有正式签名。缺 keystore.properties / 证书文件时在打包前失败，
+// 而不是产出一个签名不对、别人装不上的"正式包"（debug 构建不受影响）。
+gradle.taskGraph.whenReady {
+    val packagingRelease =
+        allTasks.any { task ->
+            task.project.name == "app" &&
+                task.name.contains("Release", ignoreCase = true) &&
+                (task.name.startsWith("package") || task.name.startsWith("bundle") || task.name.startsWith("assemble"))
+        }
+    if (packagingRelease && releaseKeystoreFile == null) {
+        throw GradleException(
+            """
+            release 构建需要正式签名，但没有找到可用的证书。
+            请在项目根目录创建 keystore.properties（已被 .gitignore 排除）：
+              storeFile=E:/项目备份/PJM/signing/pjm-release.jks
+              storePassword=...（见 E:\项目备份\PJM\signing\签名信息.txt）
+              keyAlias=pjm
+              keyPassword=...
+            debug 与 release 是两套独立证书，本工程不再回退 debug 签名。规则说明见 README「构建」一节。
+            """.trimIndent(),
+        )
+    }
+}
+
 // Room：导出数据库 schema JSON 到 app/schemas（纳入版本控制，用于编写/测试显式迁移）
 ksp {
     arg("room.schemaLocation", "$projectDir/schemas")
@@ -137,6 +173,9 @@ dependencies {
 
     // AndroidX 核心
     implementation(libs.androidx.core.ktx)
+    // Baseline Profile 安装器：把随包发布的 baseline profile 落到 ART，装完即 AOT。
+    // Android 12+ 系统会在安装时自己装；12 以下靠这个库在后台装（minSdk 24 必须带上）。
+    implementation(libs.androidx.profileinstaller)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)

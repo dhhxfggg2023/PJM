@@ -30,6 +30,18 @@ import java.io.File
 import java.util.UUID
 import javax.inject.Inject
 
+/**
+ * 本批推送失败的单个文件。
+ *
+ * 带 [entity] 是为了在「失败文件」弹窗里给图片/视频显示缩略图 —— 只给文件名，
+ * 用户没法判断失败的是哪一张。文本等出不了缩略图的类型只显示文件名与原因。
+ */
+data class TransferFailedItem(
+    val name: String,
+    val reason: String,
+    val entity: FileEntity?,
+)
+
 data class TransferUiState(
     val serverRunning: Boolean = false,
     val starting: Boolean = false,
@@ -52,11 +64,17 @@ data class TransferUiState(
     val task: PcTask? = null,
     /** 手机自己推送时本地算出来的进度：不依赖电脑端回报 */
     val push: PcTask? = null,
+    /** 本批推送失败的文件（显示名 + 原因 + 库内实体，供弹窗显示缩略图） */
+    val pushFailedItems: List<TransferFailedItem> = emptyList(),
     val importing: Boolean = false,
+    /** 取回时用户点了「停止」：当前文件写完就退出，不再继续后面的文件 */
+    val importCancelled: Boolean = false,
     val importDone: Int = 0,
     val importTotal: Int = 0,
     val importBytes: Long = 0L,
     val importSpeed: Long = 0L,
+    /** 取回（电脑→手机）的总平均速度 */
+    val importAvgSpeed: Long = 0L,
     val importError: String? = null,
     val message: String? = null,
 )
@@ -98,6 +116,10 @@ class TransferViewModel
 
         @Volatile
         private var pushCancel = false
+
+        /** 「从电脑取回」的取消标志：与 pushCancel 对称，按批重置 */
+        @Volatile
+        private var importCancel = false
 
         // 传输令牌：每次开启服务随机生成，写入外部私有目录供 PC 经 adb 读取。
         // 不写应用私有目录（shell 进程读不到），也绝不硬编码。
@@ -278,6 +300,20 @@ class TransferViewModel
             _state.value = _state.value.copy(selectedDates = if (day in cur) cur - day else cur + day)
         }
 
+        /**
+         * 整月批量选中/取消：该月已全选则整月取消，否则整月补齐。
+         * 逐个 toggleDate 会触发 N 次状态更新与重组，这里一次到位。
+         */
+        fun toggleDates(days: List<String>) {
+            if (days.isEmpty()) return
+            val cur = _state.value.selectedDates
+            val allSelected = days.all { it in cur }
+            _state.value =
+                _state.value.copy(
+                    selectedDates = if (allSelected) cur - days.toSet() else cur + days,
+                )
+        }
+
         fun clearDates() {
             _state.value = _state.value.copy(selectedDates = emptySet())
         }
@@ -337,11 +373,16 @@ class TransferViewModel
                 var failed = 0
                 var skipped = 0
                 var bytes = 0L
+                val failedItems = mutableListOf<TransferFailedItem>()
                 var lastUiAt = 0L
                 // 速率改为 1 秒时间窗平均值：150ms 瞬时差值跳得太快，肉眼读不出来
                 var speedWindowAt = System.currentTimeMillis()
                 var speedWindowBytes = 0L
                 var shownSpeed = 0L
+                // 总平均速度：只统计真正传输的部分 —— 从第一个实际传出的字节开始计时，
+                // 跳过的文件既不进分子也不进分母（否则"上次已传"的体量会摊进平均速度）。
+                var avgStartedAt = 0L
+                var avgSpeed = 0L
                 pushCancel = false
                 _state.value =
                     _state.value.copy(
@@ -349,6 +390,7 @@ class TransferViewModel
                         pcOnline = true,
                         message = context.getString(R.string.transfer_preparing, total, FileUtils.formatFileSize(planBytes)),
                         push = PcTask(active = true, done = 0, total = total, bytes = 0, speed = 0, skipped = 0, failed = 0, error = null),
+                        pushFailedItems = emptyList(),
                     )
                 for (entity in chosen) {
                     if (pushCancel) break
@@ -360,15 +402,19 @@ class TransferViewModel
                     val key = uuid
                     val base = bytes
                     if (pushedKeys.contains(key)) {
+                        // 跳过的文件（上次已传过）不累计字节：它们没有真正经过网络，
+                        // 计进去会让"已传大小 / 瞬时速度 / 平均速度"全部虚高。
                         skipped++
                         done++
-                        bytes = base + entity.size
                         continue
                     }
                     val file = File(VaultPaths.vaultRoot(context), entity.relativePath)
                     if (existsOnDisk[entity] != true) {
                         failed++
                         done++
+                        failedItems.add(
+                            TransferFailedItem(name, context.getString(R.string.transfer_file_mismatch, name), entity),
+                        )
                         _state.value =
                             _state.value.copy(
                                 push = PcTask(true, done, total, bytes, 0, skipped, failed, context.getString(R.string.transfer_file_mismatch, name)),
@@ -389,25 +435,27 @@ class TransferViewModel
                                             speedWindowAt = now
                                             speedWindowBytes = bytes
                                         }
+                                        if (avgStartedAt == 0L) avgStartedAt = now
+                                        val elapsedAvg = (now - avgStartedAt).coerceAtLeast(1L)
+                                        avgSpeed = (bytes * 1000L / elapsedAvg).coerceAtLeast(0L)
                                         _state.value =
                                             _state.value.copy(
-                                                push = PcTask(true, done, total, bytes, shownSpeed, skipped, failed, null),
+                                                push = PcTask(true, done, total, bytes, shownSpeed, skipped, failed, null, avgSpeed),
                                             )
                                     }
                                 }
                             }
                         pushedKeys.add(key)
-                        context
-                            .getSharedPreferences("pjm_transfer", Context.MODE_PRIVATE)
-                            .edit()
-                            .putStringSet("pushed", pushedKeys)
-                            .apply()
+                        // 不再每个文件都写 SharedPreferences：pushedKeys 会涨到几千个，
+                        // 每次全量序列化写入是 O(n)，实测速度从 51 文件/秒一路掉到 20。
+                        // 改为整批结束后统一写一次（见下方 uploadDone 之后）。
                         if (skippedOnPc) skipped++
                         done++
                     } catch (e: Exception) {
                         if (pushCancel) break
                         failed++
                         done++
+                        failedItems.add(TransferFailedItem(name, e.message.orEmpty(), entity))
                         _state.value =
                             _state.value.copy(
                                 push = PcTask(true, done, total, bytes, 0, skipped, failed, e.message),
@@ -421,16 +469,30 @@ class TransferViewModel
                         speedWindowBytes = bytes
                     }
                     lastUiAt = now
+                    if (avgStartedAt == 0L && bytes > 0L) avgStartedAt = now
+                    if (avgStartedAt > 0L) {
+                        val elapsedAvg = (now - avgStartedAt).coerceAtLeast(1L)
+                        avgSpeed = (bytes * 1000L / elapsedAvg).coerceAtLeast(0L)
+                    }
                     _state.value =
                         _state.value.copy(
-                            push = PcTask(true, done, total, bytes, shownSpeed, skipped, failed, _state.value.push?.error),
+                            push = PcTask(true, done, total, bytes, shownSpeed, skipped, failed, _state.value.push?.error, avgSpeed),
                         )
                 }
                 val cancelled = pushCancel
+                // 整批只写一次账本：避免上面每个文件都全量写入导致越传越慢
+                withContext(Dispatchers.IO) {
+                    context
+                        .getSharedPreferences("pjm_transfer", Context.MODE_PRIVATE)
+                        .edit()
+                        .putStringSet("pushed", pushedKeys)
+                        .apply()
+                }
                 val closed = withContext(Dispatchers.IO) { client.uploadDone() }
                 _state.value =
                     _state.value.copy(
-                        push = PcTask(false, done, total, bytes, 0, skipped, failed, null),
+                        push = PcTask(false, done, total, bytes, 0, skipped, failed, null, avgSpeed),
+                        pushFailedItems = failedItems.toList(),
                         message =
                             when {
                                 cancelled -> context.getString(R.string.transfer_push_cancelled, done, total)
@@ -448,17 +510,24 @@ class TransferViewModel
             pushCancel = true
         }
 
+        /** 停止「从电脑取回」：当前文件写到一半就中断，已入库的文件保留 */
+        fun stopImport() {
+            if (!_state.value.importing) return
+            importCancel = true
+        }
+
         fun toggleFolder(key: String) {
             val cur = _state.value.selected
             _state.value = _state.value.copy(selected = if (key in cur) cur - key else cur + key)
         }
 
-        fun selectAllFolders() {
-            val all =
-                _state.value.folders
-                    .map { it.key }
-                    .toSet()
-            _state.value = _state.value.copy(selected = if (all == _state.value.selected) emptySet() else all)
+        /** 批量勾选/取消（「取回」页按「分类 + 本月」一次勾一批） */
+        fun toggleFolders(keys: List<String>) {
+            if (keys.isEmpty()) return
+            val cur = _state.value.selected
+            val target = keys.toSet()
+            val next = if (target.all { it in cur }) cur - target else cur + target
+            _state.value = _state.value.copy(selected = next)
         }
 
         fun importSelected() {
@@ -469,6 +538,7 @@ class TransferViewModel
                 _state.value = cs.copy(message = context.getString(R.string.transfer_no_folder))
                 return
             }
+            importCancel = false
             viewModelScope.launch {
                 var done = 0
                 var failed = 0
@@ -477,13 +547,18 @@ class TransferViewModel
                 var speedWindowAt = System.currentTimeMillis()
                 var speedWindowBytes = 0L
                 var shownSpeed = 0L
+                // 平均速度只在真正开始接收字节后起算，不含遍历文件夹/查询清单的准备时间
+                var importAvgStartedAt = 0L
+                var importAvg = 0L
                 _state.value =
-                    cs.copy(importing = true, importDone = 0, importTotal = totalFiles, importBytes = 0, importSpeed = 0, importError = null, message = null)
+                    cs.copy(importing = true, importCancelled = false, importDone = 0, importTotal = totalFiles, importBytes = 0, importSpeed = 0, importAvgSpeed = 0, importError = null, message = null)
                 for (folder in chosen) {
+                    if (importCancel) break
                     val list = withContext(Dispatchers.IO) { client.files(folder.category, folder.date) }
                     if (list.isEmpty()) continue
                     totalFiles = totalFiles.coerceAtLeast(done + list.size)
                     for (item in list) {
+                        if (importCancel) break
                         val key = folder.category + "|" + folder.date + "|" + item.name + "|" + item.size
                         if (importedKeys.contains(key)) {
                             done++
@@ -491,7 +566,9 @@ class TransferViewModel
                             continue
                         }
                         try {
-                            withContext(Dispatchers.IO) { saveOne(folder.category, folder.date, item.name) { read -> bytes += read } }
+                            withContext(Dispatchers.IO) {
+                                saveOne(folder.category, folder.date, item.name, { read -> bytes += read }, { importCancel })
+                            }
                             importedKeys.add(key)
                             context
                                 .getSharedPreferences("pjm_transfer", Context.MODE_PRIVATE)
@@ -500,9 +577,12 @@ class TransferViewModel
                                 .apply()
                             done++
                         } catch (e: Exception) {
-                            failed++
                             done++
-                            _state.value = _state.value.copy(importError = e.message)
+                            // 用户主动停止不算失败：不弹红字，只在结尾给一句「已停止」
+                            if (!importCancel) {
+                                failed++
+                                _state.value = _state.value.copy(importError = e.message)
+                            }
                         }
                         val now = System.currentTimeMillis()
                         if (now - speedWindowAt >= SPEED_WINDOW_MS) {
@@ -511,14 +591,44 @@ class TransferViewModel
                             speedWindowAt = now
                             speedWindowBytes = bytes
                         }
-                        _state.value = _state.value.copy(importDone = done, importBytes = bytes, importSpeed = shownSpeed)
+                        if (importAvgStartedAt == 0L && bytes > 0L) importAvgStartedAt = System.currentTimeMillis()
+                        if (importAvgStartedAt > 0L) {
+                            val elapsedAvg = (System.currentTimeMillis() - importAvgStartedAt).coerceAtLeast(1L)
+                            importAvg = (bytes * 1000L / elapsedAvg).coerceAtLeast(0L)
+                        }
+                        _state.value = _state.value.copy(importDone = done, importBytes = bytes, importSpeed = shownSpeed, importAvgSpeed = importAvg)
                     }
                 }
                 VaultManager.triggerRefresh()
+                val cancelled = importCancel
                 _state.value =
-                    _state.value.copy(importing = false, importTotal = done, importError = if (failed > 0) context.getString(R.string.transfer_import_failed, failed) else null, message = context.getString(R.string.transfer_import_summary, done - failed, failed))
+                    _state.value.copy(
+                        importing = false,
+                        importCancelled = cancelled,
+                        importTotal = done,
+                        importError = if (failed > 0) context.getString(R.string.transfer_import_failed, failed) else null,
+                        message =
+                            if (cancelled) {
+                                context.getString(R.string.transfer_import_stopped, done - failed)
+                            } else {
+                                context.getString(R.string.transfer_import_summary, done - failed, failed)
+                            },
+                    )
             }
         }
+
+        /**
+         * 把电脑端的 yyyy-MM-dd 目录名解析成本地时区的入库时刻（当天 00:00）。
+         *
+         * 用 SimpleDateFormat 而不是 java.time：minSdk 24，java.time 在 API 26 以下没有脱糖支持会崩。
+         * 解析失败（目录名异常）时返回 null，调用方退回「当前时间」。
+         */
+        private fun folderDateMillis(date: String): Long? =
+            runCatching {
+                val format = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+                format.isLenient = false
+                format.parse(date)?.time
+            }.getOrNull()
 
         private companion object {
             /** 令牌文件名（PC 端通过 adb 读取外部私有目录下的同名文件） */
@@ -533,6 +643,7 @@ class TransferViewModel
             date: String,
             name: String,
             onBytes: (Long) -> Unit,
+            isCancelled: () -> Boolean,
         ) {
             val root = VaultPaths.vaultRoot(context)
             val dir = File(root, category).apply { mkdirs() }
@@ -541,7 +652,7 @@ class TransferViewModel
             val part = File(dir, uuid + ".part")
             val final = File(dir, if (ext.isEmpty()) uuid else uuid + "." + ext)
             try {
-                client.download(category, date, name, part, onBytes)
+                client.download(category, date, name, part, onBytes, isCancelled)
             } catch (e: Exception) {
                 // 核心修复：下载失败/被取消时 .part 残留会一直堆在分类目录里（既不进库也不清理）
                 part.delete()
@@ -551,18 +662,21 @@ class TransferViewModel
                 part.delete()
                 error(context.getString(R.string.transfer_write_vault_failed))
             }
-            val now = System.currentTimeMillis()
+            // 取回的文件沿用电脑上那个日期目录的日期，不记成「今天入库」。
+            // 否则从电脑搬回 80 GB 老文件，热力图会在同一天堆出一个假峰值，
+            // 历史分布全被压平 —— 那些文件本来就是那天进来的。
+            val stamp = folderDateMillis(date) ?: System.currentTimeMillis()
             fileDao.upsertLocked(
                 FileEntity(
                     relativePath = category + "/" + final.name,
                     name = name,
                     size = final.length(),
                     category = category,
-                    lastModified = now,
+                    lastModified = stamp,
                     isImage = FileUtils.isImageFile(name),
                     extension = ext,
                     contentHash = null,
-                    importedAt = now,
+                    importedAt = stamp,
                 ),
             )
         }

@@ -3,6 +3,7 @@ package com.dhhxfggg.pjm.data.repository
 import android.content.Context
 import android.net.Uri
 import com.dhhxfggg.pjm.data.db.FileDao
+import com.dhhxfggg.pjm.data.db.TakeoverJobDao
 import com.dhhxfggg.pjm.data.model.FileEntity
 import com.dhhxfggg.pjm.domain.util.FileUtils
 import com.dhhxfggg.pjm.domain.util.IngestionEngine
@@ -43,6 +44,7 @@ class FileRepositoryImpl
         @ApplicationContext private val context: Context,
         private val fileDao: FileDao,
         private val settingsManager: SettingsManager,
+        private val takeoverJobDao: TakeoverJobDao,
     ) : FileRepository {
         // 上次随机选中的每个分类文件 id（用于封面刷新时避免连续两次相同）
         private val lastRandomFileId = ConcurrentHashMap<String, Long>()
@@ -236,6 +238,7 @@ class FileRepositoryImpl
                 onStatus = onStatus,
                 onProgress = onProgress,
                 onUnsupported = onUnsupported,
+                takeoverJobDao = takeoverJobDao,
             )
 
         override suspend fun packAndEncrypt(

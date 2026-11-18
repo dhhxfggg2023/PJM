@@ -251,6 +251,11 @@ internal fun AppsTakeoverSettings(takeoverViewModel: TakeoverViewModel) {
                 )
             }
         }
+
+        // 末尾留白：底栏是浮在内容之上的透明胶囊，没有这段垫高时
+        // 最后一块（失败记录/清除按钮）会被底栏挡住，点不到也看不到。
+        // 设置页其它子页都有，唯独这一页漏了 —— 症状就是"最下面点不到"。
+        SettingsBottomSpacer()
     }
 
     if (showPicker) {

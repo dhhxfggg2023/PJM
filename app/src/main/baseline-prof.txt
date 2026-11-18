@@ -1,0 +1,54 @@
+# PJM Baseline Profile
+# 目的：把冷启动/首屏/列表滚动真正跑到的代码预编译成 AOT，装完即顺，
+# 不用等系统用几天 JIT 热身（这是"新装的包一卡一卡"的根因）。
+# 格式：ART human-readable profile（类名或 类名#方法 的 HOT/POST_STARTUP 级别）。
+# 生成方式（推荐，在真机上跑关键路径自动采集）：
+#   ./gradlew :app:generateBaselineProfile   —— 需配合 baselineprofile 插件与 baselineprofile 模块
+# 本文件是手工最小集：覆盖启动、导航、列表、图片与传输这几个主干，稳妥且不引入额外模块。
+
+# ---- 应用自身：启动与主界面 ----
+HSPLcom/dhhxfggg/pjm/MainActivity;->onCreate(Landroid/os/Bundle;)V
+HSPLcom/dhhxfggg/pjm/MainActivity;-><init>()V
+HSPLcom/dhhxfggg/pjm/MainApplication;->onCreate()V
+HSPLcom/dhhxfggg/pjm/MainApplication;-><init>()V
+
+# ---- Compose 运行时：组合/重组/布局/绘制热路径 ----
+HSPLandroidx/compose/runtime/ComposerImpl;->startRestartGroup(I)Landroidx/compose/runtime/Composer;
+HSPLandroidx/compose/runtime/ComposerImpl;->endRestartGroup()Landroidx/compose/runtime/ScopeUpdateScope;
+HSPLandroidx/compose/runtime/ComposerImpl;->changed(Ljava/lang/Object;)Z
+HSPLandroidx/compose/runtime/ComposerImpl;->rememberedValue()Ljava/lang/Object;
+HSPLandroidx/compose/runtime/SnapshotStateKt;->mutableStateOf(Ljava/lang/Object;Landroidx/compose/runtime/SnapshotMutationPolicy;)Landroidx/compose/runtime/MutableState;
+HSPLandroidx/compose/runtime/snapshots/SnapshotStateList;->add(Ljava/lang/Object;)Z
+HSPLandroidx/compose/runtime/snapshots/StateMapMutableIterator;->hasNext()Z
+
+# ---- Compose UI：测量/布局/绘制 ----
+HSPLandroidx/compose/ui/node/LayoutNode;->measure-BRTryo0(J)Landroidx/compose/ui/layout/Placeable;
+HSPLandroidx/compose/ui/node/LayoutNode;->layoutChildren()V
+HSPLandroidx/compose/ui/node/NodeCoordinator;->measure-BRTryo0(J)Landroidx/compose/ui/layout/Placeable;
+HSPLandroidx/compose/ui/node/Owner;->measureAndLayout-0kLqBqw(JI)V
+HSPLandroidx/compose/ui/graphics/AndroidCanvas;->drawRect(FFFFLandroidx/compose/ui/graphics/Paint;)V
+HSPLandroidx/compose/ui/platform/AndroidComposeView;->dispatchDraw(Landroid/graphics/Canvas;)V
+
+# ---- Foundation：Lazy 列表（文件库/漫游/取回都用） ----
+HSPLandroidx/compose/foundation/lazy/LazyListMeasureKt;->measureLazyList-x0Ok8Vo$default(Landroidx/compose/foundation/lazy/LazyListState;Landroidx/compose/ui/layout/MeasureScope;IILkotlin/jvm/functions/Function2;Landroidx/compose/ui/unit/Constraints;ZLkotlin/jvm/functions/Function1;ILjava/lang/Object;)Landroidx/compose/foundation/lazy/LazyListMeasureResult;
+HSPLandroidx/compose/foundation/lazy/LazyListItemProviderImpl;->getKey(I)Ljava/lang/Object;
+HSPLandroidx/compose/foundation/lazy/LazyListState;->scroll(Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+HSPLandroidx/compose/foundation/gestures/ScrollableNode;->onPointerEvent-H0pRuoY(Landroidx/compose/ui/input/pointer/PointerEvent;Landroidx/compose/ui/input/pointer/PointerEventPass;J)V
+
+# ---- Material3：常用组件 ----
+HSPLandroidx/compose/material3/SurfaceKt;->Surface-T9BRK9s(Landroidx/compose/ui/Modifier;Landroidx/compose/ui/shape/Shape;JJFFLkotlin/jvm/functions/Function2;Landroidx/compose/runtime/Composer;II)V
+HSPLandroidx/compose/material3/TextKt;->Text--4IGK_g(Ljava/lang/String;Landroidx/compose/ui/Modifier;JJLandroidx/compose/ui/text/font/FontStyle;Landroidx/compose/ui/text/font/FontWeight;Landroidx/compose/ui/text/font/FontFamily;JLandroidx/compose/ui/text/style/TextDecoration;Landroidx/compose/ui/text/style/TextAlign;JIZIILkotlin/jvm/functions/Function1;Landroidx/compose/ui/text/TextStyle;Landroidx/compose/runtime/Composer;III)V
+HSPLandroidx/compose/material3/IconKt;->Icon-ww6aTOc(Landroidx/compose/ui/graphics/painter/Painter;Ljava/lang/String;Landroidx/compose/ui/Modifier;J)Landroidx/compose/runtime/Composer;
+
+# ---- Coil：缩略图加载（列表滚动的主要 IO） ----
+HSPLcoil3/compose/AsyncImagePainter;->onRemembered()V
+HSPLcoil3/request/ImageRequest$Builder;->build()Lcoil3/request/ImageRequest;
+HSPLcoil3/SingletonImageLoader;->get(Landroid/content/Context;)Lcoil3/ImageLoader;
+
+# ---- Kotlin 协程：后台任务调度 ----
+HSPLkotlinx/coroutines/Dispatchers;->getIO()Lkotlinx/coroutines/CoroutineDispatcher;
+HSPLkotlinx/coroutines/BuildersKt;->launch$default(Lkotlinx/coroutines/CoroutineScope;Lkotlin/coroutines/CoroutineContext;Lkotlinx/coroutines/CoroutineStart;Lkotlin/jvm/functions/Function2;ILjava/lang/Object;)Lkotlinx/coroutines/Job;
+
+# ---- 首屏之后（POST_STARTUP）：低频但确实用到的路径 ----
+PLcom/dhhxfggg/pjm/ui/screen/MainScreenKt;->MainScreen(Landroidx/navigation/NavHostController;Lcom/dhhxfggg/pjm/ui/viewmodel/MainViewModel;Landroidx/compose/runtime/Composer;I)V
+PLcom/dhhxfggg/pjm/ui/screen/TransferSettingsKt;->TransferSettings(Lcom/dhhxfggg/pjm/ui/viewmodel/TransferViewModel;Landroidx/compose/runtime/Composer;I)V

@@ -4,7 +4,10 @@ import android.content.Context
 import android.net.Uri
 import com.dhhxfggg.pjm.R
 import com.dhhxfggg.pjm.data.db.FileDao
+import com.dhhxfggg.pjm.data.db.TakeoverJobDao
 import com.dhhxfggg.pjm.data.model.FileEntity
+import com.dhhxfggg.pjm.data.model.TakeoverJobEntity
+import com.dhhxfggg.pjm.data.model.TakeoverStatus
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Semaphore
@@ -48,6 +51,8 @@ object IngestionEngine {
         onStatus: (String) -> Unit = {},
         onProgress: (Float) -> Unit = {},
         onUnsupported: (Uri, String) -> Unit = { _, _ -> },
+        /** 分享入库时传入，与接管服务共用去重账本；接管路径自己已登记，不传 */
+        takeoverJobDao: TakeoverJobDao? = null,
     ): IngestionSummary =
         withContext(VaultManager.PjmDispatchers.IO) {
             val totalBytes = uris.sumOf { FileUtils.getFileSize(context, it) }.coerceAtLeast(1L)
@@ -101,6 +106,19 @@ object IngestionEngine {
                                     throw CancellationException("入库已取消")
                                 }
                                 if (!processedUris.add(uri)) return@withPermit
+                                // 与接管服务共用去重账本：同一文件若已被接管路径入库，
+                                // 这里直接跳过（不算失败），避免「源文件已被删→导入失败」的误报。
+                                val dao = takeoverJobDao
+                                val jobKey = dao?.let { FileUtils.takeoverKey(context, uri) }
+                                if (dao != null && jobKey != null) {
+                                    val existing = dao.findByAnyUri(listOf(jobKey, uri.toString()))
+                                    if (existing != null) {
+                                        PjmLogger.i(TAG, "已由接管服务处理，分享导入跳过: $uri")
+                                        return@withPermit // 不增加 failedCount，也不登记为可删
+                                    }
+                                    // 占位：接管服务随后看到 PENDING 会跳过，避免它重复处理
+                                    dao.upsert(TakeoverJobEntity(uri = jobKey, status = TakeoverStatus.PENDING))
+                                }
                                 val name = FileUtils.getFileName(context, uri)
                                 // 只认「.pjm 结尾」或「.pjm.<数字>」分卷：旧写法 name.contains(".pjm.")
                                 // 会把 a.pjm.zip / x.pjm.mp4 这类普通文件也当成容器，走 strict 分支后
@@ -213,12 +231,19 @@ object IngestionEngine {
                                     if (uriEntities.isNotEmpty()) {
                                         collectedEntities.addAll(uriEntities)
                                         if (!isPjm) deletableOriginals.add(uri)
+                                        // 账本收尾：已入库（源文件删除由调用方按 autoDeleteOriginal 处理）
+                                        if (dao != null && jobKey != null) {
+                                            dao.updateStatus(jobKey, TakeoverStatus.IMPORTED)
+                                        }
                                     } else {
                                         failedCount.incrementAndGet()
+                                        // 入库未产出实体：撤销账本占位，让接管服务仍有机会处理
+                                        if (dao != null && jobKey != null) dao.deleteByUri(jobKey)
                                         PjmLogger.w(TAG, "未产出任何实体，源 URI 不列入可删除: $name")
                                     }
                                 } catch (e: Exception) {
                                     shredEntities(context, uriEntities)
+                                    if (dao != null && jobKey != null) dao.deleteByUri(jobKey)
                                     if (e is CancellationException) throw e
                                     PjmLogger.e(TAG, "Processing fail: $name", e)
                                     failedCount.incrementAndGet()

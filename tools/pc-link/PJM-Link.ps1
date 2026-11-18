@@ -113,6 +113,8 @@ function Remove-Tunnels {
     $r = Invoke-Adb -AdbPath $AdbPath -Arguments 'forward --remove tcp:8787' -TimeoutMs 4000 -Runtime $Runtime
     if ($r.ExitCode -eq 0) { Write-Log '已移除 adb forward 127.0.0.1:8787' } else { Write-Log ('移除 adb forward 返回：' + ($r.Out + $r.Err).Trim()) '警告' }
     $r = Invoke-Adb -AdbPath $AdbPath -Arguments 'reverse --remove tcp:8788' -TimeoutMs 4000 -Runtime $Runtime
+    $rFast = Invoke-Adb -AdbPath $AdbPath -Arguments 'reverse --remove tcp:8789' -TimeoutMs 4000 -Runtime $Runtime
+    Write-Log ('fast reverse remove exit=' + $rFast.ExitCode)
     if ($r.ExitCode -eq 0) { Write-Log '已移除 adb reverse 127.0.0.1:8788' } else { Write-Log ('移除 adb reverse 返回：' + ($r.Out + $r.Err).Trim()) '警告' }
 }
 
@@ -722,6 +724,238 @@ function Test-PushLive {
     return (($now - [long]$p.lastAt) -lt 10000)
 }
 
+# ============================================================================
+# 快速上传通道（手机「发到电脑」专用，端口 8789）
+#
+# 背景：原上传走 HttpListener（HTTP.sys 内核驱动），实测每请求约 93ms，
+# 大量小文件只有约 10 MB/s；同样的请求用裸 TcpListener 只要 25ms。
+# 瓶颈在 HttpListener 本身而非 USB/磁盘/语言（C#/PS/Python 都慢）。
+# 这里只用裸 TCP 手写这一个固定协议的请求解析，其余接口仍走 HttpListener：
+#   POST / HTTP/1.1
+#   Content-Length: <字节数>
+#   X-PJM-Cat / X-PJM-Date / X-PJM-Name / X-PJM-Uuid / X-PJM-Index / X-PJM-Total
+#   <body>
+# 返回一行 JSON：{"ok":true,...} 或 {"ok":false,"error":"..."}
+# 注意：手机端会先经 adb reverse tcp:8789 连到本端口，全程走 USB，不耗手机流量。
+# ============================================================================
+$script:FastUploadCode = @'
+using System;
+using System.IO;
+using System.Net.Sockets;
+using System.Text;
+
+public class PjmFastUpload
+{
+    public sealed class Req
+    {
+        public string Cat, Date, Name, Uuid;
+        public int Index, Total;
+        public long Length;
+    }
+
+    public static Req ReadRequest(Stream ns, byte[] buf)
+    {
+        var head = new MemoryStream();
+        while (true)
+        {
+            int b = ns.ReadByte();
+            if (b < 0) return null;
+            head.WriteByte((byte)b);
+            int n = (int)head.Length;
+            if (n >= 4 && head.GetBuffer()[n-4] == 13 && head.GetBuffer()[n-3] == 10
+                       && head.GetBuffer()[n-2] == 13 && head.GetBuffer()[n-1] == 10) break;
+            if (n > 8192) throw new Exception("request header too large");
+        }
+        var text = Encoding.UTF8.GetString(head.GetBuffer(), 0, (int)head.Length);
+        var req = new Req();
+        bool first = true;
+        foreach (var raw in text.Split(new char[] { (char)10 }, StringSplitOptions.None))
+        {
+            if (first) { first = false; continue; }
+            int c = raw.IndexOf(':');
+            if (c < 0) continue;
+            string k = raw.Substring(0, c).Trim().ToLowerInvariant();
+            string v = raw.Substring(c + 1).Trim();
+            switch (k)
+            {
+                case "content-length": long.TryParse(v, out req.Length); break;
+                case "x-pjm-cat": req.Cat = v; break;
+                case "x-pjm-date": req.Date = v; break;
+                case "x-pjm-name": req.Name = v; break;
+                case "x-pjm-uuid": req.Uuid = v; break;
+                case "x-pjm-index": int.TryParse(v, out req.Index); break;
+                case "x-pjm-total": int.TryParse(v, out req.Total); break;
+            }
+        }
+        return req;
+    }
+
+    public static long CopyBody(Stream ns, Stream fs, long len, byte[] buf)
+    {
+        long remain = len;
+        while (remain > 0)
+        {
+            int want = (int)Math.Min(buf.Length, remain);
+            int n = ns.Read(buf, 0, want);
+            if (n <= 0) break;
+            fs.Write(buf, 0, n);
+            remain -= n;
+        }
+        return len - remain;
+    }
+
+    public static void WriteOk(Stream ns, bool ok, string json)
+    {
+        byte[] body = Encoding.UTF8.GetBytes(json);
+        string CRLF = "" + (char)13 + (char)10;
+        byte[] head = Encoding.ASCII.GetBytes("HTTP/1.1 " + (ok ? "200 OK" : "400 Bad Request") + CRLF +
+            "Content-Type: application/json; charset=utf-8" + CRLF +
+            "Content-Length: " + body.Length + CRLF +
+            "Connection: keep-alive" + CRLF + CRLF);
+        ns.Write(head, 0, head.Length);
+        ns.Write(body, 0, body.Length);
+        ns.Flush();
+    }
+
+    public static long SkipBody(Stream ns, long len, byte[] buf)
+    {
+        long remain = len;
+        while (remain > 0)
+        {
+            int want = (int)Math.Min(buf.Length, remain);
+            int n = ns.Read(buf, 0, want);
+            if (n <= 0) break;
+            remain -= n;
+        }
+        return len - remain;
+    }
+}
+'@
+if (-not ('PjmFastUpload' -as [type])) {
+    Add-Type -TypeDefinition $script:FastUploadCode -Language CSharp
+}
+
+function Receive-FastUpload {
+    param($Stream, $Runtime, $Req)
+    $cat = [string]$Req.Cat
+    $date = [string]$Req.Date
+    $name = [string]$Req.Name
+    $uuid = [string]$Req.Uuid
+    $length = [long]$Req.Length
+    $index = [int]$Req.Index
+    $number = [int]$Req.Total
+    $buf = [byte[]]::new(262144)
+
+    if ($script:Categories -notcontains $cat) {
+        [void][PjmFastUpload]::SkipBody($Stream, $length, $buf)
+        [PjmFastUpload]::WriteOk($Stream, $false, '{"ok":false,"error":"bad category"}')
+        return
+    }
+    if ($date -notmatch '^\d{4}-\d{2}-\d{2}$') {
+        [void][PjmFastUpload]::SkipBody($Stream, $length, $buf)
+        [PjmFastUpload]::WriteOk($Stream, $false, '{"ok":false,"error":"bad date"}')
+        return
+    }
+    try { Test-Fat32FileLimit -Bytes $length }
+    catch {
+        [void][PjmFastUpload]::SkipBody($Stream, $length, $buf)
+        [PjmFastUpload]::WriteOk($Stream, $false, '{"ok":false,"error":"fat32 limit"}')
+        return
+    }
+
+    $safe = Get-SafeName $name
+    $dir = Join-Path (Join-Path $script:Data $cat) $date
+    if (-not (Test-Path -LiteralPath $dir)) { [void](New-Item -ItemType Directory -Path $dir -Force) }
+
+    $push = $Runtime.Push
+    $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    if (($now - [long]$push.lastAt) -gt 15000) {
+        $push.done = 0; $push.bytes = [long]0; $push.skipped = 0; $push.failed = 0; $push.startedAt = $now
+    }
+    $push.active = $true
+    $push.current = $safe
+    if ($number -gt 0) { $push.total = $number }
+    $push.lastAt = $now
+
+    if ([string]::IsNullOrWhiteSpace($uuid)) { $uuid = $safe }
+    $ledgerKey = $cat + '|' + $uuid
+    Initialize-PushLedger -Runtime $Runtime
+    $known = ''
+    if ($Runtime.Ledger.map.ContainsKey($ledgerKey)) { $known = [string]$Runtime.Ledger.map[$ledgerKey] }
+    if (-not [string]::IsNullOrEmpty($known) -and (Test-Path -LiteralPath (Join-Path $script:Data $known) -PathType Leaf)) {
+        [void][PjmFastUpload]::SkipBody($Stream, $length, $buf)
+        $push.skipped = [int]$push.skipped + 1
+        $push.done = $index
+        Write-Log ('已在电脑上，跳过：' + $cat + '/' + $date + '/' + $safe)
+        [PjmFastUpload]::WriteOk($Stream, $true, '{"ok":true,"skipped":true}')
+        return
+    }
+
+    $target = Get-UniqueTarget -Directory $dir -FileName $safe
+    $part = Get-PartPath -Category $cat -Date $date -Identity ($ledgerKey + '|' + $safe)
+    $fs = $null
+    try {
+        if (Test-Path -LiteralPath $part) { Remove-Item -LiteralPath $part -Force }
+        $fs = [IO.File]::Open($part, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+        $written = [PjmFastUpload]::CopyBody($Stream, $fs, $length, $buf)
+        $fs.Dispose(); $fs = $null
+        if ($length -ge 0 -and $written -ne $length) { throw ('接收长度不一致：期望 ' + $length + '，实际 ' + $written) }
+        [IO.File]::Move($part, $target.Path)
+        Add-PushLedgerEntry -Runtime $Runtime -Key $ledgerKey -RelativePath ($cat + '/' + $date + '/' + $target.Name)
+        $push.done = if ($index -gt 0) { $index } else { [int]$push.done + 1 }
+        $push.bytes = [long]$push.bytes + $written
+        $push.lastAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        Write-Log ('已接收：' + $target.Name + '（' + (Format-Bytes $written) + '）')
+        $json = '{"ok":true,"skipped":false,"name":' + (ConvertTo-Json -InputObject $target.Name) + ',"size":' + $written + '}'
+        [PjmFastUpload]::WriteOk($Stream, $true, $json)
+    } catch {
+        $push.failed = [int]$push.failed + 1
+        if ($null -ne $fs) { try { $fs.Dispose() } catch { } }
+        try { if (Test-Path -LiteralPath $part) { Remove-Item -LiteralPath $part -Force } } catch { }
+        Write-Log ('接收文件失败：' + $_.Exception.Message) '错误'
+        [PjmFastUpload]::WriteOk($Stream, $false, '{"ok":false,"error":"write failed"}')
+    }
+}
+
+function Invoke-FastUploadLoop {
+    param($Runtime)
+    $listener = $null
+    try {
+        $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 8789)
+        $listener.Server.NoDelay = $true
+        $listener.Start()
+        Write-Log '快速上传通道已启动：127.0.0.1:8789'
+        while (-not $Runtime.QuitEvent.WaitOne(0)) {
+            $client = $null
+            try {
+                $client = $listener.AcceptTcpClient()
+            } catch {
+                if ($Runtime.QuitEvent.WaitOne(0)) { break }
+                Start-Sleep -Milliseconds 200
+                continue
+            }
+            try {
+                $client.NoDelay = $true
+                $ns = $client.GetStream()
+                $buf = [byte[]]::new(262144)
+                while (-not $Runtime.QuitEvent.WaitOne(0)) {
+                    $req = [PjmFastUpload]::ReadRequest($ns, $buf)
+                    if ($null -eq $req) { break }
+                    Receive-FastUpload -Stream $ns -Runtime $Runtime -Req $req
+                }
+            } catch {
+                Write-Log ('快速上传连接异常：' + $_.Exception.Message) '警告'
+            } finally {
+                try { $client.Close() } catch { }
+            }
+        }
+    } catch {
+        Write-Log ('快速上传通道启动失败：' + $_.Exception.Message) '错误'
+    } finally {
+        if ($null -ne $listener) { try { $listener.Stop() } catch { } }
+    }
+}
+
 function Receive-UploadFile {
     param($Context, $Runtime)
     $query = $Context.Request.QueryString
@@ -987,6 +1221,7 @@ function New-Runtime {
         QuitEvent = [System.Threading.ManualResetEvent]::new($false)
         Listener = $null
         ServerJob = $null
+        FastJob = $null
         CurrentWeb = $null
         CurrentAdb = $null
         Job = $null
@@ -1039,7 +1274,8 @@ function Ensure-Connection {
     $script:Serial = $serial
     $fwd = Invoke-Adb -AdbPath $adb -Arguments 'forward tcp:8787 tcp:8787' -TimeoutMs 3000 -Runtime $Runtime
     $rev = Invoke-Adb -AdbPath $adb -Arguments 'reverse tcp:8788 tcp:8788' -TimeoutMs 3000 -Runtime $Runtime
-    if ($fwd.ExitCode -eq 0 -and $rev.ExitCode -eq 0) {
+    $revFast = Invoke-Adb -AdbPath $adb -Arguments 'reverse tcp:8789 tcp:8789' -TimeoutMs 3000 -Runtime $Runtime
+    if ($fwd.ExitCode -eq 0 -and $rev.ExitCode -eq 0 -and $revFast.ExitCode -eq 0) {
         $Runtime.State.Device = '已连接'
         Write-Log ('隧道已重建：设备 ' + $serial)
     } else {
@@ -1049,6 +1285,9 @@ function Ensure-Connection {
     # 之前若未启动取回服务（例如启动时没连上），现在补上
     if ($Runtime.State.Device -eq '已连接' -and $null -eq $Runtime.Listener -and $null -eq $Runtime.ServerJob) {
         [void](Start-Pull -Runtime $Runtime -Mode 'server')
+    }
+    if ($Runtime.State.Device -eq '已连接' -and $null -eq $Runtime.FastJob) {
+        [void](Start-Pull -Runtime $Runtime -Mode 'fast')
     }
 }
 function Initialize-Connection {
@@ -1090,6 +1329,13 @@ function Initialize-Connection {
     } else {
         Write-Log ('adb reverse 失败：' + ($r.Err + $r.Out).Trim()) '错误'
     }
+    # 快速上传通道（手机 8789 → 电脑 8789），全程 USB，不走手机流量
+    $rFast = Invoke-Adb -AdbPath $adb -Arguments 'reverse tcp:8789 tcp:8789' -TimeoutMs 8000 -Runtime $Runtime
+    if ($rFast.ExitCode -eq 0) {
+        Write-Log 'USB 反向隧道已建立：手机 127.0.0.1:8789 → 电脑快速上传'
+    } else {
+        Write-Log ('快速上传 adb reverse 失败（将回退到 8788）：' + ($rFast.Err + $rFast.Out).Trim()) '警告'
+    }
 }
 
 function Start-Pull {
@@ -1104,7 +1350,9 @@ function Start-Pull {
     [void]$ps.AddScript('& ' + $quoted)
     $h = $ps.BeginInvoke()
     $entry = @{ Ps = $ps; Handle = $h; Runspace = $rs }
-    if ($Mode -eq 'server') { $Runtime.ServerJob = $entry } else { $Runtime.Job = $entry }
+    if ($Mode -eq 'server') { $Runtime.ServerJob = $entry }
+    elseif ($Mode -eq 'fast') { $Runtime.FastJob = $entry }
+    else { $Runtime.Job = $entry }
     return $true
 }
 
@@ -1450,6 +1698,8 @@ function Start-MainWindow {
             # 关窗后进程仍可能锁着工具目录。抽成通用函数，两个 job 共用。
             Stop-JobEntry -Entry $script:Runtime.ServerJob -TimeoutMs 3000
             $script:Runtime.ServerJob = $null
+            Stop-JobEntry -Entry $script:Runtime.FastJob -TimeoutMs 3000
+            $script:Runtime.FastJob = $null
             Stop-Pull -Runtime $script:Runtime
             Wait-PullJob -Runtime $script:Runtime -TimeoutMs 5000
             if (-not [string]::IsNullOrEmpty($script:Runtime.State.Adb)) {
@@ -1466,7 +1716,10 @@ function Start-MainWindow {
     # P1-2：启动时清一次陈旧 .part（24h 以上），覆盖「只用手机推送、从不点接收」的用户。
     Remove-StalePartFiles
     Initialize-Connection -Runtime $runtime
-    if ($runtime.State.Device -eq '已连接') { [void](Start-Pull -Runtime $runtime -Mode 'server') }
+    if ($runtime.State.Device -eq '已连接') {
+        [void](Start-Pull -Runtime $runtime -Mode 'server')
+        [void](Start-Pull -Runtime $runtime -Mode 'fast')
+    }
     $timer.Start()
     Write-Log ('PJM Link 启动，数据目录：' + $script:Data)
     [System.Windows.Forms.Application]::Run($form)
@@ -1483,6 +1736,9 @@ if ($null -ne $jobVar -and $jobVar.Value -is [hashtable]) {
     if ($null -ne $jobVar.Value.Mode) { $mode = [string]$jobVar.Value.Mode }
     if ($mode -eq 'server') {
         Invoke-ServerLoop -Runtime $script:Runtime
+    } elseif ($mode -eq 'fast') {
+        # 独立 runspace：只跑快速上传循环（由主界面用 Start-Pull -Mode fast 启动）
+        Invoke-FastUploadLoop -Runtime $script:Runtime
     } else {
         $dates = @()
         if ($null -ne $jobVar.Value.Dates) { $dates = @($jobVar.Value.Dates) }

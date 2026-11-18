@@ -111,6 +111,19 @@ jobs:
       - name: ktlint check
         run: ./gradlew -Dgradle.user.home=$HOME/.gradle ktlintCheck --stacktrace
 
+      # CI 没有正式证书：生成一份一次性临时证书给 assembleRelease 用（只验证构建链路，
+      # 产物不可分发）。debug 与 release 是两套独立证书，工程不会回退 debug 签名，
+      # 所以缺了这一步 assembleRelease 会按设计直接失败。
+      - name: Generate ephemeral release keystore (CI only)
+        run: |
+          set -euo pipefail
+          keytool -genkeypair -noprompt \
+            -keystore "$GITHUB_WORKSPACE/ci-release.jks" \
+            -storetype PKCS12 -storepass cirelease -keypass cirelease \
+            -alias ci -keyalg RSA -keysize 2048 -validity 3650 \
+            -dname "CN=PJM CI, OU=CI, O=PJM, C=CN"
+          printf 'storeFile=ci-release.jks\nstorePassword=cirelease\nkeyAlias=ci\nkeyPassword=cirelease\n' > "$GITHUB_WORKSPACE/keystore.properties"
+
       - name: Assemble release
         run: ./gradlew -Dgradle.user.home=$HOME/.gradle :app:assembleRelease --stacktrace
 
