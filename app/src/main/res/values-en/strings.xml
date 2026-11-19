@@ -431,7 +431,7 @@
     <string name="takeover_section_switch">App takeover</string>
     <string name="takeover_switch_title">Enable app takeover</string>
     <string name="takeover_switch_desc">Receive files saved by the selected apps in the background</string>
-    <string name="takeover_switch_off_hint">Off: PJM no longer stays in the background and will not ask for battery-optimization or autostart permission. Your app list is kept and applies again next time; revoke system-side grants manually if you want them gone.</string>
+    <string name="takeover_switch_off_hint">Off: PJM no longer stays in the background and will not ask for battery-optimization permission. Your app list is kept and applies again next time; revoke system-side grants manually if you want them gone.</string>
     <string name="takeover_picker_managed">Taken over</string>
     <string name="takeover_background_title">Background running</string>
     <string name="takeover_status_battery_ok">Battery optimization: allowed</string>
@@ -444,14 +444,12 @@
     <string name="takeover_status_verdict_bad">Background has stopped: the last scan was %1$d minutes ago, so the switch has not taken effect or the app was killed by the system.</string>
     <string name="takeover_status_verdict_none">No background scan yet: open the app once so the service starts, then check again.</string>
     <string name="takeover_status_hint">Some systems do not expose their power/background switches to apps, so this page judges by the actual scan heartbeat: once “last scan” stays within 3 minutes and no new interruption appears, it is working.</string>
-    <string name="takeover_background_ok">Battery optimization is allowed, but that is often not enough: some systems add separate background-power limits and still freeze the process when the screen is locked. Set PJM to “allow background running / high background power” and allow autostart in the system settings below. Swiping PJM out of recents can also stop it — lock its card.</string>
+    <string name="takeover_background_ok">Battery optimization is allowed, but that is often not enough: some systems add separate background-power limits and still freeze the process when the screen is locked. Set PJM to “allow background running / high background power” in the system battery settings below. Swiping PJM out of recents can also stop it — lock its card.</string>
     <string name="takeover_background_off">System battery optimization does not allow PJM to run in the background yet. After the screen is locked for a while the process gets frozen and takeover stops (it only catches up when you open PJM).</string>
     <string name="takeover_background_allow">Allow background running</string>
     <string name="takeover_background_allow_desc">Choose “Allow” in the system dialog</string>
     <string name="takeover_background_battery_page">System battery settings</string>
     <string name="takeover_background_battery_page_desc">Set PJM to allow background running / high background power (location varies by system)</string>
-    <string name="takeover_background_autostart_page">Autostart management</string>
-    <string name="takeover_background_autostart_page_desc">Allow PJM to autostart so the system does not leave it stopped</string>
     <string name="transfer_group_usb">Direct USB (cable only, no data usage)</string>
     <string name="transfer_pc_tool">PC tool</string>
     <string name="transfer_online">Online</string>
@@ -493,6 +491,7 @@
     <string name="transfer_in_progress">Transferring…</string>
     <string name="transfer_start_push">Start sending to PC</string>
     <string name="transfer_stop">Stop</string>
+    <string name="transfer_stop_before_close">Stop the transfer before closing the service</string>
     <string name="transfer_pc_empty">No files on the PC yet: send some over, or put files into PJM-Transfer inside PJM-Link</string>
     <string name="transfer_pc_offline">PC not connected: make sure PJM-Link is running and USB is connected</string>
     <string name="transfer_folder_count">%1$d folders</string>

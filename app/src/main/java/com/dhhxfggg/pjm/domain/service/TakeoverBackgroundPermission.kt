@@ -24,9 +24,6 @@ object TakeoverBackgroundPermission {
     /** 两次系统弹窗之间的最小间隔：用户明确拒绝后不要每次开屏都弹 */
     private const val ASK_INTERVAL_MS = 6L * 60 * 60 * 1000
 
-    /** 国产 ROM 自启动管理页 */
-    private const val AUTO_START_ACTION = "com.iqoo.secure.BGSTARTUPMANAGER"
-
     fun isExempt(context: Context): Boolean =
         runCatching {
             context.getSystemService(PowerManager::class.java)?.isIgnoringBatteryOptimizations(context.packageName) == true
@@ -71,18 +68,6 @@ object TakeoverBackgroundPermission {
                 ),
                 Intent(Intent.ACTION_POWER_USAGE_SUMMARY),
                 Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS),
-            )
-        return launchFirst(context, candidates)
-    }
-
-    /** 打开「自启动管理」：允许自启动，避免被清理后不再拉起 */
-    fun openAutoStartPage(context: Context): Boolean {
-        val candidates =
-            listOf(
-                Intent().setComponent(
-                    ComponentName("com.vivo.permissionmanager", "com.vivo.permissionmanager.activity.BgStartUpManagerActivity"),
-                ),
-                Intent(AUTO_START_ACTION),
             )
         return launchFirst(context, candidates)
     }

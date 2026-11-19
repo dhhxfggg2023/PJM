@@ -219,12 +219,6 @@ internal fun AppsTakeoverSettings(takeoverViewModel: TakeoverViewModel) {
                     description = stringResource(R.string.takeover_background_battery_page_desc),
                     onClick = { TakeoverBackgroundPermission.openBatteryPage(context) },
                 )
-                SettingsButton(
-                    icon = Lucide.ShieldAlert,
-                    title = stringResource(R.string.takeover_background_autostart_page),
-                    description = stringResource(R.string.takeover_background_autostart_page_desc),
-                    onClick = { TakeoverBackgroundPermission.openAutoStartPage(context) },
-                )
             }
         }
 

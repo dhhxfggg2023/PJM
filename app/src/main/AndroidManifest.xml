@@ -9,6 +9,10 @@
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+    <!-- Android 14+：用户可以选择只授权部分照片/视频。声明它之后应用才能正确处理
+         「部分授权」状态；不声明时系统会按完全授权降级，用户在弹窗里选「仅选中项」
+         后媒体库查询可能一个文件都返回不了，而应用也拿不到「只有部分权限」的信号。 -->
+    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />

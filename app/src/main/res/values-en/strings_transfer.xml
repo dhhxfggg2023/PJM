@@ -17,7 +17,7 @@
     <string name="transfer_file_mismatch">File missing or size changed: %1$s</string>
     <string name="transfer_push_cancelled">Stopped · %1$d/%2$d</string>
     <string name="transfer_push_failed">Done %1$d/%2$d · %3$d failed</string>
-    <string name="transfer_push_skipped">Sent %1$d · skipped %2$d (already transferred)</string>
+    <string name="transfer_push_skipped">Sent %1$d · skipped %2$d (already on PC)</string>
     <string name="transfer_push_done_all">Sent %1$d files · %2$s</string>
     <string name="transfer_push_done">Sent %1$d/%2$d · %3$s</string>
     <string name="transfer_no_folder">Pick a folder first</string>

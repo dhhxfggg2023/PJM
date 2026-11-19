@@ -16,6 +16,7 @@ import com.dhhxfggg.pjm.domain.util.PjmLogger
 import com.dhhxfggg.pjm.domain.util.SettingsManager
 import com.dhhxfggg.pjm.domain.util.VaultManager
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -408,6 +409,10 @@ class DiscoveryViewModel
                     VaultManager.updateProgress(1f, application.getString(R.string.status_delete_done), taskId = VaultManager.TASK_DELETE)
                     delay(1000)
                     VaultManager.clearProgress(VaultManager.TASK_DELETE)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    PjmLogger.e("DiscoveryVM", "删除文件失败: ${e.javaClass.simpleName}", e as? Exception)
                 } finally {
                     VaultManager.endOperation(VaultManager.TASK_DELETE)
                 }

@@ -129,6 +129,19 @@ interface FileDao {
     ): FileEntity?
 
     /**
+     * 某个分类下全部文件的 (名字, 大小)。
+     *
+     * 「从电脑取回」用它**一次性**建去重集合，而不是每个文件查一次库：
+     * 图片分类有 4 万条，逐条按 (分类, 名字, 大小) 查没有对应复合索引，
+     * 每条都要在该分类的索引里走一遍 —— 4 万个文件就是 O(n²)，取回会卡到没法用。
+     *
+     * 判断依据选数据库而不是旁路账本，是因为数据库行跟着文件一起删：
+     * 用户在手机上删掉某个文件后，下次取回能重新下载；只增不减的旁路账本做不到。
+     */
+    @Query("SELECT name, size FROM files WHERE category = :category")
+    suspend fun getNameSizesByCategory(category: String): List<NameSize>
+
+    /**
      * Deletes a specific file record by its path.
      */
     @Query("DELETE FROM files WHERE relativePath = :relativePath")

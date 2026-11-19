@@ -265,17 +265,21 @@ object FileServerMain {
                         } else if (!dir.exists() || !dir.isDirectory) {
                             "OK\t"
                         } else {
+                            // 字段用 NUL 分隔，不用 `|`：`|` 是合法文件名字符，
+                            // 名字里出现它时按 `|` 切分会静默截断路径、把大小读成 0，
+                            // 且不报任何错。NUL 是 POSIX 文件名里唯一不可能出现的字节。
+                            // 与 walk 通道 / AIDL 通道（FileBridgeService）保持同一套编码。
                             val items =
                                 dir
                                     .listFiles()
                                     ?.mapNotNull { f ->
                                         try {
                                             val type = if (f.isDirectory) "D" else "F"
-                                            "$type|${f.name}|${f.length()}"
+                                            "$type\u0000${f.name}\u0000${f.length()}"
                                         } catch (_: Exception) {
                                             null
                                         }
-                                    }?.joinToString("|||") ?: ""
+                                    }?.joinToString("\n") ?: ""
                             "OK\t$items"
                         }
                     }

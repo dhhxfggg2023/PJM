@@ -163,6 +163,25 @@ class BiliWalkTest {
         assertEquals(1234L, map[path])
     }
 
+    /**
+     * 回归测试：list 通道（内置特权服务）同样不能用 `|` 分隔字段。
+     *
+     * walk 通道早就改成了 NUL 并有测试保护，但 list 通道漏改：服务端用 `|` 拼、
+     * 客户端按 `|` 拆，文件名里带 `|` 时同样会静默给出错误路径 + 0 大小。
+     * 现在两条通道统一为「每行一项、字段用 NUL 分隔」。
+     */
+    @Test
+    fun listResponse_handlesPipeInFileNameWithoutCorruption() {
+        val payload = "F\u0000we|ird.m4s\u0000512\nD\u0000a|dir\u00000"
+        val items = EmbeddedPrivilegedIo.parseListResponse(payload)
+        assertEquals(2, items.size)
+        assertEquals("完整文件名不应被切断", "we|ird.m4s", items[0].name)
+        assertEquals(512L, items[0].size)
+        assertFalse(items[0].isDirectory)
+        assertEquals("a|dir", items[1].name)
+        assertTrue(items[1].isDirectory)
+    }
+
     // ---------- 服务端遍历 ----------
 
     private fun touch(

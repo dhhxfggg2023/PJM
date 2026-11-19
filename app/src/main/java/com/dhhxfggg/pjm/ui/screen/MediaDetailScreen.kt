@@ -584,7 +584,7 @@ private fun VideoPage(
                         .padding(horizontal = 14.dp, vertical = 6.dp),
             ) {
                 Text(
-                    text = String.format("%.1fx", turboSpeed),
+                    text = String.format(java.util.Locale.US, "%.1fx", turboSpeed),
                     color = Color.White,
                     fontSize = 14.sp,
                 )

@@ -17,7 +17,7 @@
     <string name="transfer_file_mismatch">文件缺失或大小不一致：%1$s</string>
     <string name="transfer_push_cancelled">已停止 · %1$d/%2$d</string>
     <string name="transfer_push_failed">完成 %1$d/%2$d · 失败 %3$d</string>
-    <string name="transfer_push_skipped">已发送 %1$d 个 · 跳过 %2$d 个（之前传过）</string>
+    <string name="transfer_push_skipped">已发送 %1$d 个 · 跳过 %2$d 个（电脑上已有）</string>
     <string name="transfer_push_done_all">已发送 %1$d 个 · %2$s</string>
     <string name="transfer_push_done">已发送 %1$d/%2$d · %3$s</string>
     <string name="transfer_no_folder">先选一个文件夹</string>

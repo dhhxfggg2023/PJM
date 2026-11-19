@@ -11,9 +11,11 @@ import com.dhhxfggg.pjm.data.model.Settings
 import com.dhhxfggg.pjm.data.repository.CategoryListCache
 import com.dhhxfggg.pjm.data.repository.FileRepository
 import com.dhhxfggg.pjm.domain.util.OperationTask
+import com.dhhxfggg.pjm.domain.util.PjmLogger
 import com.dhhxfggg.pjm.domain.util.SettingsManager
 import com.dhhxfggg.pjm.domain.util.VaultManager
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
@@ -141,6 +143,13 @@ class MainViewModel
                             delay(800.milliseconds)
                             VaultManager.clearProgress(VaultManager.TASK_INIT)
                         }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Throwable) {
+                        // viewModelScope 没有 CoroutineExceptionHandler，只有 finally 时
+                        // 这里的异常会冒泡到线程默认处理器 → 直接闪退。
+                        // 首启重建索引要读几万个文件，IO 异常与 OOM 都真实存在。
+                        PjmLogger.e("MainViewModel", "初始化索引失败: ${e.javaClass.simpleName}", e as? Exception)
                     } finally {
                         if (hasLock) VaultManager.endOperation(VaultManager.TASK_INIT)
                     }

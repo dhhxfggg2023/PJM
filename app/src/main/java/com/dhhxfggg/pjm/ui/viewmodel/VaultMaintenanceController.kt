@@ -150,6 +150,14 @@ class VaultMaintenanceController(
                 VaultManager.updateProgress(1.0f, app.getString(R.string.status_sync_complete), taskId = VaultManager.TASK_SYNC)
                 delay(800.milliseconds)
                 VaultManager.clearProgress(VaultManager.TASK_SYNC)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                // 必须接住：viewModelScope 没有 CoroutineExceptionHandler，
+                // 只有 try/finally 时这里的异常会一路冒泡到线程默认处理器 → 闪退。
+                // 重建索引会读几千个文件、写几万行数据库，IO 错误与 OOM 都真实存在。
+                PjmLogger.e("VaultMaintenance", "重建索引失败: ${e.javaClass.simpleName}", e as? Exception)
+                VaultManager.updateProgress(0f, app.getString(R.string.error_processing_failed, e.message.orEmpty()), taskId = VaultManager.TASK_SYNC, isError = true)
             } finally {
                 VaultManager.endOperation(VaultManager.TASK_SYNC)
             }
@@ -175,6 +183,12 @@ class VaultMaintenanceController(
                 delay(1000.milliseconds)
                 VaultManager.clearProgress(VaultManager.TASK_DELETE)
                 VaultManager.triggerRefresh()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                // 同 syncDatabase：删除失败（文件被占用、权限异常）不能让整个进程崩掉
+                PjmLogger.e("VaultMaintenance", "清理重复文件失败: ${e.javaClass.simpleName}", e as? Exception)
+                VaultManager.updateProgress(0f, app.getString(R.string.error_processing_failed, e.message.orEmpty()), taskId = VaultManager.TASK_DELETE, isError = true)
             } finally {
                 VaultManager.endOperation(VaultManager.TASK_DELETE)
             }
@@ -205,6 +219,13 @@ class VaultMaintenanceController(
                     }
                 VaultManager.clearProgress(VaultManager.TASK_INTEGRITY)
                 onResult(results)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                // 完整性检查要读全库文件哈希，任何 IO 异常都不能变成闪退；
+                // 失败时回空结果，界面显示「没有发现问题」而不是卡在进度条上。
+                PjmLogger.e("VaultMaintenance", "完整性检查失败: ${e.javaClass.simpleName}", e as? Exception)
+                onResult(emptyMap())
             } finally {
                 VaultManager.endOperation(VaultManager.TASK_INTEGRITY)
             }

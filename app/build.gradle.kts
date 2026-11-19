@@ -48,8 +48,8 @@ android {
         applicationId = "com.dhhxfggg.pjm"
         minSdk = 24
         targetSdk = 35
-        versionCode = 56
-        versionName = "2.1.9"
+        versionCode = 57
+        versionName = "2.1.10"
 
         ndk {
             // 只留真机架构：x86/x86_64 只有模拟器用得上，留在包里等于让每个用户

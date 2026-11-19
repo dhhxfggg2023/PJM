@@ -99,20 +99,12 @@ class TransferViewModel
 
         // 短时间连点只留最后一条提示：Toast 排队会连弹好几次
         private var lastToast: android.widget.Toast? = null
-        private val importedKeys =
-            context
-                .getSharedPreferences("pjm_transfer", Context.MODE_PRIVATE)
-                .getStringSet("imported", emptySet())
-                .orEmpty()
-                .toMutableSet()
-
-        // 已经推到电脑上的文件（路径+大小）：重复点「开始」不会在电脑上堆出「(2)(3)」
-        private val pushedKeys =
-            context
-                .getSharedPreferences("pjm_transfer", Context.MODE_PRIVATE)
-                .getStringSet("pushed", emptySet())
-                .orEmpty()
-                .toMutableSet()
+        // 「这个文件电脑上有没有」只由电脑端判断：它先查自己的账本 .pjm-push.tsv，
+        // 再 stat 磁盘确认文件真的在，两样都对才回 skipped:true。
+        // 手机端曾经在发送前用本地 pushed 集合先筛一遍 —— 那是错的：
+        // 换接收目录 / 换电脑 / 重装工具后这个集合全部失效，文件被手机静默跳过，
+        // 新目录里就永远收不齐，而界面还显示「全部传完」。
+        // 现在每个文件都发出去，由接收方裁决；换目录最多重传一遍请求。
 
         @Volatile
         private var pushCancel = false
@@ -139,6 +131,14 @@ class TransferViewModel
 
         fun toggleServer() {
             if (_state.value.serverRunning) {
+                // 正在推送/取回时不能关：关掉会把 importing / importDone / importTotal 一起清零，
+                // 进度条与「停止」按钮随之消失，但协程仍在 viewModelScope 上跑、
+                // 已打开的下载流也会把当前文件传完 —— 用户看不到进度、也点不到停止。
+                // 先让用户用「停止」结束这一批，再关服务。
+                if (_state.value.push?.active == true || _state.value.importing) {
+                    toast(context.getString(R.string.transfer_stop_before_close))
+                    return
+                }
                 pollJob?.cancel()
                 server.stop()
                 transferToken = null
@@ -399,15 +399,7 @@ class TransferViewModel
                     val name = FileUtils.normalizedDisplayName(entity)
                     // 身份以库里文件的 uuid 为准：改名、改入库时间都不影响「是不是同一个文件」
                     val uuid = entity.relativePath.substringAfterLast('/').substringBeforeLast('.')
-                    val key = uuid
                     val base = bytes
-                    if (pushedKeys.contains(key)) {
-                        // 跳过的文件（上次已传过）不累计字节：它们没有真正经过网络，
-                        // 计进去会让"已传大小 / 瞬时速度 / 平均速度"全部虚高。
-                        skipped++
-                        done++
-                        continue
-                    }
                     val file = File(VaultPaths.vaultRoot(context), entity.relativePath)
                     if (existsOnDisk[entity] != true) {
                         failed++
@@ -445,10 +437,7 @@ class TransferViewModel
                                     }
                                 }
                             }
-                        pushedKeys.add(key)
-                        // 不再每个文件都写 SharedPreferences：pushedKeys 会涨到几千个，
-                        // 每次全量序列化写入是 O(n)，实测速度从 51 文件/秒一路掉到 20。
-                        // 改为整批结束后统一写一次（见下方 uploadDone 之后）。
+                        // 电脑端说「这个我这儿已经有了」：跳过是它判的，本地只记账
                         if (skippedOnPc) skipped++
                         done++
                     } catch (e: Exception) {
@@ -480,14 +469,6 @@ class TransferViewModel
                         )
                 }
                 val cancelled = pushCancel
-                // 整批只写一次账本：避免上面每个文件都全量写入导致越传越慢
-                withContext(Dispatchers.IO) {
-                    context
-                        .getSharedPreferences("pjm_transfer", Context.MODE_PRIVATE)
-                        .edit()
-                        .putStringSet("pushed", pushedKeys)
-                        .apply()
-                }
                 val closed = withContext(Dispatchers.IO) { client.uploadDone() }
                 _state.value =
                     _state.value.copy(
@@ -557,10 +538,26 @@ class TransferViewModel
                     val list = withContext(Dispatchers.IO) { client.files(folder.category, folder.date) }
                     if (list.isEmpty()) continue
                     totalFiles = totalFiles.coerceAtLeast(done + list.size)
+                    // 判断「这个文件已经在库里」以数据库为准：同一分类 + 同名 + 同大小。
+                    // 旧实现用一份只增不减的 SharedPreferences 账本（key 还带了电脑端的
+                    // 日期目录），既不会在删除文件时清理，也认不出「同一天里换了个目录」。
+                    // 结果是从电脑取回 → 手机上删掉 → 想再取回来时被静默跳过。
+                    // 数据库行跟着文件一起删，天然不会有这个毛病。
+                    //
+                    // 每个分类只查一次库、建成本地集合：图片分类有 4 万条，若每个文件都
+                    // 单独查一次「库里有没有」，整体是 O(文件数 × 库内条数)，取回会卡死。
+                    // 集合在导入过程中同步 add，同一次取回里重复出现的文件也不会下两次。
+                    val knownInVault =
+                        withContext(Dispatchers.IO) {
+                            runCatching {
+                                fileDao
+                                    .getNameSizesByCategory(folder.category)
+                                    .mapTo(HashSet()) { it.name to it.size }
+                            }.getOrDefault(HashSet())
+                        }
                     for (item in list) {
                         if (importCancel) break
-                        val key = folder.category + "|" + folder.date + "|" + item.name + "|" + item.size
-                        if (importedKeys.contains(key)) {
+                        if (!knownInVault.add(item.name to item.size)) {
                             done++
                             _state.value = _state.value.copy(importDone = done)
                             continue
@@ -569,15 +566,13 @@ class TransferViewModel
                             withContext(Dispatchers.IO) {
                                 saveOne(folder.category, folder.date, item.name, { read -> bytes += read }, { importCancel })
                             }
-                            importedKeys.add(key)
-                            context
-                                .getSharedPreferences("pjm_transfer", Context.MODE_PRIVATE)
-                                .edit()
-                                .putStringSet("imported", importedKeys)
-                                .apply()
                             done++
                         } catch (e: Exception) {
                             done++
+                            // 下载失败：把刚占位的键撤回来。
+                            // 否则同一次导入里后续出现的同名同大小文件会被误判成「已在库」而跳过，
+                            // 而这批文件其实一个都没落盘。
+                            knownInVault.remove(item.name to item.size)
                             // 用户主动停止不算失败：不弹红字，只在结尾给一句「已停止」
                             if (!importCancel) {
                                 failed++
@@ -605,7 +600,8 @@ class TransferViewModel
                     _state.value.copy(
                         importing = false,
                         importCancelled = cancelled,
-                        importTotal = done,
+                        // 保留真实分母：旧实现把它改成 done，于是进度条恒为 100%、
+                        // 文案变成「已导入 535/535」—— 用户看不出这一批本来该有多少个。
                         importError = if (failed > 0) context.getString(R.string.transfer_import_failed, failed) else null,
                         message =
                             if (cancelled) {

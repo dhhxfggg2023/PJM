@@ -12,6 +12,7 @@ import com.dhhxfggg.pjm.data.model.Settings
 import com.dhhxfggg.pjm.domain.shizuku.EmbeddedPrivilegedIo
 import com.dhhxfggg.pjm.domain.shizuku.ShizukuBridge
 import com.dhhxfggg.pjm.domain.util.*
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -93,6 +94,12 @@ class BiliSettingsController(
                 )
                 // 保留原有完成态延迟（让 100% 在 UI 上可见），释放统一交给 finally
                 delay(800)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                // 扫描 B 站目录要遍历 Android/data（Shizuku/特权 IPC），失败很常见；
+                // 没有这个 catch 会直接闪退，而不是「提示没找到缓存」。
+                PjmLogger.e("BiliController", "扫描缓存失败: ${e.javaClass.simpleName}", e as? Exception)
             } finally {
                 // 核心修复：协程取消/异常时也必须释放占位，否则 TASK_BILI_SCAN 永久卡死
                 // 扫描标志同样在 finally 复位：旧实现只在成功路径置 false，
@@ -224,6 +231,10 @@ class BiliSettingsController(
                     taskId = VaultManager.TASK_BILI_IMPORT_MERGED,
                 )
                 delay(1000.milliseconds)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                PjmLogger.e("BiliController", "导入合并视频失败: ${e.javaClass.simpleName}", e as? Exception)
             } finally {
                 VaultManager.clearProgress(VaultManager.TASK_BILI_IMPORT_MERGED)
                 VaultManager.endOperation(VaultManager.TASK_BILI_IMPORT_MERGED)
@@ -403,6 +414,10 @@ class BiliSettingsController(
                 withContext(VaultManager.PjmDispatchers.IO) { BiliBridge.cleanupEmptyBiliDirs(app) }
                 VaultManager.updateProgress(1f, app.getString(R.string.status_all_tasks_complete), taskId = VaultManager.TASK_BILI_IMPORT)
                 delay(1000.milliseconds)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                PjmLogger.e("BiliController", "导入缓存视频失败: ${e.javaClass.simpleName}", e as? Exception)
             } finally {
                 VaultManager.clearProgress(VaultManager.TASK_BILI_IMPORT)
                 VaultManager.endOperation(VaultManager.TASK_BILI_IMPORT)

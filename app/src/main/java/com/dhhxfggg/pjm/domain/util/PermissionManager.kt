@@ -27,11 +27,25 @@ object PermissionManager {
                 // Android 13+：通常不需要全局存储权限，按需申请媒体权限。
                 // 核心修复：补上 READ_MEDIA_AUDIO —— manifest 里声明了它，这里却漏了，
                 // 一旦将来真的走「按需请求」这条路，音频权限会永远申请不到。
-                arrayOf(
-                    Manifest.permission.READ_MEDIA_IMAGES,
-                    Manifest.permission.READ_MEDIA_VIDEO,
-                    Manifest.permission.READ_MEDIA_AUDIO,
-                )
+                //
+                // 核心修复：Android 14+ 必须把 READ_MEDIA_VISUAL_USER_SELECTED 一起请求，
+                // 否则用户在弹出的「仅选中项 / 全部允许」对话框里选前者时，系统只授予
+                // 选中项访问权，而本应用没声明该权限 → 媒体查询直接返回空集，
+                // 表现就是「授权成功了但一张图都看不到」。
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    arrayOf(
+                        Manifest.permission.READ_MEDIA_IMAGES,
+                        Manifest.permission.READ_MEDIA_VIDEO,
+                        Manifest.permission.READ_MEDIA_AUDIO,
+                        Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED,
+                    )
+                } else {
+                    arrayOf(
+                        Manifest.permission.READ_MEDIA_IMAGES,
+                        Manifest.permission.READ_MEDIA_VIDEO,
+                        Manifest.permission.READ_MEDIA_AUDIO,
+                    )
+                }
             }
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.R -> {
                 // Android 11-12：仅需读取权限

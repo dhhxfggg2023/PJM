@@ -227,6 +227,12 @@ class AppBackupViewModel
                 } catch (cancel: kotlinx.coroutines.CancellationException) {
                     _progress.value = null
                     throw cancel
+                } catch (e: Throwable) {
+                    // 提取 APK 要读 sourceDir、写库目录：空间不足/权限异常都可能发生。
+                    // viewModelScope 没有全局 CoroutineExceptionHandler，漏掉这个 catch 就是闪退。
+                    _progress.value = null
+                    PjmLogger.e(TAG, "备份应用失败: ${e.javaClass.simpleName}", e as? Exception)
+                    _outcome.value = ApkExporter.BackupOutcome(emptyList())
                 } finally {
                     running = false
                 }

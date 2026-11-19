@@ -149,18 +149,30 @@ object EmbeddedPrivilegedIo {
         if (!resp.startsWith("OK\t")) return null
         val data = resp.removePrefix("OK\t")
         if (data.isEmpty()) return emptyList()
-        return data.split("|||").mapNotNull { line ->
-            try {
-                val parts = line.split("|")
-                if (parts.size >= 2) {
-                    FileInfo(parts[1], parts.getOrNull(2)?.toLongOrNull() ?: 0L, parts[0] == "D")
-                } else {
-                    null
-                }
-            } catch (_: Exception) {
-                null
-            }
-        }
+        return parseListResponse(data)
+    }
+
+    /**
+     * 解析 list 通道的响应体：每行一项，字段用 **NUL** 分隔（`类型 NUL 文件名 NUL 字节数`）。
+     *
+     * 为什么不能用 `|`：`|` 是**合法文件名字符**，名字里出现它时按 `|` 切分会静默截断
+     * 路径、把大小读成 0，且不抛任何异常 —— 表现是「目录里有这个文件，但扫描永远漏掉」。
+     * NUL 是 POSIX 文件名中唯一不可能出现的字节。walk 通道与 AIDL 通道早已如此，
+     * 这里原先漏改。
+     *
+     * 抽成 internal 函数是为了可测：分隔符这类错误在真机上极难复现。
+     */
+    internal fun parseListResponse(payload: String): List<FileInfo> {
+        if (payload.isEmpty()) return emptyList()
+        return payload
+            .lineSequence()
+            .mapNotNull { line ->
+                if (line.isEmpty()) return@mapNotNull null
+                runCatching {
+                    val parts = line.split('\u0000')
+                    if (parts.size >= 2) FileInfo(parts[1], parts.getOrNull(2)?.toLongOrNull() ?: 0L, parts[0] == "D") else null
+                }.getOrNull()
+            }.toList()
     }
 
     suspend fun copyFile(

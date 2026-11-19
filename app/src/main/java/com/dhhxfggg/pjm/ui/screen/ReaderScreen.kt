@@ -125,11 +125,16 @@ fun ReaderScreen(
     val context = LocalContext.current
     val density = LocalDensity.current
     val prefs = remember { context.getSharedPreferences("pjm_reader", android.content.Context.MODE_PRIVATE) }
-    val positionKey = remember(file.absolutePath) { "page_" + file.absolutePath.hashCode() }
+    // 键必须用稳定摘要而不是 `String.hashCode()`：后者只有 32 位，万级文件下按生日问题
+    // 已有约 2% 的碰撞概率（CacheKeys 就是因此从 hashCode 迁到 SHA-256 的）。
+    // 一旦两本书的路径哈希相撞，它们会共用同一份阅读进度与同一组书签 ——
+    // 打开 A 书跳到 B 书的位置、书签互相串台。
+    val fileKey = remember(file.absolutePath) { readerFileKey(file.absolutePath) }
+    val positionKey = remember(fileKey) { "page_" + fileKey }
     // 书签的键带版本号：老版本存的是「页码」，现在存的是「段落下标」，语义完全不同。
     // 如果继续用同一个键，老库里第 50 页的书签会被当成第 50 段读出来，直接跳到书开头。
     // 换键等于让旧书签自然失效（用户重新加一次即可），比跳到错位置好。
-    val bookmarkKey = remember(file.absolutePath) { "bm2_" + file.absolutePath.hashCode() }
+    val bookmarkKey = remember(fileKey) { "bm2_" + fileKey }
 
     var book by remember(file.absolutePath) { mutableStateOf<BookDocument?>(null) }
     var loadFailed by remember(file.absolutePath) { mutableStateOf(false) }
@@ -999,6 +1004,26 @@ private fun uniqueKeys(bases: List<String>): List<String> {
         seen[base] = count
         if (count == 1) base else base + "#" + count
     }
+}
+
+/**
+ * 书籍的稳定键：路径 → SHA-256 前 8 字节十六进制。
+ *
+ * 不用 `String.hashCode()`：它只有 32 位，库到万级时按生日问题碰撞概率已约 2%，
+ * 两本书撞键就会共用阅读进度与书签集合（打开 A 书跳到 B 书的位置）。
+ */
+private fun readerFileKey(path: String): String {
+    val digest =
+        java.security.MessageDigest
+            .getInstance("SHA-256")
+            .digest(path.toByteArray(Charsets.UTF_8))
+    val sb = StringBuilder(16)
+    for (i in 0 until 8) {
+        val v = digest[i].toInt() and 0xFF
+        sb.append("0123456789abcdef"[v ushr 4])
+        sb.append("0123456789abcdef"[v and 0x0F])
+    }
+    return sb.toString()
 }
 
 private fun readerCacheKey(

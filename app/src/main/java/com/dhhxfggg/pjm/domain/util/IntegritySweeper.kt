@@ -136,9 +136,12 @@ object IntegritySweeper {
         val notDue = lastRun in 1..now && elapsed < MIN_INTERVAL_MS
         if (notDue) return null
 
-        // 先落时间戳再跑：即使本次中途被杀，也不会每次启动都重跑一遍
-        // 同步落盘：apply() 在进程被杀前不保证写盘，会让下次启动重复跑一轮。
-        prefs.edit().putLong(KEY_LAST_RUN, now).commit()
+        // 先落时间戳再跑：即使本次中途被杀，也不会每次启动都重跑一遍。
+        // 用 apply()：commit() 会同步写盘并阻塞调用线程（sweepIfDue 在 IO 协程里，
+        // 但仍会占住一条 IO 线程做 fsync），返回值也一直没被检查过。
+        // 最坏情况只是进程恰好在这里被杀时下次重复跑一轮抽查 —— 抽查本身只读 + 报告，
+        // 重复执行没有任何副作用，比每次启动都同步等一次磁盘更划算。
+        prefs.edit().putLong(KEY_LAST_RUN, now).apply()
         return sweep(context, fileDao)
     }
 

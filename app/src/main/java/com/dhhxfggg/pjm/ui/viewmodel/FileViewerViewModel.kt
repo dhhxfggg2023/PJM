@@ -16,6 +16,7 @@ import com.dhhxfggg.pjm.domain.util.PjmLogger
 import com.dhhxfggg.pjm.domain.util.ThumbnailCache
 import com.dhhxfggg.pjm.domain.util.VaultManager
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
@@ -269,6 +270,12 @@ class FileViewerViewModel
                     VaultManager.updateProgress(1f, app.getString(R.string.status_delete_done), taskId = VaultManager.TASK_DELETE)
                     delay(1000)
                     VaultManager.clearProgress(VaultManager.TASK_DELETE)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    // viewModelScope 没有全局 CoroutineExceptionHandler：只有 finally 时，
+                    // 删除失败（文件被占用 / 权限异常）会直接闪退。
+                    PjmLogger.e("FileViewerVM", "删除文件失败: ${e.javaClass.simpleName}", e as? Exception)
                 } finally {
                     VaultManager.endOperation(VaultManager.TASK_DELETE)
                 }
@@ -303,6 +310,10 @@ class FileViewerViewModel
                     VaultManager.updateProgress(1f, app.getString(R.string.status_delete_done), taskId = VaultManager.TASK_DELETE)
                     delay(1000)
                     VaultManager.clearProgress(VaultManager.TASK_DELETE)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    PjmLogger.e("FileViewerVM", "批量删除失败: ${e.javaClass.simpleName}", e as? Exception)
                 } finally {
                     VaultManager.endOperation(VaultManager.TASK_DELETE)
                 }
@@ -322,6 +333,11 @@ class FileViewerViewModel
                 }
                 try {
                     repository.extractPjmToVault(entity)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    // 解包失败（容器损坏 / 空间不足）不能变成闪退
+                    PjmLogger.e("FileViewerVM", "提取容器失败: ${e.javaClass.simpleName}", e as? Exception)
                 } finally {
                     VaultManager.endOperation(VaultManager.TASK_EXTRACT)
                 }
@@ -391,6 +407,11 @@ class FileViewerViewModel
                             }
                         }
                     }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    // 自动找回是进入空分类时触发的后台动作，失败只能提示，不能闪退
+                    PjmLogger.e("FileViewerVM", "自动找回失败: ${e.javaClass.simpleName}", e as? Exception)
                 } finally {
                     VaultManager.endOperation(VaultManager.TASK_RECOVER)
                 }

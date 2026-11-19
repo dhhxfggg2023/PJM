@@ -6,8 +6,10 @@ import android.widget.Toast
 import androidx.compose.runtime.Immutable
 import com.dhhxfggg.pjm.R
 import com.dhhxfggg.pjm.data.db.FileDao
+import com.dhhxfggg.pjm.domain.util.PjmLogger
 import com.dhhxfggg.pjm.domain.util.VaultManager
 import com.dhhxfggg.pjm.domain.util.VaultNaming
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -114,6 +116,13 @@ class RandomPickController(
                     onDone(false)
                 }
                 delay(1500)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                // 打包失败（空间不足 / 源文件被删）不能让整个进程崩掉：
+                // viewModelScope 没有全局 CoroutineExceptionHandler。
+                PjmLogger.e("RandomPick", "随机打包失败: ${e.javaClass.simpleName}", e as? Exception)
+                onDone(false)
             } finally {
                 // 核心修复：取消/异常路径同样要释放占位，否则 TASK_ENCRYPT 永久卡死
                 VaultManager.clearProgress(VaultManager.TASK_ENCRYPT)
